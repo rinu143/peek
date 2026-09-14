@@ -1,0 +1,105 @@
+# ==============================================================================
+# Peek — Face-Unlock for Windows (.gitignore)
+# ==============================================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ONNX Models & Weights (Downloaded dynamically via download_models.py)
+engine/models/*.onnx
+engine/models/*.zip
+*.onnx
+
+# Biometric & DPAPI Template Storage (Never commit credentials or face templates)
+*.peek
+Profiles/
+profiles/
+
+# Visual Studio / MSBuild / C++
+.vs/
+*.user
+*.userosprovider
+*.suo
+*.sln.docstates
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+Debug/
+Release/
+*.obj
+*.ilk
+*.pdb
+*.tlog
+*.idb
+*.exp
+*.lib
+*.dll
+*.exe
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Testing/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# Logs & Diagnostics
+*.log
+*.tmp
+temp/
+scratch/
+
+# OS Artifacts
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# IDEs & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Architecture / Spec Documents
+*Glance_Windows_Implementation_Plan_README.md
