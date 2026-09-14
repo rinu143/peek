@@ -122,8 +122,8 @@ python scripts/verify_phase1.py
 | Phase | Description | Status |
 |---|---|---|
 | **Phase 1: Face Engine Prototype** | Camera → SCRFD → 5 Landmarks → Umeyama → ArcFace → Similarity | **Completed** |
-| **Phase 2: Peek-Style Enrollment** | 9-direction guided enrollment, head-pose estimation, multi-frame quality gating | Next |
-| **Phase 3: Recognition Hardening** | Dominant-face tracking, temporal verification window, threshold calibration | Planned |
+| **Phase 2: Peek-Style Enrollment** | 9-direction guided enrollment, head-pose estimation, multi-frame quality gating | **Completed** |
+| **Phase 3: Recognition Hardening** | Dominant-face tracking, temporal verification window, threshold calibration | Next |
 | **Phase 4: Liveness** | Rolling window, blink & micro-movement signals, presentation-attack defense | Planned |
 | **Phase 5: Windows Credential Provider** | Native C++/Win32/COM credential provider tile integration | Planned |
 | **Phase 6: Engine ↔ CP IPC** | Named Pipe (`\\.\pipe\PeekEngine`) secure request/response protocol | Planned |
