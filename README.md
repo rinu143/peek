@@ -30,6 +30,8 @@ Face Detection (SCRFD-500M ONNX)
        ▼
 5-Point Facial Landmarks (Eyes, Nose, Mouth Corners)
        │
+       ├───► Head Pose Estimation (Yaw, Pitch, Roll)
+       │
        ▼
 Face Alignment (Umeyama Similarity Transform to 112×112)
        │
@@ -56,7 +58,9 @@ Windows Authentication / Unlock
 ```text
 Peek/
 ├── apps/
-│   └── PeekPrototype/                   # Phase 1 interactive desktop application
+│   ├── PeekEnrollment/                  # Phase 2 standalone 9-direction guided enrollment app
+│   │   └── main.py
+│   └── PeekPrototype/                   # Phase 1 interactive desktop recognition prototype
 │       └── main.py
 ├── engine/                              # Core Peek Face Engine
 │   ├── camera/                          # Media Foundation camera capture
@@ -64,11 +68,18 @@ Peek/
 │   ├── alignment/                       # 5-point Umeyama similarity transform
 │   ├── embedding/                       # ArcFace 512-D embedding extractor
 │   ├── recognition/                     # Cosine similarity matcher
+│   ├── pose/                            # Landmark-based head pose estimation (yaw, pitch, roll)
+│   ├── quality/                         # Blur, illumination, sizing, and single-face gating
+│   ├── enrollment/                      # 9-direction state machine & candidate selection
 │   ├── pipeline/                        # End-to-end pipeline orchestrator
 │   └── models/                          # Automated ONNX model fetcher & storage
 ├── storage/                             # DPAPI-encrypted profile store
 ├── tests/                               # Automated unit and pipeline tests
+│   ├── test_engine_pipeline.py          # Phase 1 pipeline tests
+│   └── test_enrollment_pipeline.py      # Phase 2 pose, quality, & enrollment tests
 ├── scripts/                             # Verification & validation scripts
+│   ├── verify_phase1.py                 # Phase 1 offline verification script
+│   └── verify_phase2.py                 # Phase 2 offline verification script
 ├── requirements.txt                     # Python dependencies
 └── Glance_Windows_Implementation_Plan_README.md  # Reference architecture specification
 ```
@@ -88,31 +99,51 @@ Clone or navigate to the repository directory and install dependencies:
 pip install -r requirements.txt
 ```
 
-### 3. Launching the Face Recognition Prototype
-Run the interactive desktop application:
+### 3. Guided Multi-Angle Face Enrollment
+Run the standalone guided enrollment application:
+```powershell
+python apps/PeekEnrollment/main.py
+```
+- **Guided 9-Direction Setup**: Center, Left, Right, Up, Down, and the 4 Diagonals.
+- **Moving Target Dial**: A circular guide with a moving target dot prompts your gaze direction.
+- **Measured Head Pose**: Pose direction is computed directly from 5 facial landmarks.
+- **Quality Gating**: Automatically rejects blurry, poorly lit, or multiple-face frames.
+- **Rapid Capture**: Locks onto and captures each pose in $\approx 70\text{ ms}$, completing all 9 directions in under **10 seconds**.
+- **DPAPI Encryption**: Final multi-angle profile is encrypted via Windows DPAPI into `%LOCALAPPDATA%\Peek\Profiles`.
+
+### 4. Real-Time Recognition & Verification
+Run the interactive face recognition desktop prototype:
 ```powershell
 python apps/PeekPrototype/main.py
 ```
-- **Live detection**: Renders face bounding brackets and 5 keypoints in real time.
-- **Enrollment (`E`)**: Press `E` to capture your face and encrypt it into a DPAPI profile.
-- **Verification**: HUD displays `✓ MATCH (XX%)` when verified, or `✗ NO MATCH` for unregistered faces.
-- **Clear Profile (`C`)**: Clears the stored biometric profile.
-- **Exit (`Q` / `ESC`)**: Releases the camera and closes cleanly.
+- **Live detection**: Renders stylized face corner brackets and 5 keypoints in real time.
+- **Multi-Angle Matching**: Smoothly recognizes enrolled users across varying head angles.
+- **Visual Feedback**: HUD displays `✓ MATCH (XX%)` in vibrant green or `✗ NO MATCH` in red.
+- **Controls**:
+  - `[E]` : Enroll single face directly.
+  - `[C]` : Clear stored profile.
+  - `[Q]` or `[ESC]` : Exit cleanly.
 
 ---
 
 ## Testing & Verification
 
 ### Automated Unit Tests
-Run the test suite verifying detector, aligner, embedder unit norm, DPAPI encryption at rest, and security constraint checks:
+Run the complete unit test suite covering detector, aligner, embedder, DPAPI storage, pose classification, and quality checks:
 ```powershell
 python -m unittest discover tests -v
 ```
 
-### Pipeline Verification Script
-Run an end-to-end offline verification verifying model inference, self-match scores, impostor rejection, and DPAPI round-trip:
+### Phase 1 Verification Script
+Runs end-to-end simulated inference, self-match score ($1.0000$), and impostor rejection:
 ```powershell
 python scripts/verify_phase1.py
+```
+
+### Phase 2 Verification Script
+Runs an automated offline 9-direction enrollment simulation, candidate accumulation, and DPAPI profile persistence:
+```powershell
+python scripts/verify_phase2.py
 ```
 
 ---
