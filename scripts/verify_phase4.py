@@ -160,8 +160,8 @@ def run_phase4_verification():
     logger.info(f"   Screen Replay Evaluation: State={screen_result.state} | Reason={screen_result.spoof_reason} | Score={screen_result.fused_score:.2f}")
     assert not screen_result.is_live, "Screen replay must NOT achieve is_live == True"
     assert screen_result.state == "SPOOF_DETECTED", f"Expected SPOOF_DETECTED, got {screen_result.state}"
-    assert screen_result.spoof_reason == "SCREEN_MOIRE", f"Expected SCREEN_MOIRE, got {screen_result.spoof_reason}"
-    logger.info("✓ Screen replay moiré attack successfully detected and blocked.")
+    assert screen_result.spoof_reason in ("SCREEN_MOIRE", "BEZEL_DETECTED"), f"Expected SCREEN_MOIRE or BEZEL_DETECTED, got {screen_result.spoof_reason}"
+    logger.info("✓ Screen replay attack successfully detected and blocked.")
 
     # -------------------------------------------------------------
     # 5. Non-Negotiable Security Constraint #1 (Dual-Gate Unlock Enforcement)
@@ -199,11 +199,87 @@ def run_phase4_verification():
     logger.info(f"   Scenario D (Biometric MATCH, Liveness LIVE):    is_authorized_to_unlock = {is_authorized}")
     assert is_authorized, "Both gates satisfied -> Unlock must be authorized."
 
-    logger.info("✓ Non-Negotiable Security Constraint #1 verified under all dual-gate conditions.")
+    # -------------------------------------------------------------
+    # 6. Smartphone Chassis / Screen Bezel Attack Rejection (Phase 4 Hardening)
+    # -------------------------------------------------------------
+    logger.info("6. Validating smartphone chassis / screen bezel detection veto...")
+    detector.reset()
+    bezel_frame = np.full((320, 320, 3), 160, dtype=np.uint8)
+    # Draw dark smartphone chassis surrounding face
+    cv2.rectangle(bezel_frame, (70, 30), (250, 290), (20, 20, 20), -1)
+    # Draw screen inside
+    cv2.rectangle(bezel_frame, (85, 50), (235, 270), (190, 180, 170), -1)
+    bezel_bbox = (95.0, 60.0, 225.0, 250.0)
+    bezel_lms = np.array([
+        [130.0, 110.0],
+        [190.0, 110.0],
+        [160.0, 150.0],
+        [140.0, 195.0],
+        [180.0, 195.0]
+    ], dtype=np.float32)
+
+    bezel_result = None
+    for i in range(5):
+        jx = float(np.sin(i * 0.7) * 1.0)
+        jy = float(np.cos(i * 0.6) * 1.0)
+        shifted_bbox = (bezel_bbox[0] + jx, bezel_bbox[1] + jy, bezel_bbox[2] + jx, bezel_bbox[3] + jy)
+        shifted_lms = bezel_lms + np.array([jx, jy], dtype=np.float32)
+        bezel_result = detector.update(bezel_frame, shifted_bbox, shifted_lms, track_id=2)
+
+    logger.info(f"   Phone Bezel Evaluation: State={bezel_result.state} | Reason={bezel_result.spoof_reason} | Score={bezel_result.fused_score:.2f} | BezelConf={bezel_result.bezel_confidence:.2f}")
+    assert not bezel_result.is_live, "Phone bezel attack must NOT achieve is_live == True"
+    assert bezel_result.state == "SPOOF_DETECTED", f"Expected SPOOF_DETECTED, got {bezel_result.state}"
+    assert "BEZEL_DETECTED" in (bezel_result.spoof_reason or ""), f"Expected BEZEL_DETECTED in {bezel_result.spoof_reason}"
+    logger.info("✓ Smartphone bezel detection veto successfully detected and blocked.")
+
+    # -------------------------------------------------------------
+    # 7. Flat 2D Hand Tremor Parallax Veto (Phase 4 Hardening)
+    # -------------------------------------------------------------
+    logger.info("7. Validating 2D hand tremor parallax rejection (lacks 3D depth)...")
+    detector.reset()
+    parallax_result = None
+    plain_frame = np.full((320, 320, 3), 180, dtype=np.uint8)
+
+    for i in range(12):
+        shift_x = float(np.sin(i * 0.9) * 1.8)
+        shift_y = float(np.cos(i * 0.8) * 1.2)
+        shifted_bbox = (
+            bezel_bbox[0] + shift_x,
+            bezel_bbox[1] + shift_y,
+            bezel_bbox[2] + shift_x,
+            bezel_bbox[3] + shift_y
+        )
+        # Rigid translation with zero 3D relative ratio variation
+        shifted_lms = bezel_lms + np.array([shift_x, shift_y], dtype=np.float32)
+        parallax_result = detector.update(plain_frame, shifted_bbox, shifted_lms, track_id=3)
+
+    logger.info(f"   Hand Tremor Evaluation: State={parallax_result.state} | Reason={parallax_result.spoof_reason} | Score={parallax_result.fused_score:.2f}")
+    assert not parallax_result.is_live, "Flat 2D tremor replay must NOT achieve is_live == True"
+    assert parallax_result.state == "SPOOF_DETECTED", f"Expected SPOOF_DETECTED, got {parallax_result.state}"
+    assert "LACKS_PARALLAX" in (parallax_result.spoof_reason or ""), f"Expected LACKS_PARALLAX in {parallax_result.spoof_reason}"
+    logger.info("✓ 2D hand tremor parallax veto successfully detected and blocked.")
+
+    # -------------------------------------------------------------
+    # 8. Active Challenge-Response Evaluation (Phase 4 Hardening)
+    # -------------------------------------------------------------
+    logger.info("8. Validating active challenge-response prompt and verification...")
+    from engine.liveness.challenge import ChallengeManager
+    challenger = ChallengeManager(timeout_seconds=2.0)
+    ch_res = challenger.start_challenge()
+    assert ch_res.state == "PENDING"
+    assert ch_res.challenge_type in ["TURN_LEFT", "TURN_RIGHT", "TILT_UP", "BLINK"]
+
+    challenger._current_challenge = "TURN_LEFT"
+    ch_res = challenger.update(pose_label="LEFT")
+    assert ch_res.passed
+    assert ch_res.state == "PASSED"
+    logger.info("✓ Active challenge-response prompt & verification passed.")
+
     logger.info("=" * 60)
-    logger.info("   ALL PHASE 4 LIVENESS VERIFICATIONS PASSED SUCCESSFULLY!")
+    logger.info("   ALL PHASE 4 HARDENED LIVENESS VERIFICATIONS PASSED!")
     logger.info("=" * 60)
 
 
 if __name__ == "__main__":
     run_phase4_verification()
+

@@ -83,10 +83,12 @@ Peek/
 │   ├── temporal/                        # M-of-N rolling sliding window & EMA score smoothing
 │   │   └── temporal_verifier.py
 │   ├── liveness/                        # Phase 4 passive RGB multi-cue anti-spoofing engine
-│   │   ├── motion_detector.py           # 3D landmark parallax & micro-movement analysis
+│   │   ├── motion_detector.py           # 3D landmark parallax & foreshortening ratio analysis
+│   │   ├── bezel_detector.py            # Macro device bezel & rectangular screen chassis detection
 │   │   ├── texture_checker.py           # Screen moiré FFT & specular reflection analysis
 │   │   ├── eye_dynamics.py              # Eye openness, gradient contrast, & blink detection
-│   │   └── liveness_detector.py         # Rolling liveness evaluation & state machine
+│   │   ├── challenge.py                 # Optional active challenge-response mode (head turns, blinks)
+│   │   └── liveness_detector.py         # Veto-based score fusion & spoof state machine
 │   ├── pose/                            # Landmark-based head pose estimation (yaw, pitch, roll)
 │   ├── quality/                         # Blur, illumination, sizing, and single-face gating
 │   ├── enrollment/                      # 9-direction state machine & candidate selection
@@ -98,7 +100,11 @@ Peek/
 │   ├── test_engine_pipeline.py          # Phase 1 pipeline tests
 │   ├── test_enrollment_pipeline.py      # Phase 2 pose, quality, & enrollment tests
 │   ├── test_recognition_hardening.py    # Phase 3 tracking, temporal verification, & calibration tests
-│   └── test_liveness.py                 # Phase 4 anti-spoofing & dual-gate authorization tests
+│   ├── test_liveness.py                 # Phase 4 anti-spoofing & dual-gate authorization tests
+│   ├── test_bezel_detector.py           # Phase 4 hardening: smartphone bezel detection tests
+│   ├── test_motion_parallax.py          # Phase 4 hardening: 3D parallax vs 2D hand tremor tests
+│   ├── test_challenge_response.py       # Phase 4 hardening: active challenge-response tests
+│   └── test_screen_replay_regression.py # Phase 4 hardening: synthetic screen replay regression tests
 ├── scripts/                             # Verification & validation scripts
 │   ├── verify_phase1.py                 # Phase 1 offline verification script
 │   ├── verify_phase2.py                 # Phase 2 offline verification script
@@ -141,16 +147,19 @@ Run the interactive face recognition desktop prototype:
 python apps/PeekPrototype/main.py
 ```
 - **Dual-Gate Authorization**: Implements **Non-Negotiable Security Constraint #1**: face match alone can never unlock Windows. An unlock is authorized *only* when both the biometric temporal match gate and the independent passive liveness gate pass.
-- **Passive Multi-Signal Anti-Spoofing**:
-  - *Motion Parallax & Micro-Movement*: Differentiates genuine 3D facial dynamics from static photos on stands (`STATIC_PHOTO`) and flat printouts/phones waved in 2D (`RIGID_PLANAR_MOTION`).
-  - *Texture & Screen Moiré Analysis*: Detects LCD/OLED high-frequency subpixel grids and specular glass reflections (`SCREEN_MOIRE`, `SPECULAR_GLARE`).
-  - *Eye Dynamics & Blink Detection*: Monitors eye patch vertical gradient contrast and eyelid blink events.
+- **Hardened Multi-Signal Anti-Spoofing Engine**:
+  - *Veto-Based Score Fusion*: Any single hard presentation attack indicator immediately caps the overall frame score to $\le 0.12$, preventing dilution across other scoring channels.
+  - *Macro Device Bezel & Screen Chassis Detection*: Scans the bounding context around the face using Hough transforms, edge contrast step analysis, and right-angle rectilinear pair checks to detect smartphones, tablets, or laptop screen edges (`BEZEL_DETECTED`).
+  - *3D Perspective Parallax & Landmark Foreshortening*: Analyzes inter-feature ratios ($\rho_1 = \text{nose-to-eyes}/\text{inter-eye}$, $\rho_2 = \text{nose-to-mouth}/\text{mouth-width}$) across time to differentiate living 3D face rotation from flat 2D hand tremor (`LACKS_PARALLAX`, `RIGID_PLANAR_MOTION`, `STATIC_PHOTO`).
+  - *Texture & Screen Moiré Frequency Spectra*: Computes FFT high-frequency band power and spatial variance to catch LCD/OLED display grids (`SCREEN_MOIRE`) and glass glare (`SPECULAR_GLARE`).
+  - *Eye Dynamics & Blink Tracking*: Evaluates pupil patch vertical contrast gradients and eyelid blink events.
+  - *Optional Active Challenge-Response*: Issues unpredictable, randomized prompts (`TURN_LEFT`, `TURN_RIGHT`, `TILT_UP`, `BLINK`) with strict time budgets for high-assurance scenarios.
 - **Persistent Track IDs & Dominant Face Stickiness**: Assigns stable track IDs and enforces hysteresis (+25% area margin, 4+ frames) so bystanders cannot hijack authentication.
 - **Multi-Template Matching**: Compares live embeddings against all enrolled pose angles using cosine similarity and pose-affinity weighting.
 - **Rolling Temporal Verification Window**: Requires an $M$-of-$N$ sliding window (5 of 7 consecutive frames) with EMA score smoothing ($\alpha = 0.40$).
 - **Live Visual Feedback**:
   - Displays dual telemetry meters in the HUD: Temporal match progress (`Temporal 5/5`) and Liveness score (`Live: 85%`).
-  - Real-time spoof detection alerts (`⚠ SPOOF DETECTED (STATIC_PHOTO)` in crimson).
+  - Real-time spoof detection alerts (`⚠ SPOOF DETECTED (BEZEL_DETECTED)` in crimson).
   - Glowing emerald celebration border and `✓ UNLOCKED — LOOK, AND YOU'RE IN.` banner upon dual-gate authorization.
 - **Controls**:
   - `[E]` : Enroll single face directly.
@@ -200,8 +209,39 @@ python scripts/verify_phase4.py
 | **Phase 1: Face Engine Prototype** | Camera → SCRFD → 5 Landmarks → Umeyama → ArcFace → Similarity | **Completed** |
 | **Phase 2: Peek-Style Enrollment** | 9-direction guided enrollment, head-pose estimation, multi-frame quality gating | **Completed** |
 | **Phase 3: Recognition Hardening** | Dominant-face tracking, temporal verification window, threshold calibration | **Completed** |
-| **Phase 4: Liveness** | Rolling window, blink & micro-movement signals, presentation-attack defense | **Completed** |
+| **Phase 4: Liveness & Hardening** | Veto-based fusion, phone bezel detector, 3D parallax, challenge-response | **Completed** |
 | **Phase 5: Windows Credential Provider** | Native C++/Win32/COM credential provider tile integration | Next |
 | **Phase 6: Engine ↔ CP IPC** | Named Pipe (`\\.\pipe\PeekEngine`) secure request/response protocol | Planned |
 | **Phase 7: Lock-Screen UX** | Visual state flow (Searching → Found → Verifying → Liveness → Unlock) | Planned |
 | **Phase 8: Performance & Security** | Latency, CPU/RAM benchmarks, attack resistance, and sleep/wake recovery | Planned |
+
+---
+
+## Security Boundaries, Threat Model & Sensor Disclosures
+
+### 1. RGB Monocular Sensor Reality
+Peek is designed to run on standard, commodity 2D RGB webcams without requiring proprietary hardware or dedicated depth sensors. 
+
+> [!IMPORTANT]
+> **No Claim of Parity with Dedicated Hardware Windows Hello**:
+> Peek does **not** claim biometric equivalence or parity with hardware-based Windows Hello. Official Windows Hello Face requires specialized hardware featuring structured-light or time-of-flight (ToF) depth sensors and dedicated Near-Infrared (NIR) illumination with an IR sensor. Standard monocular RGB webcams lack true physical depth capture at the sensor level.
+
+### 2. Mitigated Presentation Attack Classes (Phase 4 Hardened)
+Peek defends against common presentation attacks using algorithmic multi-cue verification and veto-based fusion:
+
+| Attack Vector | Vulnerability Mechanism | Peek Defense & Veto Rule |
+|---|---|---|
+| **Static Photo / Paper Printout** | Zero movement across time | `STATIC_PHOTO`: Landmark centroid jitter $<0.25\text{ px}$ and pixel difference $<1.0$ triggers immediate veto. |
+| **Waved 2D Photo / Tablet** | Rigid planar translation | `RIGID_PLANAR_MOTION`: Uniform 2D displacement without differential depth movement triggers veto. |
+| **Smartphone Screen Replay (Handheld)** | Hand tremor mimicking micro-movement | `LACKS_PARALLAX`: Tracks relative landmark foreshortening ($\rho_1, \rho_2$). Invariant 2D spacing ($\sigma < 0.0022$) triggers veto. |
+| **Visible Smartphone / Tablet Bezel** | Phone chassis held in front of webcam | `BEZEL_DETECTED`: Rectilinear edge pairs, high step-gradient contrast, and aspect-ratio checks ($1.3 - 2.4$) veto frame score to $\le 0.12$. |
+| **Screen Moiré / Pixel Grids** | Periodic subpixel sampling artifacts | `SCREEN_MOIRE`: 2D FFT spectral analysis in high-frequency bands detects screen display artifacts. |
+| **Pre-Recorded Video Replay Loop** | Looped video of genuine user blinking | **Active Challenge-Response Mode**: Issues randomized, non-repeating physiological prompts (`TURN_LEFT`, `TURN_RIGHT`, `TILT_UP`, `BLINK`) requiring real-time compliance within a $3.5\text{s}$ budget. |
+
+### 3. Residual Risks & Inherent Limitations
+Users and administrators should understand the residual risks inherent to any pure RGB monocular computer vision pipeline:
+- **Bezel-Less Screens Outside Camera FOV**: If an attacker presents a large 4K/8K monitor positioned so its physical bezels are completely outside the camera's field of view, bezel detection cannot trigger.
+- **Occluded Bezels**: If an attacker conceals the device borders using hands, paper, or custom cutouts, bezel detection confidence decreases.
+- **Sophisticated 3D Silicone Masks**: High-quality 3D physical masks molded to the user's facial contours possess true 3D depth geometry and natural foreshortening ratios. (Defending against curved silicone masks in RGB requires the active challenge-response mode with randomized prompts).
+- **Adverse Lighting**: Extreme low-light conditions may degrade edge detection gradients and frequency spectra, prompting the quality checker to reject frames and fall back to password/PIN.
+

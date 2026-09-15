@@ -18,6 +18,7 @@ from typing import Optional, Tuple, Deque
 from engine.liveness.motion_detector import MotionParallaxDetector, MotionLivenessResult
 from engine.liveness.texture_checker import TextureChecker, TextureLivenessResult
 from engine.liveness.eye_dynamics import EyeDynamicsDetector, EyeDynamicsResult
+from engine.liveness.bezel_detector import BezelDetector, BezelDetectionResult
 
 
 @dataclass
@@ -28,16 +29,21 @@ class LivenessResult:
     motion_score: float
     texture_score: float
     eye_score: float
+    bezel_confidence: float = 0.0
     blink_detected: bool = False
-    spoof_reason: Optional[str] = None  # "STATIC_PHOTO", "RIGID_PLANAR_MOTION", "SCREEN_MOIRE", etc.
+    spoof_reason: Optional[str] = None  # "STATIC_PHOTO", "RIGID_PLANAR_MOTION", "LACKS_PARALLAX", "BEZEL_DETECTED", etc.
     details: str = ""
 
 
 class LivenessDetector:
     """
-    Unified Liveness and Anti-Spoofing Detector.
+    Unified Liveness and Anti-Spoofing Detector with Veto-Based Fusion.
     Evaluates multi-frame passive RGB signals across rolling frames to ensure
-    the target is a physical, living human in 3D space.
+    the target is a physical, living human in 3D space:
+    - 3D landmark perspective parallax (nose-tip relative foreshortening)
+    - Macro device bezel and screen-edge rectilinear detection
+    - Visual skin texture and screen moiré frequency spectra
+    - Eye openness gradient dynamics and natural blinks
     """
 
     def __init__(
@@ -57,6 +63,7 @@ class LivenessDetector:
         self.motion_detector = MotionParallaxDetector(window_size=12, min_frames_required=6, frozen_std_threshold=0.12)
         self.texture_checker = TextureChecker(moire_peak_threshold=100.0, specular_ratio_threshold=0.20)
         self.eye_dynamics = EyeDynamicsDetector(history_size=20)
+        self.bezel_detector = BezelDetector(expansion_margin=2.2)
 
         self._frame_count: int = 0
         self._current_track_id: Optional[int] = None
@@ -91,7 +98,7 @@ class LivenessDetector:
 
         self._frame_count += 1
 
-        # 1. Evaluate Motion Parallax & Micro-Movement
+        # 1. Evaluate Motion Parallax & 3D Relative Foreshortening
         motion_res = self.motion_detector.update(landmarks, bbox, track_id)
 
         # 2. Evaluate Texture & Screen Moiré
@@ -100,9 +107,20 @@ class LivenessDetector:
         # 3. Evaluate Eye Dynamics & Blinks
         eye_res = self.eye_dynamics.update(frame, landmarks, track_id)
 
-        # Check for immediate spoof triggers
+        # 4. Evaluate Physical Screen Bezel / Framing Boundaries
+        bezel_res = self.bezel_detector.evaluate(frame, bbox)
+
+        # Identify hard-spoof triggers
         spoof_reason = None
-        if motion_res.is_frozen:
+        is_high_confidence_bezel = False
+
+        if bezel_res.bezel_detected:
+            spoof_reason = "BEZEL_DETECTED"
+            if bezel_res.confidence >= 0.75:
+                is_high_confidence_bezel = True
+        elif motion_res.lacks_parallax:
+            spoof_reason = motion_res.spoof_reason or "LACKS_PARALLAX"
+        elif motion_res.is_frozen:
             spoof_reason = motion_res.spoof_reason or "STATIC_PHOTO"
         elif motion_res.is_rigid_planar:
             spoof_reason = motion_res.spoof_reason or "RIGID_PLANAR_MOTION"
@@ -111,35 +129,49 @@ class LivenessDetector:
         elif texture_res.specular_glare_detected:
             spoof_reason = texture_res.spoof_reason or "SPECULAR_GLARE"
 
-        if spoof_reason is not None:
-            self._consecutive_spoof_frames += 1
-            self._active_spoof_reason = spoof_reason
-        else:
-            self._consecutive_spoof_frames = max(0, self._consecutive_spoof_frames - 1)
-
-        # Multi-cue fused score computation
-        fused = (
+        # Baseline weighted score for legitimate face smoothing
+        weighted_score = (
             self.w_motion * motion_res.score +
             self.w_texture * texture_res.score +
             self.w_eye * eye_res.dynamics_score
         )
-        fused = float(np.clip(fused, 0.0, 1.0))
-        self._recent_scores.append(fused)
 
+        # VETO-BASED FUSION:
+        # If any hard spoof indicator fires, cap this frame's score well below
+        # threshold (< 0.15) regardless of other channels' scores.
+        if spoof_reason is not None:
+            frame_score = min(0.12, weighted_score * 0.15)
+            self._consecutive_spoof_frames += 1
+            self._active_spoof_reason = spoof_reason
+        else:
+            frame_score = weighted_score
+            self._consecutive_spoof_frames = max(0, self._consecutive_spoof_frames - 1)
+
+        frame_score = float(np.clip(frame_score, 0.0, 1.0))
+        self._recent_scores.append(frame_score)
         smoothed_score = float(np.mean(self._recent_scores))
 
-        # Handle persistent spoof condition (requires at least 4 consecutive frames flagging spoof)
-        if self._consecutive_spoof_frames >= 4:
+        # Escalation logic:
+        # Very strong bezel signal (>= 0.85) triggers immediate 1-frame spoof.
+        # Standard indicators require 2 consecutive frames.
+        is_spoof_confirmed = False
+        if is_high_confidence_bezel and self._consecutive_spoof_frames >= 1 and bezel_res.confidence >= 0.85:
+            is_spoof_confirmed = True
+        elif self._consecutive_spoof_frames >= 2:
+            is_spoof_confirmed = True
+
+        if is_spoof_confirmed:
             return LivenessResult(
                 is_live=False,
                 state="SPOOF_DETECTED",
-                fused_score=0.10,
+                fused_score=0.08,
                 motion_score=motion_res.score,
                 texture_score=texture_res.score,
                 eye_score=eye_res.dynamics_score,
+                bezel_confidence=bezel_res.confidence,
                 blink_detected=eye_res.blink_detected,
                 spoof_reason=self._active_spoof_reason,
-                details=f"Spoof detected: {self._active_spoof_reason} (motion: {motion_res.score:.2f}, text: {texture_res.score:.2f})"
+                details=f"Spoof detected: {self._active_spoof_reason} (bezel={bezel_res.confidence:.2f}, mot={motion_res.score:.2f})"
             )
 
         # Observation ramp-up phase
@@ -152,6 +184,7 @@ class LivenessDetector:
                 motion_score=motion_res.score,
                 texture_score=texture_res.score,
                 eye_score=eye_res.dynamics_score,
+                bezel_confidence=bezel_res.confidence,
                 blink_detected=eye_res.blink_detected,
                 details=f"Evaluating liveness ({pct}%)..."
             )

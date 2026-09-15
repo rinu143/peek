@@ -26,6 +26,7 @@ from engine.embedding.arcface_embedder import ArcFaceEmbedder
 from engine.recognition.matcher import FaceMatcher, MatchResult
 from engine.temporal.temporal_verifier import TemporalVerifier, TemporalVerificationResult
 from engine.liveness.liveness_detector import LivenessDetector, LivenessResult
+from engine.liveness.challenge import ChallengeManager, ChallengeResult
 from storage.template_store import SecureProfileStore, PeekProfile, PeekTemplate
 
 logger = logging.getLogger("Peek.FaceEngine")
@@ -43,6 +44,7 @@ class EngineFrameResult:
     liveness_result: Optional[LivenessResult] = None
     is_live: bool = False
     estimated_pose: Optional[str] = None
+    challenge_result: Optional[ChallengeResult] = None
     state_label: str = "SEARCHING"
     # SECURITY FLAG: True ONLY when both biometric match AND independent liveness pass
     is_authorized_to_unlock: bool = False
@@ -64,7 +66,8 @@ class FaceEngine:
         temporal_window_size: int = 7,
         temporal_min_matches: int = 5,
         liveness_min_frames: int = 8,
-        liveness_threshold: float = 0.58
+        liveness_threshold: float = 0.58,
+        require_active_challenge: bool = False
     ):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         models_dir = os.path.join(base_dir, "models")
@@ -95,6 +98,8 @@ class FaceEngine:
             min_frames_to_confirm=liveness_min_frames,
             liveness_threshold=liveness_threshold
         )
+        self.require_active_challenge = require_active_challenge
+        self.challenge_manager = ChallengeManager(timeout_seconds=3.5, max_frames=70)
         self.profile_store = profile_store or SecureProfileStore()
         
         # In-memory enrolled templates cache for fast real-time matching
@@ -123,6 +128,7 @@ class FaceEngine:
         
         self.temporal_verifier.reset()
         self.liveness_detector.reset()
+        self.challenge_manager.reset()
 
     def set_active_profile(self, profile: PeekProfile):
         """Sets active profile in memory."""
@@ -133,6 +139,8 @@ class FaceEngine:
         self.cached_template_poses = [t.pose_label for t in profile.templates]
         self.temporal_verifier.reset()
         self.liveness_detector.reset()
+        self.challenge_manager.reset()
+
 
     def process_frame(self, frame: np.ndarray) -> EngineFrameResult:
         """
@@ -151,6 +159,7 @@ class FaceEngine:
         if dominant_target is None:
             temporal_res = self.temporal_verifier.update(None, False, 0.0)
             self.liveness_detector.reset()
+            self.challenge_manager.reset()
             return EngineFrameResult(
                 has_face=False,
                 all_tracks=all_tracks,
@@ -173,6 +182,7 @@ class FaceEngine:
         if dominant_target.width < 45 or dominant_target.height < 45:
             temporal_res = self.temporal_verifier.update(dominant_target.track_id, False, 0.0)
             self.liveness_detector.reset()
+            self.challenge_manager.reset()
             return EngineFrameResult(
                 has_face=True,
                 detection=dominant_detection,
@@ -246,17 +256,38 @@ class FaceEngine:
             track_id=dominant_target.track_id
         )
 
+        # Optional Active Challenge-Response Mode
+        challenge_res: Optional[ChallengeResult] = None
+        if self.require_active_challenge:
+            curr_blinks = liveness_res.eye_dynamics.blink_count if liveness_res.eye_dynamics else 0
+            blink_this = liveness_res.eye_dynamics.blink_detected if liveness_res.eye_dynamics else False
+            if not self.challenge_manager.is_active and not (self.challenge_manager.update(pose_label).passed):
+                challenge_res = self.challenge_manager.start_challenge(initial_blink_count=curr_blinks)
+            else:
+                challenge_res = self.challenge_manager.update(
+                    pose_label=pose_label,
+                    current_blink_count=curr_blinks,
+                    blink_detected_this_frame=blink_this
+                )
+
         # Step 9: Dual-Gate Authorization Logic
         # NON-NEGOTIABLE CONSTRAINT #1:
         # Biometric matching alone can NEVER unlock. Independent liveness is mandatory.
         is_biometric_pass = temporal_res.is_temporally_confirmed and match_result.is_match
         is_live_pass = liveness_res.is_live
-        is_authorized = bool(is_biometric_pass and is_live_pass)
+        is_challenge_pass = (challenge_res.passed) if (self.require_active_challenge and challenge_res) else True
+        is_authorized = bool(is_biometric_pass and is_live_pass and is_challenge_pass)
 
         # Determine state label based on progression
         if liveness_res.state == "SPOOF_DETECTED":
             state_label = "SPOOF_DETECTED"
             details = f"Spoof Blocked: {liveness_res.spoof_reason or 'Presentation Attack'}"
+        elif self.require_active_challenge and challenge_res and challenge_res.state in ("FAILED", "TIMEOUT"):
+            state_label = "CHALLENGE_FAILED"
+            details = f"Challenge Failed: {challenge_res.details}"
+        elif self.require_active_challenge and challenge_res and not challenge_res.passed:
+            state_label = "CHALLENGE"
+            details = f"Action Required: {challenge_res.prompt_text}"
         elif is_authorized:
             state_label = "SUCCESS"
             details = f"✓ Welcome! Unlocked ({temporal_res.details})"
@@ -289,6 +320,7 @@ class FaceEngine:
             liveness_result=liveness_res,
             is_live=liveness_res.is_live,
             estimated_pose=pose_label,
+            challenge_result=challenge_res,
             state_label=state_label,
             is_authorized_to_unlock=is_authorized,
             details=details
