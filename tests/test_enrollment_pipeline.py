@@ -155,12 +155,6 @@ class TestEnrollmentPipeline(unittest.TestCase):
         dummy_embedding = np.random.randn(512).astype(np.float32)
         dummy_embedding /= np.linalg.norm(dummy_embedding)
 
-        # Populate templates across all 9 poses
-        for pose in session.poses:
-            session.final_templates.append(session.profile_store.PeekTemplate if hasattr(session.profile_store, 'PeekTemplate') else
-                session.final_templates.append(None)
-            )
-        
         from storage.template_store import PeekTemplate, PeekProfile
         session.final_templates = [
             PeekTemplate(
