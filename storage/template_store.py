@@ -14,6 +14,7 @@ import time
 import uuid
 import ctypes
 import logging
+import platform
 from ctypes import wintypes
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional, Dict, Any
@@ -27,11 +28,33 @@ class DATA_BLOB(ctypes.Structure):
         ('pbData', ctypes.POINTER(ctypes.c_byte))
     ]
 
-crypt32 = ctypes.windll.crypt32
-kernel32 = ctypes.windll.kernel32
+_IS_WINDOWS = platform.system() == "Windows"
+_crypt32 = None
+_kernel32 = None
+
+
+def _get_dpapi_libs():
+    """Lazily resolve crypt32/kernel32. Deferring this to call time (instead
+    of binding ctypes.windll at module import) means `import storage` and
+    `import engine` stay safe on non-Windows dev/CI machines; the hard
+    failure only happens if code actually tries to encrypt/decrypt off
+    Windows, which is correct — DPAPI has no non-Windows equivalent, so
+    that should fail loudly rather than silently no-op."""
+    global _crypt32, _kernel32
+    if not _IS_WINDOWS:
+        raise RuntimeError(
+            "DPAPI (Windows Data Protection API) is only available on Windows. "
+            "Peek's secure profile store cannot encrypt/decrypt on this platform."
+        )
+    if _crypt32 is None:
+        _crypt32 = ctypes.windll.crypt32
+        _kernel32 = ctypes.windll.kernel32
+    return _crypt32, _kernel32
+
 
 def dpapi_encrypt(data: bytes, description: str = "PeekBiometricData") -> bytes:
     """Encrypts bytes using Windows DPAPI (CryptProtectData)."""
+    crypt32, kernel32 = _get_dpapi_libs()
     in_blob = DATA_BLOB(len(data), ctypes.cast(ctypes.create_string_buffer(data), ctypes.POINTER(ctypes.c_byte)))
     out_blob = DATA_BLOB()
     if not crypt32.CryptProtectData(ctypes.byref(in_blob), description, None, None, None, 0, ctypes.byref(out_blob)):
@@ -43,6 +66,7 @@ def dpapi_encrypt(data: bytes, description: str = "PeekBiometricData") -> bytes:
 
 def dpapi_decrypt(ciphertext: bytes) -> bytes:
     """Decrypts bytes using Windows DPAPI (CryptUnprotectData)."""
+    crypt32, kernel32 = _get_dpapi_libs()
     in_blob = DATA_BLOB(len(ciphertext), ctypes.cast(ctypes.create_string_buffer(ciphertext), ctypes.POINTER(ctypes.c_byte)))
     out_blob = DATA_BLOB()
     if not crypt32.CryptUnprotectData(ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)):
