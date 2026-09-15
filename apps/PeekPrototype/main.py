@@ -53,24 +53,65 @@ def draw_hud_header(frame: np.ndarray, title: str, subtitle: str, fps: float, to
     cv2.putText(frame, badge_text, (w - 170, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.52, COLOR_WHITE, 1, cv2.LINE_AA)
 
 
-def draw_hud_footer(frame: np.ndarray, active_profile: str, status_text: str, temporal_res):
-    """Draws status bar, temporal confirmation meter, and controls footer."""
+def draw_hud_footer(
+    frame: np.ndarray,
+    active_profile: str,
+    status_text: str,
+    temporal_res,
+    liveness_res,
+    is_authorized: bool = False
+):
+    """Draws status bar, temporal confirmation meter, liveness meter, and controls footer."""
     h, w = frame.shape[:2]
     overlay = frame.copy()
-    cv2.rectangle(overlay, (0, h - 75), (w, h), COLOR_BG_DARK, -1)
-    cv2.addWeighted(overlay, 0.82, frame, 0.18, 0, frame)
+    cv2.rectangle(overlay, (0, h - 82), (w, h), COLOR_BG_DARK, -1)
+    cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
 
     # Security constraint badge
-    sec_notice = "Gate: Liveness Required (Phase 4) | Frames Discarded Immediately | DPAPI Encrypted"
-    cv2.putText(frame, sec_notice, (20, h - 52), cv2.FONT_HERSHEY_SIMPLEX, 0.36, COLOR_GRAY, 1, cv2.LINE_AA)
+    if is_authorized:
+        sec_notice = "✓ SECURITY CLEARED: Biometric Match Verified + Passive Liveness Confirmed"
+        sec_color = COLOR_GREEN
+    elif liveness_res and liveness_res.state == "SPOOF_DETECTED":
+        sec_notice = f"⚠ SECURITY ALERT: Spoof Rejected ({liveness_res.spoof_reason}) — Unlock Blocked"
+        sec_color = COLOR_RED
+    else:
+        sec_notice = "Dual Gates: Biometric Temporal Match + Passive Liveness | DPAPI Protected"
+        sec_color = COLOR_GRAY
+    cv2.putText(frame, sec_notice, (20, h - 58), cv2.FONT_HERSHEY_SIMPLEX, 0.36, sec_color, 1, cv2.LINE_AA)
 
-    # Temporal verification progress meter
+    # Telemetry bars: Temporal Verification & Liveness Meters
+    right_anchor = w - 20
+
+    # 1. Liveness Meter
+    if liveness_res:
+        live_w = 90
+        live_x = right_anchor - live_w
+        live_y = h - 60
+        live_score = liveness_res.fused_score
+        
+        if liveness_res.state == "LIVE":
+            live_label = f"Live: {int(live_score*100)}%"
+            live_color = COLOR_GREEN
+        elif liveness_res.state == "SPOOF_DETECTED":
+            live_label = "SPOOF"
+            live_color = COLOR_RED
+        else:
+            live_label = f"Live: {int(live_score*100)}%"
+            live_color = COLOR_YELLOW
+
+        cv2.putText(frame, live_label, (live_x - 70, live_y + 8), cv2.FONT_HERSHEY_SIMPLEX, 0.38, COLOR_WHITE, 1, cv2.LINE_AA)
+        cv2.rectangle(frame, (live_x, live_y), (live_x + live_w, live_y + 8), COLOR_CARD, -1)
+        fill_live = int(np.clip(live_score, 0.0, 1.0) * live_w)
+        if fill_live > 0:
+            cv2.rectangle(frame, (live_x, live_y), (live_x + fill_live, live_y + 8), live_color, -1)
+
+    # 2. Temporal verification progress meter
     if temporal_res and temporal_res.window_length > 0:
-        bar_x = w - 240
-        bar_y = h - 54
-        bar_w = 120
+        bar_w = 90
+        bar_x = right_anchor - 270
+        bar_y = h - 60
         cv2.putText(frame, f"Temporal {temporal_res.positive_matches_in_window}/{temporal_res.required_matches}",
-                    (bar_x - 105, bar_y + 8), cv2.FONT_HERSHEY_SIMPLEX, 0.40, COLOR_WHITE, 1, cv2.LINE_AA)
+                    (bar_x - 85, bar_y + 8), cv2.FONT_HERSHEY_SIMPLEX, 0.38, COLOR_WHITE, 1, cv2.LINE_AA)
         cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + 8), COLOR_CARD, -1)
         fill = int((min(temporal_res.positive_matches_in_window, temporal_res.required_matches) / float(temporal_res.required_matches)) * bar_w)
         fill_color = COLOR_GREEN if temporal_res.is_temporally_confirmed else COLOR_YELLOW
@@ -79,10 +120,10 @@ def draw_hud_footer(frame: np.ndarray, active_profile: str, status_text: str, te
 
     # Active profile & Controls
     prof_text = f"Profile: {active_profile}"
-    cv2.putText(frame, prof_text, (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.48, COLOR_WHITE, 1, cv2.LINE_AA)
+    cv2.putText(frame, prof_text, (20, h - 22), cv2.FONT_HERSHEY_SIMPLEX, 0.46, COLOR_WHITE, 1, cv2.LINE_AA)
 
     ctrls_text = "[E] Quick Enroll  |  [C] Clear  |  [Q] Quit"
-    cv2.putText(frame, ctrls_text, (w - 380, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.44, COLOR_ACCENT, 1, cv2.LINE_AA)
+    cv2.putText(frame, ctrls_text, (w - 380, h - 22), cv2.FONT_HERSHEY_SIMPLEX, 0.44, COLOR_ACCENT, 1, cv2.LINE_AA)
 
 
 def draw_face_overlay(
@@ -92,6 +133,8 @@ def draw_face_overlay(
     track_id: Optional[int] = None,
     is_dominant: bool = True,
     is_temporally_confirmed: bool = False,
+    liveness_res=None,
+    is_authorized: bool = False,
     pose_label: Optional[str] = None
 ):
     """Draws bounding bracket, track ID tag, and landmarks."""
@@ -110,12 +153,22 @@ def draw_face_overlay(
     id_tag = f"#{track_id} " if track_id else ""
     pose_tag = f" [{pose_label}]" if pose_label else ""
 
-    if match_result is None:
+    if is_authorized:
+        color = COLOR_GREEN
+        label = f"✓ {id_tag}AUTHORIZED TO UNLOCK{pose_tag}"
+    elif liveness_res and liveness_res.state == "SPOOF_DETECTED":
+        color = COLOR_RED
+        label = f"⚠ {id_tag}SPOOF DETECTED ({liveness_res.spoof_reason}){pose_tag}"
+    elif match_result is None:
         color = COLOR_YELLOW
         label = f"{id_tag}DETECTED{pose_tag}"
     elif is_temporally_confirmed:
-        color = COLOR_GREEN
-        label = f"✓ {id_tag}MATCH {int(match_result.confidence * 100)}%{pose_tag}"
+        if liveness_res and liveness_res.is_live:
+            color = COLOR_GREEN
+            label = f"✓ {id_tag}MATCH & LIVE {int(match_result.confidence * 100)}%{pose_tag}"
+        else:
+            color = COLOR_YELLOW
+            label = f"⚡ {id_tag}MATCH CONFIRMED (CHECKING LIVENESS...){pose_tag}"
     elif match_result.is_match:
         color = COLOR_YELLOW
         label = f"⚡ {id_tag}VERIFYING...{pose_tag}"
@@ -125,7 +178,7 @@ def draw_face_overlay(
 
     # Stylized corner bracket bounding box
     length = max(14, int((x2 - x1) * 0.18))
-    thickness = 2
+    thickness = 3 if is_authorized else 2
     
     # Corners
     cv2.line(frame, (x1, y1), (x1 + length, y1), color, thickness)
@@ -138,22 +191,28 @@ def draw_face_overlay(
     cv2.line(frame, (x2, y2), (x2 - length, y2), color, thickness)
 
     # 5 landmarks
-    for pt in landmarks:
-        cv2.circle(frame, tuple(pt), 3, (50, 240, 255), -1, cv2.LINE_AA)
+    for (lx, ly) in landmarks:
+        cv2.circle(frame, (lx, ly), 2, color, -1, cv2.LINE_AA)
 
-    # Label badge above face
-    tag_y = max(24, y1 - 10)
-    cv2.putText(frame, label, (x1, tag_y), cv2.FONT_HERSHEY_SIMPLEX, 0.56, color, 2, cv2.LINE_AA)
+    # Label background tag
+    label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.48, 1)
+    tag_y1 = max(10, y1 - 24)
+    tag_y2 = tag_y1 + 18
+    tag_x2 = min(frame.shape[1] - 5, x1 + label_size[0] + 12)
+    cv2.rectangle(frame, (x1, tag_y1), (tag_x2, tag_y2), COLOR_BG_DARK, -1)
+    cv2.rectangle(frame, (x1, tag_y1), (tag_x2, tag_y2), color, 1)
+    cv2.putText(frame, label, (x1 + 6, tag_y2 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
 
 
 def run_prototype():
-    logger.info("Initializing Peek Face Engine Prototype (Phase 3 Hardened)...")
+    """Main interactive loop for the Peek Face Recognition desktop prototype."""
+    logger.info("Initializing Peek Face Engine Prototype (Phase 4 Liveness Hardened)...")
     
     profile_store = SecureProfileStore()
     engine = FaceEngine(profile_store=profile_store, match_threshold=0.48)
     camera = CameraCapture(camera_index=0, width=640, height=480)
 
-    window_name = "Peek — Face Recognition Prototype (Phase 3 Hardened)"
+    window_name = "Peek — Face Recognition Prototype (Phase 4 Liveness Hardened)"
     cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
 
     if not camera.start():
@@ -185,7 +244,7 @@ def run_prototype():
             # Mirror frame horizontally for natural webcam feel
             frame = cv2.flip(frame, 1)
 
-            # Process frame through Face Engine (detection + tracking + pose + align + embed + temporal)
+            # Process frame through Face Engine (detection + tracking + pose + align + embed + temporal + liveness)
             result = engine.process_frame(frame)
 
             # Draw secondary tracks first
@@ -208,6 +267,8 @@ def run_prototype():
                     track_id=result.track_id,
                     is_dominant=True,
                     is_temporally_confirmed=result.is_temporally_confirmed,
+                    liveness_res=result.liveness_result,
+                    is_authorized=result.is_authorized_to_unlock,
                     pose_label=result.estimated_pose
                 )
 
@@ -233,10 +294,22 @@ def run_prototype():
             if time.time() - status_notification_time < 3.0:
                 status_text = status_notification
 
-            draw_hud_footer(frame, prof_name, status_text, result.temporal_result)
+            draw_hud_footer(
+                frame,
+                prof_name,
+                status_text,
+                result.temporal_result,
+                result.liveness_result,
+                result.is_authorized_to_unlock
+            )
 
-            # Central status banner when searching or no profile
-            if not result.has_face:
+            # Central status banner when searching or unlocked
+            if result.is_authorized_to_unlock:
+                # Visual celebration halo
+                h, w = frame.shape[:2]
+                cv2.rectangle(frame, (0, 0), (w - 1, h - 1), COLOR_GREEN, 4)
+                cv2.putText(frame, "✓ UNLOCKED — LOOK, AND YOU'RE IN.", (35, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.72, COLOR_GREEN, 2, cv2.LINE_AA)
+            elif not result.has_face:
                 cv2.putText(frame, "Looking for you...", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_YELLOW, 2, cv2.LINE_AA)
             elif not engine.active_profile:
                 cv2.putText(frame, "Face Detected — Run Guided Enrollment or Press [E]", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.58, COLOR_YELLOW, 2, cv2.LINE_AA)

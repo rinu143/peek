@@ -25,6 +25,7 @@ from engine.alignment.aligner import FaceAligner
 from engine.embedding.arcface_embedder import ArcFaceEmbedder
 from engine.recognition.matcher import FaceMatcher, MatchResult
 from engine.temporal.temporal_verifier import TemporalVerifier, TemporalVerificationResult
+from engine.liveness.liveness_detector import LivenessDetector, LivenessResult
 from storage.template_store import SecureProfileStore, PeekProfile, PeekTemplate
 
 logger = logging.getLogger("Peek.FaceEngine")
@@ -39,16 +40,19 @@ class EngineFrameResult:
     match_result: Optional[MatchResult] = None
     temporal_result: Optional[TemporalVerificationResult] = None
     is_temporally_confirmed: bool = False
+    liveness_result: Optional[LivenessResult] = None
+    is_live: bool = False
     estimated_pose: Optional[str] = None
     state_label: str = "SEARCHING"
-    # SECURITY FLAG: Enforces that even 100% biometric match cannot unlock without liveness
+    # SECURITY FLAG: True ONLY when both biometric match AND independent liveness pass
     is_authorized_to_unlock: bool = False
     details: str = ""
 
 
 class FaceEngine:
     """
-    Unified Face Recognition Engine for Peek with persistent tracking & temporal verification.
+    Unified Face Recognition Engine for Peek with persistent tracking,
+    temporal verification, and independent multi-cue liveness gating.
     """
 
     def __init__(
@@ -58,7 +62,9 @@ class FaceEngine:
         profile_store: Optional[SecureProfileStore] = None,
         match_threshold: float = 0.48,
         temporal_window_size: int = 7,
-        temporal_min_matches: int = 5
+        temporal_min_matches: int = 5,
+        liveness_min_frames: int = 8,
+        liveness_threshold: float = 0.58
     ):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         models_dir = os.path.join(base_dir, "models")
@@ -84,6 +90,10 @@ class FaceEngine:
         self.temporal_verifier = TemporalVerifier(
             window_size=temporal_window_size,
             min_matches_required=temporal_min_matches
+        )
+        self.liveness_detector = LivenessDetector(
+            min_frames_to_confirm=liveness_min_frames,
+            liveness_threshold=liveness_threshold
         )
         self.profile_store = profile_store or SecureProfileStore()
         
@@ -112,6 +122,7 @@ class FaceEngine:
             logger.info("No active profile enrolled.")
         
         self.temporal_verifier.reset()
+        self.liveness_detector.reset()
 
     def set_active_profile(self, profile: PeekProfile):
         """Sets active profile in memory."""
@@ -121,14 +132,15 @@ class FaceEngine:
         ]
         self.cached_template_poses = [t.pose_label for t in profile.templates]
         self.temporal_verifier.reset()
+        self.liveness_detector.reset()
 
     def process_frame(self, frame: np.ndarray) -> EngineFrameResult:
         """
-        Executes the detection -> tracking -> pose -> alignment -> embedding -> matching -> temporal pipeline.
+        Executes the detection -> tracking -> pose -> alignment -> embedding -> matching -> temporal -> liveness pipeline.
         
         SECURITY GUARANTEE:
         Aligned crops are processed in memory and discarded. No raw camera frames persist.
-        Match alone NEVER sets is_authorized_to_unlock to True.
+        Match alone NEVER sets is_authorized_to_unlock to True. Liveness must pass independently.
         """
         # Step 1: Detect all faces in frame
         detections = self.detector.detect(frame)
@@ -138,10 +150,13 @@ class FaceEngine:
         
         if dominant_target is None:
             temporal_res = self.temporal_verifier.update(None, False, 0.0)
+            self.liveness_detector.reset()
             return EngineFrameResult(
                 has_face=False,
                 all_tracks=all_tracks,
                 temporal_result=temporal_res,
+                liveness_result=None,
+                is_live=False,
                 state_label="SEARCHING",
                 is_authorized_to_unlock=False,
                 details="Looking for you..."
@@ -157,12 +172,15 @@ class FaceEngine:
         # Face size check
         if dominant_target.width < 45 or dominant_target.height < 45:
             temporal_res = self.temporal_verifier.update(dominant_target.track_id, False, 0.0)
+            self.liveness_detector.reset()
             return EngineFrameResult(
                 has_face=True,
                 detection=dominant_detection,
                 track_id=dominant_target.track_id,
                 all_tracks=all_tracks,
                 temporal_result=temporal_res,
+                liveness_result=None,
+                is_live=False,
                 state_label="FACE_TOO_SMALL",
                 is_authorized_to_unlock=False,
                 details="Move closer to camera"
@@ -184,6 +202,12 @@ class FaceEngine:
         # Step 6: Biometric template matching (if active profile exists)
         if not self.cached_template_embeddings:
             temporal_res = self.temporal_verifier.update(dominant_target.track_id, False, 0.0)
+            liveness_res = self.liveness_detector.update(
+                frame=frame,
+                bbox=dominant_target.bbox,
+                landmarks=dominant_target.landmarks,
+                track_id=dominant_target.track_id
+            )
             return EngineFrameResult(
                 has_face=True,
                 detection=dominant_detection,
@@ -191,6 +215,8 @@ class FaceEngine:
                 all_tracks=all_tracks,
                 embedding=embedding,
                 temporal_result=temporal_res,
+                liveness_result=liveness_res,
+                is_live=liveness_res.is_live,
                 estimated_pose=pose_label,
                 state_label="FACE_FOUND",
                 is_authorized_to_unlock=False,
@@ -212,8 +238,32 @@ class FaceEngine:
             frame_confidence=match_result.confidence
         )
 
-        # Determine state label based on rolling confirmation
-        if temporal_res.is_temporally_confirmed:
+        # Step 8: Independent Liveness & Anti-Spoof Detection
+        liveness_res = self.liveness_detector.update(
+            frame=frame,
+            bbox=dominant_target.bbox,
+            landmarks=dominant_target.landmarks,
+            track_id=dominant_target.track_id
+        )
+
+        # Step 9: Dual-Gate Authorization Logic
+        # NON-NEGOTIABLE CONSTRAINT #1:
+        # Biometric matching alone can NEVER unlock. Independent liveness is mandatory.
+        is_biometric_pass = temporal_res.is_temporally_confirmed and match_result.is_match
+        is_live_pass = liveness_res.is_live
+        is_authorized = bool(is_biometric_pass and is_live_pass)
+
+        # Determine state label based on progression
+        if liveness_res.state == "SPOOF_DETECTED":
+            state_label = "SPOOF_DETECTED"
+            details = f"Spoof Blocked: {liveness_res.spoof_reason or 'Presentation Attack'}"
+        elif is_authorized:
+            state_label = "SUCCESS"
+            details = f"✓ Welcome! Unlocked ({temporal_res.details})"
+        elif is_biometric_pass:
+            state_label = "LIVENESS_CHECK"
+            details = f"Face Matched — Checking Liveness ({liveness_res.details})"
+        elif temporal_res.is_temporally_confirmed:
             state_label = "MATCH"
             details = f"Verified: {temporal_res.details}"
         elif match_result.is_match:
@@ -227,9 +277,6 @@ class FaceEngine:
         if len(all_tracks) > 1:
             details += f" ({len(all_tracks)} faces tracked)"
 
-        # SECURITY CONSTRAINT #1:
-        # Biometric matching (even temporally confirmed) alone is NEVER authorized to unlock.
-        # Layer C (Liveness) must independently pass in Phase 4.
         return EngineFrameResult(
             has_face=True,
             detection=dominant_detection,
@@ -239,9 +286,11 @@ class FaceEngine:
             match_result=match_result,
             temporal_result=temporal_res,
             is_temporally_confirmed=temporal_res.is_temporally_confirmed,
+            liveness_result=liveness_res,
+            is_live=liveness_res.is_live,
             estimated_pose=pose_label,
             state_label=state_label,
-            is_authorized_to_unlock=False,  # Strictly False without independent liveness
+            is_authorized_to_unlock=is_authorized,
             details=details
         )
 

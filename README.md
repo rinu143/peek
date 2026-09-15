@@ -35,6 +35,8 @@ Face Detection (SCRFD-500M ONNX)
        ▼
 Face Tracking & Dominant Target Selection (IoU, Centroids, Hysteresis)
        │
+       ├───► Passive Multi-Cue Liveness Gate (3D Parallax, Screen Moiré, Eye Dynamics)
+       │
        ▼
 Face Alignment (Umeyama Similarity Transform to 112×112)
        │
@@ -48,7 +50,7 @@ Cosine Similarity Matching (Top-3 Mean + Pose Affinity Bonus)
 Temporal Verification Window (M-of-N Rolling Sliding Window & EMA Smoothing)
        │
        ▼
-Liveness & Anti-Spoof Gate (Mandatory)
+Dual-Gate Authorization Decision (Biometric Match AND Independent Liveness Gate)
        │
        ▼
 Windows Credential Provider (Named Pipe IPC)
@@ -66,7 +68,7 @@ Peek/
 ├── apps/
 │   ├── PeekEnrollment/                  # Phase 2 standalone 9-direction guided enrollment app
 │   │   └── main.py
-│   └── PeekPrototype/                   # Phase 1 & 3 interactive desktop recognition prototype
+│   └── PeekPrototype/                   # Phase 1, 3, & 4 interactive desktop recognition prototype
 │       └── main.py
 ├── engine/                              # Core Peek Face Engine
 │   ├── camera/                          # Media Foundation camera capture
@@ -80,21 +82,28 @@ Peek/
 │   │   └── face_tracker.py
 │   ├── temporal/                        # M-of-N rolling sliding window & EMA score smoothing
 │   │   └── temporal_verifier.py
+│   ├── liveness/                        # Phase 4 passive RGB multi-cue anti-spoofing engine
+│   │   ├── motion_detector.py           # 3D landmark parallax & micro-movement analysis
+│   │   ├── texture_checker.py           # Screen moiré FFT & specular reflection analysis
+│   │   ├── eye_dynamics.py              # Eye openness, gradient contrast, & blink detection
+│   │   └── liveness_detector.py         # Rolling liveness evaluation & state machine
 │   ├── pose/                            # Landmark-based head pose estimation (yaw, pitch, roll)
 │   ├── quality/                         # Blur, illumination, sizing, and single-face gating
 │   ├── enrollment/                      # 9-direction state machine & candidate selection
-│   ├── pipeline/                        # End-to-end pipeline orchestrator with tracking & temporal gating
+│   ├── pipeline/                        # End-to-end pipeline orchestrator with dual-gate authorization
 │   │   └── face_engine.py
 │   └── models/                          # Automated ONNX model fetcher & storage
 ├── storage/                             # DPAPI-encrypted profile store
 ├── tests/                               # Automated unit and pipeline tests
 │   ├── test_engine_pipeline.py          # Phase 1 pipeline tests
 │   ├── test_enrollment_pipeline.py      # Phase 2 pose, quality, & enrollment tests
-│   └── test_recognition_hardening.py    # Phase 3 tracking, temporal verification, & calibration tests
+│   ├── test_recognition_hardening.py    # Phase 3 tracking, temporal verification, & calibration tests
+│   └── test_liveness.py                 # Phase 4 anti-spoofing & dual-gate authorization tests
 ├── scripts/                             # Verification & validation scripts
 │   ├── verify_phase1.py                 # Phase 1 offline verification script
 │   ├── verify_phase2.py                 # Phase 2 offline verification script
-│   └── verify_phase3.py                 # Phase 3 offline verification script
+│   ├── verify_phase3.py                 # Phase 3 offline verification script
+│   └── verify_phase4.py                 # Phase 4 offline verification script
 ├── requirements.txt                     # Python dependencies
 └── Glance_Windows_Implementation_Plan_README.md  # Reference architecture specification
 ```
@@ -126,20 +135,23 @@ python apps/PeekEnrollment/main.py
 - **Rapid Capture**: Locks onto and captures each pose in $\approx 70\text{ ms}$, completing all 9 directions in under **10 seconds**.
 - **DPAPI Encryption**: Final multi-angle profile is encrypted via Windows DPAPI into `%LOCALAPPDATA%\Peek\Profiles`.
 
-### 4. Real-Time Recognition & Hardened Verification
+### 4. Real-Time Recognition & Liveness Verification
 Run the interactive face recognition desktop prototype:
 ```powershell
 python apps/PeekPrototype/main.py
 ```
-- **Persistent Track IDs**: Multi-target tracker assigns stable track IDs (`#1`, `#2`, etc.) using spatial centroid proximity and bounding box IoU association.
-- **Dominant Target Stickiness & Hysteresis**: In the presence of bystanders or passersby, the engine locks onto the primary user. Competing faces must be $>1.25\times$ larger for $\ge 4$ consecutive frames before relinquishing focus.
-- **Multi-Template Matching**: Live embeddings are compared against enrolled multi-angle templates using cosine similarity with a pose-affinity weighting bonus.
-- **Rolling Temporal Verification Window**: Single-frame matches are insufficient. Requires an $M$-of-$N$ sliding window (5 of 7 consecutive frames passing the threshold) with Exponential Moving Average (EMA) score smoothing ($\alpha = 0.40$). If the dominant track is lost, the temporal window resets immediately.
+- **Dual-Gate Authorization**: Implements **Non-Negotiable Security Constraint #1**: face match alone can never unlock Windows. An unlock is authorized *only* when both the biometric temporal match gate and the independent passive liveness gate pass.
+- **Passive Multi-Signal Anti-Spoofing**:
+  - *Motion Parallax & Micro-Movement*: Differentiates genuine 3D facial dynamics from static photos on stands (`STATIC_PHOTO`) and flat printouts/phones waved in 2D (`RIGID_PLANAR_MOTION`).
+  - *Texture & Screen Moiré Analysis*: Detects LCD/OLED high-frequency subpixel grids and specular glass reflections (`SCREEN_MOIRE`, `SPECULAR_GLARE`).
+  - *Eye Dynamics & Blink Detection*: Monitors eye patch vertical gradient contrast and eyelid blink events.
+- **Persistent Track IDs & Dominant Face Stickiness**: Assigns stable track IDs and enforces hysteresis (+25% area margin, 4+ frames) so bystanders cannot hijack authentication.
+- **Multi-Template Matching**: Compares live embeddings against all enrolled pose angles using cosine similarity and pose-affinity weighting.
+- **Rolling Temporal Verification Window**: Requires an $M$-of-$N$ sliding window (5 of 7 consecutive frames) with EMA score smoothing ($\alpha = 0.40$).
 - **Live Visual Feedback**:
-  - Dominant face rendered in bright emerald/amber corner brackets with track ID and pose label (`CENTER`, `UP`, `LEFT`, etc.).
-  - Secondary bystander faces rendered in dimmed brackets.
-  - HUD displays a temporal verification progress meter (`CONFIRMING (3/5)` in amber or `VERIFIED (5/5)` in vibrant green).
-  - FPS counter and real-time DPAPI encryption profile status.
+  - Displays dual telemetry meters in the HUD: Temporal match progress (`Temporal 5/5`) and Liveness score (`Live: 85%`).
+  - Real-time spoof detection alerts (`⚠ SPOOF DETECTED (STATIC_PHOTO)` in crimson).
+  - Glowing emerald celebration border and `✓ UNLOCKED — LOOK, AND YOU'RE IN.` banner upon dual-gate authorization.
 - **Controls**:
   - `[E]` : Enroll single face directly.
   - `[C]` : Clear stored profile.
@@ -150,7 +162,7 @@ python apps/PeekPrototype/main.py
 ## Testing & Verification
 
 ### Automated Unit Tests
-Run the complete unit test suite covering detector, aligner, embedder, DPAPI storage, pose classification, quality checks, face tracking, temporal verification, and threshold calibration:
+Run the complete unit test suite covering detector, aligner, embedder, DPAPI storage, pose classification, quality checks, face tracking, temporal verification, threshold calibration, motion parallax, texture moiré, eye dynamics, and dual-gate security:
 ```powershell
 python -m unittest discover tests -v
 ```
@@ -173,6 +185,12 @@ Runs an end-to-end simulation of multi-frame tracking, dominant target stickines
 python scripts/verify_phase3.py
 ```
 
+### Phase 4 Verification Script
+Runs an automated end-to-end simulation of genuine live stream acceptance, static photo attack blocking, waved 2D photo attack blocking, screen replay moiré blocking, and strict dual-gate authorization enforcement:
+```powershell
+python scripts/verify_phase4.py
+```
+
 ---
 
 ## Phased Development Roadmap
@@ -182,8 +200,8 @@ python scripts/verify_phase3.py
 | **Phase 1: Face Engine Prototype** | Camera → SCRFD → 5 Landmarks → Umeyama → ArcFace → Similarity | **Completed** |
 | **Phase 2: Peek-Style Enrollment** | 9-direction guided enrollment, head-pose estimation, multi-frame quality gating | **Completed** |
 | **Phase 3: Recognition Hardening** | Dominant-face tracking, temporal verification window, threshold calibration | **Completed** |
-| **Phase 4: Liveness** | Rolling window, blink & micro-movement signals, presentation-attack defense | Next |
-| **Phase 5: Windows Credential Provider** | Native C++/Win32/COM credential provider tile integration | Planned |
+| **Phase 4: Liveness** | Rolling window, blink & micro-movement signals, presentation-attack defense | **Completed** |
+| **Phase 5: Windows Credential Provider** | Native C++/Win32/COM credential provider tile integration | Next |
 | **Phase 6: Engine ↔ CP IPC** | Named Pipe (`\\.\pipe\PeekEngine`) secure request/response protocol | Planned |
 | **Phase 7: Lock-Screen UX** | Visual state flow (Searching → Found → Verifying → Liveness → Unlock) | Planned |
 | **Phase 8: Performance & Security** | Latency, CPU/RAM benchmarks, attack resistance, and sleep/wake recovery | Planned |
