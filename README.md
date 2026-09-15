@@ -33,13 +33,19 @@ Face Detection (SCRFD-500M ONNX)
        ├───► Head Pose Estimation (Yaw, Pitch, Roll)
        │
        ▼
+Face Tracking & Dominant Target Selection (IoU, Centroids, Hysteresis)
+       │
+       ▼
 Face Alignment (Umeyama Similarity Transform to 112×112)
        │
        ▼
 ArcFace Embedding (MobileFaceNet ONNX → 512-D L2-Normalized Vector)
        │
        ▼
-Cosine Similarity Matching (against DPAPI-enrolled templates)
+Cosine Similarity Matching (Top-3 Mean + Pose Affinity Bonus)
+       │
+       ▼
+Temporal Verification Window (M-of-N Rolling Sliding Window & EMA Smoothing)
        │
        ▼
 Liveness & Anti-Spoof Gate (Mandatory)
@@ -60,26 +66,35 @@ Peek/
 ├── apps/
 │   ├── PeekEnrollment/                  # Phase 2 standalone 9-direction guided enrollment app
 │   │   └── main.py
-│   └── PeekPrototype/                   # Phase 1 interactive desktop recognition prototype
+│   └── PeekPrototype/                   # Phase 1 & 3 interactive desktop recognition prototype
 │       └── main.py
 ├── engine/                              # Core Peek Face Engine
 │   ├── camera/                          # Media Foundation camera capture
 │   ├── detection/                       # SCRFD face & landmark detector
 │   ├── alignment/                       # 5-point Umeyama similarity transform
 │   ├── embedding/                       # ArcFace 512-D embedding extractor
-│   ├── recognition/                     # Cosine similarity matcher
+│   ├── recognition/                     # Multi-template matcher & threshold calibrator
+│   │   ├── matcher.py
+│   │   └── calibrator.py
+│   ├── tracking/                        # Dominant face tracker with IoU, centroids, & hysteresis
+│   │   └── face_tracker.py
+│   ├── temporal/                        # M-of-N rolling sliding window & EMA score smoothing
+│   │   └── temporal_verifier.py
 │   ├── pose/                            # Landmark-based head pose estimation (yaw, pitch, roll)
 │   ├── quality/                         # Blur, illumination, sizing, and single-face gating
 │   ├── enrollment/                      # 9-direction state machine & candidate selection
-│   ├── pipeline/                        # End-to-end pipeline orchestrator
+│   ├── pipeline/                        # End-to-end pipeline orchestrator with tracking & temporal gating
+│   │   └── face_engine.py
 │   └── models/                          # Automated ONNX model fetcher & storage
 ├── storage/                             # DPAPI-encrypted profile store
 ├── tests/                               # Automated unit and pipeline tests
 │   ├── test_engine_pipeline.py          # Phase 1 pipeline tests
-│   └── test_enrollment_pipeline.py      # Phase 2 pose, quality, & enrollment tests
+│   ├── test_enrollment_pipeline.py      # Phase 2 pose, quality, & enrollment tests
+│   └── test_recognition_hardening.py    # Phase 3 tracking, temporal verification, & calibration tests
 ├── scripts/                             # Verification & validation scripts
 │   ├── verify_phase1.py                 # Phase 1 offline verification script
-│   └── verify_phase2.py                 # Phase 2 offline verification script
+│   ├── verify_phase2.py                 # Phase 2 offline verification script
+│   └── verify_phase3.py                 # Phase 3 offline verification script
 ├── requirements.txt                     # Python dependencies
 └── Glance_Windows_Implementation_Plan_README.md  # Reference architecture specification
 ```
@@ -111,14 +126,20 @@ python apps/PeekEnrollment/main.py
 - **Rapid Capture**: Locks onto and captures each pose in $\approx 70\text{ ms}$, completing all 9 directions in under **10 seconds**.
 - **DPAPI Encryption**: Final multi-angle profile is encrypted via Windows DPAPI into `%LOCALAPPDATA%\Peek\Profiles`.
 
-### 4. Real-Time Recognition & Verification
+### 4. Real-Time Recognition & Hardened Verification
 Run the interactive face recognition desktop prototype:
 ```powershell
 python apps/PeekPrototype/main.py
 ```
-- **Live detection**: Renders stylized face corner brackets and 5 keypoints in real time.
-- **Multi-Angle Matching**: Smoothly recognizes enrolled users across varying head angles.
-- **Visual Feedback**: HUD displays `✓ MATCH (XX%)` in vibrant green or `✗ NO MATCH` in red.
+- **Persistent Track IDs**: Multi-target tracker assigns stable track IDs (`#1`, `#2`, etc.) using spatial centroid proximity and bounding box IoU association.
+- **Dominant Target Stickiness & Hysteresis**: In the presence of bystanders or passersby, the engine locks onto the primary user. Competing faces must be $>1.25\times$ larger for $\ge 4$ consecutive frames before relinquishing focus.
+- **Multi-Template Matching**: Live embeddings are compared against enrolled multi-angle templates using cosine similarity with a pose-affinity weighting bonus.
+- **Rolling Temporal Verification Window**: Single-frame matches are insufficient. Requires an $M$-of-$N$ sliding window (5 of 7 consecutive frames passing the threshold) with Exponential Moving Average (EMA) score smoothing ($\alpha = 0.40$). If the dominant track is lost, the temporal window resets immediately.
+- **Live Visual Feedback**:
+  - Dominant face rendered in bright emerald/amber corner brackets with track ID and pose label (`CENTER`, `UP`, `LEFT`, etc.).
+  - Secondary bystander faces rendered in dimmed brackets.
+  - HUD displays a temporal verification progress meter (`CONFIRMING (3/5)` in amber or `VERIFIED (5/5)` in vibrant green).
+  - FPS counter and real-time DPAPI encryption profile status.
 - **Controls**:
   - `[E]` : Enroll single face directly.
   - `[C]` : Clear stored profile.
@@ -129,7 +150,7 @@ python apps/PeekPrototype/main.py
 ## Testing & Verification
 
 ### Automated Unit Tests
-Run the complete unit test suite covering detector, aligner, embedder, DPAPI storage, pose classification, and quality checks:
+Run the complete unit test suite covering detector, aligner, embedder, DPAPI storage, pose classification, quality checks, face tracking, temporal verification, and threshold calibration:
 ```powershell
 python -m unittest discover tests -v
 ```
@@ -144,6 +165,12 @@ python scripts/verify_phase1.py
 Runs an automated offline 9-direction enrollment simulation, candidate accumulation, and DPAPI profile persistence:
 ```powershell
 python scripts/verify_phase2.py
+```
+
+### Phase 3 Verification Script
+Runs an end-to-end simulation of multi-frame tracking, dominant target stickiness against bystanders, $M$-of-$N$ temporal confirmation, track-loss reset, and FAR/FRR threshold calibration:
+```powershell
+python scripts/verify_phase3.py
 ```
 
 ---
