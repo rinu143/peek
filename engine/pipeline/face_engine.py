@@ -56,6 +56,11 @@ class FaceEngine:
     """
     Unified Face Recognition Engine for Peek with persistent tracking,
     temporal verification, and independent multi-cue liveness gating.
+
+    require_active_challenge:
+        When True (default), unlock is withheld until ChallengeManager reports
+        passed=True, even if biometric match and passive liveness already pass.
+        Set False for low-friction / demo use (passive liveness only).
     """
 
     def __init__(
@@ -68,7 +73,7 @@ class FaceEngine:
         temporal_min_matches: int = 5,
         liveness_min_frames: int = 8,
         liveness_threshold: float = 0.58,
-        require_active_challenge: bool = False,
+        require_active_challenge: bool = True,
         quality_checker: Optional[FaceQualityChecker] = None
     ):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -103,6 +108,7 @@ class FaceEngine:
         self.quality_checker = quality_checker or FaceQualityChecker()
         self._last_liveness_result: Optional[LivenessResult] = None
         self.require_active_challenge = require_active_challenge
+        self._session_force_active_challenge = False
         self.challenge_manager = ChallengeManager(timeout_seconds=3.5, max_frames=70)
         self.profile_store = profile_store or SecureProfileStore()
         
@@ -146,6 +152,10 @@ class FaceEngine:
         self.liveness_detector.reset()
         self.challenge_manager.reset()
         self._last_liveness_result = None
+
+    def _is_challenge_required(self) -> bool:
+        """Returns True if active challenge-response mode is enabled."""
+        return self.require_active_challenge or self._session_force_active_challenge
 
 
 
@@ -313,9 +323,10 @@ class FaceEngine:
 
             # Optional Active Challenge-Response Mode
             challenge_res: Optional[ChallengeResult] = None
-            if self.require_active_challenge:
-                curr_blinks = liveness_res.eye_dynamics.blink_count if liveness_res.eye_dynamics else 0
-                blink_this = liveness_res.eye_dynamics.blink_detected if liveness_res.eye_dynamics else False
+            challenge_required = self._is_challenge_required()
+            if challenge_required:
+                curr_blinks = liveness_res.blink_count
+                blink_this = liveness_res.blink_detected
                 if not self.challenge_manager.is_active and not (self.challenge_manager.update(pose_label).passed):
                     challenge_res = self.challenge_manager.start_challenge(initial_blink_count=curr_blinks)
                 else:
@@ -330,17 +341,20 @@ class FaceEngine:
             # Biometric matching alone can NEVER unlock. Independent liveness is mandatory.
             is_biometric_pass = temporal_res.is_temporally_confirmed and match_result.is_match
             is_live_pass = liveness_res.is_live
-            is_challenge_pass = (challenge_res.passed) if (self.require_active_challenge and challenge_res) else True
+            if challenge_required:
+                is_challenge_pass = bool(challenge_res is not None and challenge_res.passed)
+            else:
+                is_challenge_pass = True
             is_authorized = bool(is_biometric_pass and is_live_pass and is_challenge_pass)
 
             # Determine state label based on progression
             if liveness_res.state == "SPOOF_DETECTED":
                 state_label = "SPOOF_DETECTED"
                 details = f"Spoof Blocked: {liveness_res.spoof_reason or 'Presentation Attack'}"
-            elif self.require_active_challenge and challenge_res and challenge_res.state in ("FAILED", "TIMEOUT"):
+            elif challenge_required and challenge_res and challenge_res.state in ("FAILED", "TIMEOUT"):
                 state_label = "CHALLENGE_FAILED"
                 details = f"Challenge Failed: {challenge_res.details}"
-            elif self.require_active_challenge and challenge_res and not challenge_res.passed:
+            elif challenge_required and challenge_res and not challenge_res.passed:
                 state_label = "CHALLENGE"
                 details = f"Action Required: {challenge_res.prompt_text}"
             elif is_authorized:

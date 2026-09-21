@@ -31,6 +31,7 @@ class LivenessResult:
     eye_score: float
     bezel_confidence: float = 0.0
     blink_detected: bool = False
+    blink_count: int = 0
     spoof_reason: Optional[str] = None  # "STATIC_PHOTO", "RIGID_PLANAR_MOTION", "LACKS_PARALLAX", "BEZEL_DETECTED", etc.
     details: str = ""
 
@@ -168,6 +169,7 @@ class LivenessDetector:
                 eye_score=eye_res.dynamics_score,
                 bezel_confidence=bezel_res.confidence,
                 blink_detected=eye_res.blink_detected,
+                blink_count=eye_res.blink_count,
                 spoof_reason=self._active_spoof_reason,
                 details=f"Spoof detected: {self._active_spoof_reason} (bezel={bezel_res.confidence:.2f}, mot={motion_res.score:.2f})"
             )
@@ -184,6 +186,7 @@ class LivenessDetector:
                 eye_score=eye_res.dynamics_score,
                 bezel_confidence=bezel_res.confidence,
                 blink_detected=eye_res.blink_detected,
+                blink_count=eye_res.blink_count,
                 details=f"Evaluating liveness ({pct}%)..."
             )
 
@@ -207,6 +210,7 @@ class LivenessDetector:
             texture_score=texture_res.score,
             eye_score=eye_res.dynamics_score,
             blink_detected=eye_res.blink_detected,
+            blink_count=eye_res.blink_count,
             spoof_reason=spoof_reason,
             details=details
         )
