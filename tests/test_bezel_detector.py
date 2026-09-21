@@ -6,6 +6,7 @@ Validates:
 3. Partial / occluded bezel.
 4. Natural rectilinear background geometry (distant doorframe, single window line)
    to ensure the false-positive rate is appropriately guarded.
+5. Periodic background textures (venetian blinds + wall edge) must not trigger.
 """
 
 import unittest
@@ -105,6 +106,49 @@ class TestBezelDetector(unittest.TestCase):
         # Distant doorframe does not tightly frame the face on multiple sides
         self.assertFalse(res.bezel_detected)
         self.assertLess(res.confidence, 0.40)
+
+    def _make_blinds_and_wall_scene(
+        self,
+        spacing=14,
+        wall_x=280,
+        bbox=None,
+        canvas_size=(480, 640),
+    ):
+        """Synthetic live-user scene: venetian blinds + one wall edge, no device."""
+        h, w = canvas_size
+        canvas = np.full((h, w, 3), 195, dtype=np.uint8)
+        for y in range(10, h - 10, spacing):
+            cv2.line(canvas, (20, y), (w - 20, y), (70, 70, 75), 2)
+        cv2.line(canvas, (wall_x, 0), (wall_x, h), (50, 50, 50), 4)
+        face_bbox = bbox if bbox is not None else self.face_bbox
+        self._create_synthetic_face(canvas, face_bbox)
+        return canvas, face_bbox
+
+    def test_periodic_background_pattern_false_positive_guard(self):
+        """
+        Repeated parallel lines (blinds/grille texture) plus one unrelated
+        vertical edge must not be scored as a device bezel.
+        """
+        canvas, bbox = self._make_blinds_and_wall_scene(spacing=14, wall_x=280)
+        res = self.detector.evaluate(canvas, bbox)
+        self.assertFalse(res.bezel_detected)
+        self.assertLess(res.confidence, self.detector.confidence_threshold)
+        self.assertLess(res.confidence, 0.50)
+
+    def test_blinds_plus_wall_edge_no_device_regression(self):
+        """
+        Regression: live user, roughly centered, venetian blinds behind them
+        and a nearby wall/door edge — zero actual device bezel in frame.
+        """
+        # Face more centered; wall just inside the old expanded ROI.
+        bbox = (210, 150, 330, 300)
+        canvas, bbox = self._make_blinds_and_wall_scene(
+            spacing=16, wall_x=400, bbox=bbox
+        )
+        res = self.detector.evaluate(canvas, bbox)
+        self.assertFalse(res.bezel_detected)
+        self.assertLess(res.confidence, self.detector.confidence_threshold)
+        self.assertLess(res.confidence, 0.50)
 
 
 if __name__ == "__main__":

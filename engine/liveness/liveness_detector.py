@@ -112,12 +112,9 @@ class LivenessDetector:
 
         # Identify hard-spoof triggers
         spoof_reason = None
-        is_high_confidence_bezel = False
 
         if bezel_res.bezel_detected:
             spoof_reason = "BEZEL_DETECTED"
-            if bezel_res.confidence >= 0.75:
-                is_high_confidence_bezel = True
         elif motion_res.lacks_parallax:
             spoof_reason = motion_res.spoof_reason or "LACKS_PARALLAX"
         elif motion_res.is_frozen:
@@ -152,13 +149,14 @@ class LivenessDetector:
         smoothed_score = float(np.mean(self._recent_scores))
 
         # Escalation logic:
-        # Very strong bezel signal (>= 0.85) triggers immediate 1-frame spoof.
-        # Standard indicators require 2 consecutive frames.
-        is_spoof_confirmed = False
-        if is_high_confidence_bezel and self._consecutive_spoof_frames >= 1 and bezel_res.confidence >= 0.85:
-            is_spoof_confirmed = True
-        elif self._consecutive_spoof_frames >= 2:
-            is_spoof_confirmed = True
+        # SECURITY THRESHOLD: all hard-spoof indicators, including high-confidence
+        # bezel detections, require 2 consecutive frames before SPOOF_DETECTED.
+        # The previous 1-frame instant veto (is_high_confidence_bezel and
+        # bezel_res.confidence >= 0.85) was removed. A genuine device bezel is
+        # persistent across frames; a single-frame short-circuit amplified
+        # false positives from periodic background textures without improving
+        # true-positive screen-replay rejection.
+        is_spoof_confirmed = self._consecutive_spoof_frames >= 2
 
         if is_spoof_confirmed:
             return LivenessResult(
