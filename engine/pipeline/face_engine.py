@@ -27,6 +27,7 @@ from engine.recognition.matcher import FaceMatcher, MatchResult
 from engine.temporal.temporal_verifier import TemporalVerifier, TemporalVerificationResult
 from engine.liveness.liveness_detector import LivenessDetector, LivenessResult
 from engine.liveness.challenge import ChallengeManager, ChallengeResult
+from engine.quality.quality_checker import FaceQualityChecker, QualityCheckResult
 from storage.template_store import SecureProfileStore, PeekProfile, PeekTemplate
 
 logger = logging.getLogger("Peek.FaceEngine")
@@ -67,7 +68,8 @@ class FaceEngine:
         temporal_min_matches: int = 5,
         liveness_min_frames: int = 8,
         liveness_threshold: float = 0.58,
-        require_active_challenge: bool = False
+        require_active_challenge: bool = False,
+        quality_checker: Optional[FaceQualityChecker] = None
     ):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         models_dir = os.path.join(base_dir, "models")
@@ -98,6 +100,8 @@ class FaceEngine:
             min_frames_to_confirm=liveness_min_frames,
             liveness_threshold=liveness_threshold
         )
+        self.quality_checker = quality_checker or FaceQualityChecker()
+        self._last_liveness_result: Optional[LivenessResult] = None
         self.require_active_challenge = require_active_challenge
         self.challenge_manager = ChallengeManager(timeout_seconds=3.5, max_frames=70)
         self.profile_store = profile_store or SecureProfileStore()
@@ -129,6 +133,7 @@ class FaceEngine:
         self.temporal_verifier.reset()
         self.liveness_detector.reset()
         self.challenge_manager.reset()
+        self._last_liveness_result = None
 
     def set_active_profile(self, profile: PeekProfile):
         """Sets active profile in memory."""
@@ -140,6 +145,8 @@ class FaceEngine:
         self.temporal_verifier.reset()
         self.liveness_detector.reset()
         self.challenge_manager.reset()
+        self._last_liveness_result = None
+
 
 
     def process_frame(self, frame: np.ndarray) -> EngineFrameResult:
@@ -160,6 +167,7 @@ class FaceEngine:
             temporal_res = self.temporal_verifier.update(None, False, 0.0)
             self.liveness_detector.reset()
             self.challenge_manager.reset()
+            self._last_liveness_result = None
             return EngineFrameResult(
                 has_face=False,
                 all_tracks=all_tracks,
@@ -183,6 +191,7 @@ class FaceEngine:
             temporal_res = self.temporal_verifier.update(dominant_target.track_id, False, 0.0)
             self.liveness_detector.reset()
             self.challenge_manager.reset()
+            self._last_liveness_result = None
             return EngineFrameResult(
                 has_face=True,
                 detection=dominant_detection,
@@ -212,12 +221,38 @@ class FaceEngine:
         # Step 6: Biometric template matching (if active profile exists)
         if not self.cached_template_embeddings:
             temporal_res = self.temporal_verifier.update(dominant_target.track_id, False, 0.0)
+            quality_res = self.quality_checker.evaluate(frame, [dominant_detection])
+            if not quality_res.passed:
+                liveness_res = self._last_liveness_result or LivenessResult(
+                    is_live=False,
+                    state="CHECKING",
+                    fused_score=0.0,
+                    motion_score=0.0,
+                    texture_score=0.0,
+                    eye_score=0.0,
+                    details=f"Waiting for a clearer frame: {quality_res.rejection_reason}"
+                )
+                return EngineFrameResult(
+                    has_face=True,
+                    detection=dominant_detection,
+                    track_id=dominant_target.track_id,
+                    all_tracks=all_tracks,
+                    embedding=embedding,
+                    temporal_result=temporal_res,
+                    liveness_result=liveness_res,
+                    is_live=liveness_res.is_live,
+                    estimated_pose=pose_label,
+                    state_label="WAITING_FOR_CLEAR_FRAME",
+                    is_authorized_to_unlock=False,
+                    details=f"Waiting for a clearer frame: {quality_res.rejection_reason}"
+                )
             liveness_res = self.liveness_detector.update(
                 frame=frame,
                 bbox=dominant_target.bbox,
                 landmarks=dominant_target.landmarks,
                 track_id=dominant_target.track_id
             )
+            self._last_liveness_result = liveness_res
             return EngineFrameResult(
                 has_face=True,
                 detection=dominant_detection,
@@ -248,65 +283,86 @@ class FaceEngine:
             frame_confidence=match_result.confidence
         )
 
-        # Step 8: Independent Liveness & Anti-Spoof Detection
-        liveness_res = self.liveness_detector.update(
-            frame=frame,
-            bbox=dominant_target.bbox,
-            landmarks=dominant_target.landmarks,
-            track_id=dominant_target.track_id
-        )
-
-        # Optional Active Challenge-Response Mode
-        challenge_res: Optional[ChallengeResult] = None
-        if self.require_active_challenge:
-            curr_blinks = liveness_res.eye_dynamics.blink_count if liveness_res.eye_dynamics else 0
-            blink_this = liveness_res.eye_dynamics.blink_detected if liveness_res.eye_dynamics else False
-            if not self.challenge_manager.is_active and not (self.challenge_manager.update(pose_label).passed):
-                challenge_res = self.challenge_manager.start_challenge(initial_blink_count=curr_blinks)
-            else:
-                challenge_res = self.challenge_manager.update(
-                    pose_label=pose_label,
-                    current_blink_count=curr_blinks,
-                    blink_detected_this_frame=blink_this
-                )
-
-        # Step 9: Dual-Gate Authorization Logic
-        # NON-NEGOTIABLE CONSTRAINT #1:
-        # Biometric matching alone can NEVER unlock. Independent liveness is mandatory.
-        is_biometric_pass = temporal_res.is_temporally_confirmed and match_result.is_match
-        is_live_pass = liveness_res.is_live
-        is_challenge_pass = (challenge_res.passed) if (self.require_active_challenge and challenge_res) else True
-        is_authorized = bool(is_biometric_pass and is_live_pass and is_challenge_pass)
-
-        # Determine state label based on progression
-        if liveness_res.state == "SPOOF_DETECTED":
-            state_label = "SPOOF_DETECTED"
-            details = f"Spoof Blocked: {liveness_res.spoof_reason or 'Presentation Attack'}"
-        elif self.require_active_challenge and challenge_res and challenge_res.state in ("FAILED", "TIMEOUT"):
-            state_label = "CHALLENGE_FAILED"
-            details = f"Challenge Failed: {challenge_res.details}"
-        elif self.require_active_challenge and challenge_res and not challenge_res.passed:
-            state_label = "CHALLENGE"
-            details = f"Action Required: {challenge_res.prompt_text}"
-        elif is_authorized:
-            state_label = "SUCCESS"
-            details = f"✓ Welcome! Unlocked ({temporal_res.details})"
-        elif is_biometric_pass:
-            state_label = "LIVENESS_CHECK"
-            details = f"Face Matched — Checking Liveness ({liveness_res.details})"
-        elif temporal_res.is_temporally_confirmed:
-            state_label = "MATCH"
-            details = f"Verified: {temporal_res.details}"
-        elif match_result.is_match:
-            state_label = "VERIFYING"
-            details = f"Verifying ({temporal_res.positive_matches_in_window}/{temporal_res.required_matches})..."
+        # Step 8: Quality Gate & Independent Liveness Detection
+        quality_res = self.quality_checker.evaluate(frame, [dominant_detection])
+        if not quality_res.passed:
+            # FIQA quality check failed: do NOT call liveness_detector.update(),
+            # do NOT reset rolling buffers, and do NOT count as a spoof veto.
+            # Reuse last known LivenessResult and display waiting feedback.
+            liveness_res = self._last_liveness_result or LivenessResult(
+                is_live=False,
+                state="CHECKING",
+                fused_score=0.0,
+                motion_score=0.0,
+                texture_score=0.0,
+                eye_score=0.0,
+                details=f"Waiting for a clearer frame: {quality_res.rejection_reason}"
+            )
+            challenge_res = None
+            is_authorized = False
+            state_label = "WAITING_FOR_CLEAR_FRAME"
+            details = f"Waiting for a clearer frame: {quality_res.rejection_reason}"
         else:
-            state_label = "NO_MATCH"
-            details = match_result.details
+            liveness_res = self.liveness_detector.update(
+                frame=frame,
+                bbox=dominant_target.bbox,
+                landmarks=dominant_target.landmarks,
+                track_id=dominant_target.track_id
+            )
+            self._last_liveness_result = liveness_res
+
+            # Optional Active Challenge-Response Mode
+            challenge_res: Optional[ChallengeResult] = None
+            if self.require_active_challenge:
+                curr_blinks = liveness_res.eye_dynamics.blink_count if liveness_res.eye_dynamics else 0
+                blink_this = liveness_res.eye_dynamics.blink_detected if liveness_res.eye_dynamics else False
+                if not self.challenge_manager.is_active and not (self.challenge_manager.update(pose_label).passed):
+                    challenge_res = self.challenge_manager.start_challenge(initial_blink_count=curr_blinks)
+                else:
+                    challenge_res = self.challenge_manager.update(
+                        pose_label=pose_label,
+                        current_blink_count=curr_blinks,
+                        blink_detected_this_frame=blink_this
+                    )
+
+            # Step 9: Dual-Gate Authorization Logic
+            # NON-NEGOTIABLE CONSTRAINT #1:
+            # Biometric matching alone can NEVER unlock. Independent liveness is mandatory.
+            is_biometric_pass = temporal_res.is_temporally_confirmed and match_result.is_match
+            is_live_pass = liveness_res.is_live
+            is_challenge_pass = (challenge_res.passed) if (self.require_active_challenge and challenge_res) else True
+            is_authorized = bool(is_biometric_pass and is_live_pass and is_challenge_pass)
+
+            # Determine state label based on progression
+            if liveness_res.state == "SPOOF_DETECTED":
+                state_label = "SPOOF_DETECTED"
+                details = f"Spoof Blocked: {liveness_res.spoof_reason or 'Presentation Attack'}"
+            elif self.require_active_challenge and challenge_res and challenge_res.state in ("FAILED", "TIMEOUT"):
+                state_label = "CHALLENGE_FAILED"
+                details = f"Challenge Failed: {challenge_res.details}"
+            elif self.require_active_challenge and challenge_res and not challenge_res.passed:
+                state_label = "CHALLENGE"
+                details = f"Action Required: {challenge_res.prompt_text}"
+            elif is_authorized:
+                state_label = "SUCCESS"
+                details = f"✓ Welcome! Unlocked ({temporal_res.details})"
+            elif is_biometric_pass:
+                state_label = "LIVENESS_CHECK"
+                details = f"Face Matched — Checking Liveness ({liveness_res.details})"
+            elif temporal_res.is_temporally_confirmed:
+                state_label = "MATCH"
+                details = f"Verified: {temporal_res.details}"
+            elif match_result.is_match:
+                state_label = "VERIFYING"
+                details = f"Verifying ({temporal_res.positive_matches_in_window}/{temporal_res.required_matches})..."
+            else:
+                state_label = "NO_MATCH"
+                details = match_result.details
 
         # If multiple faces present in frame, append bystander notice
         if len(all_tracks) > 1:
             details += f" ({len(all_tracks)} faces tracked)"
+
 
         return EngineFrameResult(
             has_face=True,

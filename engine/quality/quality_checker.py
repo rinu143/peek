@@ -73,7 +73,7 @@ class FaceQualityChecker:
 
         det = all_detections[0]
         h_img, w_img = frame.shape[:2]
-        x1, y1, x2, y2 = det.bbox.astype(int)
+        x1, y1, x2, y2 = np.asarray(det.bbox, dtype=int)
 
         # 2. Face size check
         w_face = x2 - x1

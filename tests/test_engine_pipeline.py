@@ -175,5 +175,95 @@ class TestPeekFaceEngine(unittest.TestCase):
             self.assertEqual(res_face.embedding.shape, (512,))
             self.assertFalse(res_face.is_authorized_to_unlock)
 
+    def test_quality_gating_blurry_and_underexposed_frames(self):
+        """
+        Validates FIQA quality gating in live authentication:
+        (a) Blurry or underexposed frames do not falsely trigger SPOOF_DETECTED.
+        (b) LivenessDetector's internal frame counters/buffers are not advanced or corrupted.
+        (c) State label and details reflect waiting for a clearer frame.
+        """
+        from unittest.mock import patch
+
+        engine = FaceEngine(
+            detector_model_path=self.det_model_path,
+            embedder_model_path=self.emb_model_path,
+            profile_store=self.profile_store,
+            match_threshold=0.50
+        )
+
+        template = PeekTemplate(
+            template_id="tmpl_test",
+            embedding=[0.1] * 512,
+            pose_label="CENTER",
+            quality_score=0.95
+        )
+        profile = PeekProfile(
+            profile_id="prof_test",
+            display_name="Test User",
+            templates=[template]
+        )
+        engine.set_active_profile(profile)
+
+        # Baseline: liveness detector has 0 frames
+        self.assertEqual(engine.liveness_detector._frame_count, 0)
+        self.assertEqual(len(engine.liveness_detector._recent_scores), 0)
+
+        face_img = create_synthetic_face_image()
+        mock_detection = FaceDetection(
+            bbox=np.array([230.0, 120.0, 410.0, 360.0], dtype=np.float32),
+            confidence=0.95,
+            landmarks=np.array([
+                [285.0, 215.0],
+                [355.0, 215.0],
+                [320.0, 245.0],
+                [290.0, 290.0],
+                [350.0, 290.0]
+            ], dtype=np.float32)
+        )
+
+        blurry_frame = cv2.GaussianBlur(face_img, (45, 45), 15.0)
+
+        with patch.object(engine.detector, 'detect', return_value=[mock_detection]):
+            # 1. Five blurry frames
+            for _ in range(5):
+                res = engine.process_frame(blurry_frame)
+                
+                # (a) Must NOT trigger SPOOF_DETECTED
+                self.assertNotEqual(res.state_label, "SPOOF_DETECTED")
+                self.assertNotEqual(res.liveness_result.state, "SPOOF_DETECTED")
+                self.assertEqual(res.state_label, "WAITING_FOR_CLEAR_FRAME")
+                self.assertIn("Waiting for a clearer frame", res.details)
+                self.assertIn("blurry", res.details.lower())
+                self.assertFalse(res.is_authorized_to_unlock)
+
+            # (b) Liveness detector internal frame counters/buffers NOT advanced or corrupted
+            self.assertEqual(engine.liveness_detector._frame_count, 0)
+            self.assertEqual(len(engine.liveness_detector._recent_scores), 0)
+            self.assertEqual(len(engine.liveness_detector.motion_detector._history_centroids), 0)
+
+            # 2. Five underexposed / dark frames
+            dark_frame = np.full_like(face_img, 10, dtype=np.uint8)
+            for _ in range(5):
+                res_dark = engine.process_frame(dark_frame)
+                
+                # (a) Must NOT trigger SPOOF_DETECTED
+                self.assertNotEqual(res_dark.state_label, "SPOOF_DETECTED")
+                self.assertEqual(res_dark.state_label, "WAITING_FOR_CLEAR_FRAME")
+                self.assertIn("Waiting for a clearer frame", res_dark.details)
+                self.assertIn("dark", res_dark.details.lower())
+                self.assertFalse(res_dark.is_authorized_to_unlock)
+
+            # (b) Still 0 frames processed by liveness detector
+            self.assertEqual(engine.liveness_detector._frame_count, 0)
+            self.assertEqual(len(engine.liveness_detector._recent_scores), 0)
+
+            # 3. Clear, sharp frame -> passes quality check and advances liveness detector
+            res_clean = engine.process_frame(face_img)
+            self.assertEqual(engine.liveness_detector._frame_count, 1)
+            self.assertNotEqual(res_clean.state_label, "WAITING_FOR_CLEAR_FRAME")
+            self.assertIsNotNone(engine._last_liveness_result)
+
+
 if __name__ == "__main__":
     unittest.main()
+
