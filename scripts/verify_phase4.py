@@ -275,8 +275,39 @@ def run_phase4_verification():
     assert ch_res.state == "PASSED"
     logger.info("✓ Active challenge-response prompt & verification passed.")
 
+    # -------------------------------------------------------------
+    # 9. Challenge Pass Single-Use Security (State-Latch Fix)
+    # -------------------------------------------------------------
+    logger.info("9. Validating challenge pass single-use security (state-latch fix)...")
+    challenger2 = ChallengeManager(timeout_seconds=2.0)
+    ch_res = challenger2.start_challenge()
+    assert ch_res.state == "PENDING"
+
+    # Force the challenge type and pass it
+    challenger2._current_challenge = "TURN_LEFT"
+    ch_res = challenger2.update(pose_label="LEFT")
+    assert ch_res.passed
+    assert ch_res.state == "PASSED"
+
+    # Consume the pass (simulating authorization)
+    challenger2.consume_pass()
+    assert challenger2._state == "CONSUMED"
+
+    # Attempt to reuse the same pass - should fail
+    ch_res = challenger2.update(pose_label="LEFT")
+    assert not ch_res.passed
+    assert ch_res.state == "CONSUMED"
+    assert "already used" in ch_res.details
+
+    # Only reset should clear CONSUMED state
+    challenger2.reset()
+    ch_res = challenger2.update(pose_label="LEFT")
+    assert ch_res.state == "IDLE"
+    logger.info("✓ Challenge pass single-use security verified (state-latch vulnerability fixed).")
+
     logger.info("=" * 60)
     logger.info("   ALL PHASE 4 HARDENED LIVENESS VERIFICATIONS PASSED!")
+    logger.info("   (Including state-latch vulnerability fix for challenge reuse)")
     logger.info("=" * 60)
 
 

@@ -93,7 +93,7 @@ class FaceEngine:
         logger.info(f"Loading ArcFace Embedder from: {emb_path}")
         self.embedder = ArcFaceEmbedder(emb_path)
 
-        self.tracker = FaceTracker(min_hits_to_confirm=2, max_missing_frames=5)
+        self.tracker = FaceTracker(min_hits_to_confirm=2, max_missing_frames=2)
         self.pose_estimator = HeadPoseEstimator()
         self.aligner = FaceAligner(target_size=(112, 112))
         self.matcher = FaceMatcher(default_threshold=match_threshold)
@@ -110,6 +110,7 @@ class FaceEngine:
         self.require_active_challenge = require_active_challenge
         self._session_force_active_challenge = False
         self.challenge_manager = ChallengeManager(timeout_seconds=3.5, max_frames=70)
+        self._challenge_passed_track_id: Optional[int] = None
         self.profile_store = profile_store or SecureProfileStore()
         
         # In-memory enrolled templates cache for fast real-time matching
@@ -139,6 +140,7 @@ class FaceEngine:
         self.temporal_verifier.reset()
         self.liveness_detector.reset()
         self.challenge_manager.reset()
+        self._challenge_passed_track_id = None
         self._last_liveness_result = None
 
     def set_active_profile(self, profile: PeekProfile):
@@ -151,6 +153,7 @@ class FaceEngine:
         self.temporal_verifier.reset()
         self.liveness_detector.reset()
         self.challenge_manager.reset()
+        self._challenge_passed_track_id = None
         self._last_liveness_result = None
 
     def _is_challenge_required(self) -> bool:
@@ -177,6 +180,7 @@ class FaceEngine:
             temporal_res = self.temporal_verifier.update(None, False, 0.0)
             self.liveness_detector.reset()
             self.challenge_manager.reset()
+            self._challenge_passed_track_id = None
             self._last_liveness_result = None
             return EngineFrameResult(
                 has_face=False,
@@ -196,11 +200,17 @@ class FaceEngine:
             landmarks=dominant_target.landmarks
         )
 
+        # SECURITY: Reset challenge if track_id changes (prevents pass carryover to different face)
+        if self._challenge_passed_track_id is not None and dominant_target.track_id != self._challenge_passed_track_id:
+            self.challenge_manager.reset()
+            self._challenge_passed_track_id = None
+
         # Face size check
         if dominant_target.width < 45 or dominant_target.height < 45:
             temporal_res = self.temporal_verifier.update(dominant_target.track_id, False, 0.0)
             self.liveness_detector.reset()
             self.challenge_manager.reset()
+            self._challenge_passed_track_id = None
             self._last_liveness_result = None
             return EngineFrameResult(
                 has_face=True,
@@ -346,6 +356,11 @@ class FaceEngine:
             else:
                 is_challenge_pass = True
             is_authorized = bool(is_biometric_pass and is_live_pass and is_challenge_pass)
+
+            # SECURITY: Consume challenge pass immediately after use (single-use)
+            if is_authorized and challenge_required and challenge_res and challenge_res.passed:
+                self.challenge_manager.consume_pass()
+                self._challenge_passed_track_id = dominant_target.track_id
 
             # Determine state label based on progression
             if liveness_res.state == "SPOOF_DETECTED":

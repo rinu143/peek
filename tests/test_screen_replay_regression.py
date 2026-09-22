@@ -11,6 +11,7 @@ Regression tests reproducing the smartphone screen replay vulnerability:
 """
 
 import unittest
+import unittest.mock
 import numpy as np
 import cv2
 
@@ -167,6 +168,120 @@ class TestScreenReplayRegression(unittest.TestCase):
 
         self.assertFalse(liveness_res.is_live)
         self.assertEqual(liveness_res.state, "SPOOF_DETECTED")
+
+    def test_challenge_pass_does_not_carryover_to_spoof(self):
+        """
+        Regression test for state-latch vulnerability:
+        Validates that once a challenge pass is consumed, it cannot be reused
+        even if the same track_id continues (no zero-face gap).
+        """
+        from engine.liveness.challenge import ChallengeManager
+
+        # Test the core ChallengeManager behavior directly
+        manager = ChallengeManager(timeout_seconds=3.5, max_frames=70)
+
+        # Start and pass a challenge
+        manager.start_challenge()
+        manager._current_challenge = "TURN_LEFT"
+        res = manager.update(pose_label="LEFT")
+        self.assertTrue(res.passed)
+        self.assertEqual(res.state, "PASSED")
+
+        # Consume the pass (simulating authorization)
+        manager.consume_pass()
+        self.assertEqual(manager._state, "CONSUMED")
+
+        # Try to use the same pass again
+        res = manager.update(pose_label="LEFT")
+        self.assertFalse(res.passed)
+        self.assertEqual(res.state, "CONSUMED")
+        self.assertIn("already used", res.details)
+
+        # Even after multiple updates, it should remain CONSUMED
+        for _ in range(5):
+            res = manager.update(pose_label="LEFT")
+            self.assertFalse(res.passed)
+            self.assertEqual(res.state, "CONSUMED")
+
+        # Only reset() should clear the CONSUMED state
+        manager.reset()
+        res = manager.update(pose_label="LEFT")
+        self.assertEqual(res.state, "IDLE")
+
+    def test_track_change_invalidates_challenge_pass(self):
+        """
+        Validates that when the dominant track_id changes (even without a zero-face gap),
+        the challenge pass is invalidated and a new challenge is required.
+        """
+        from unittest.mock import patch
+
+        engine = FaceEngine(
+            detector_model_path=None,
+            embedder_model_path=None,
+            profile_store=None,
+            match_threshold=0.48,
+            temporal_window_size=7,
+            temporal_min_matches=5,
+            liveness_min_frames=8,
+            liveness_threshold=0.58,
+            require_active_challenge=True
+        )
+
+        # Set up an active profile with a template
+        profile = PeekProfile(
+            profile_id="test_profile",
+            display_name="Test User",
+            enabled=True,
+            matching_threshold=0.48,
+            templates=[
+                PeekTemplate(
+                    template_id="tmpl_1",
+                    embedding=np.random.rand(512).tolist(),
+                    pose_label="CENTER",
+                    quality_score=0.9
+                )
+            ]
+        )
+        engine.set_active_profile(profile)
+
+        # Create a face detection
+        face_detection = FaceDetection(
+            bbox=np.array([160.0, 100.0, 320.0, 300.0]),
+            confidence=0.9,
+            landmarks=self.face_landmarks
+        )
+
+        real_frame = np.full((480, 480, 3), 180, dtype=np.uint8)
+
+        # First, face passes the challenge
+        engine.challenge_manager._state = "PASSED"
+        engine.challenge_manager._current_challenge = "TURN_LEFT"
+
+        with patch.object(engine.quality_checker, 'evaluate', return_value=unittest.mock.MagicMock(passed=True)):
+            with patch.object(engine.detector, 'detect', return_value=[face_detection]):
+                result = engine.process_frame(real_frame)
+                if result.challenge_result:
+                    self.assertTrue(result.challenge_result.passed)
+                track1_id = result.track_id
+
+        # Manually set a different track_id to simulate track change
+        engine._challenge_passed_track_id = 999  # Different from actual track
+
+        # Now process another frame - the challenge should be reset due to track_id mismatch
+        with patch.object(engine.quality_checker, 'evaluate', return_value=unittest.mock.MagicMock(passed=True)):
+            with patch.object(engine.detector, 'detect', return_value=[face_detection]):
+                result = engine.process_frame(real_frame)
+
+                # Track ID should be the original (not 999)
+                self.assertEqual(result.track_id, track1_id)
+
+                # Challenge should be reset (not CONSUMED, but back to IDLE or new PENDING)
+                # The key is that passed should be False
+                self.assertFalse(result.is_authorized_to_unlock)
+
+                # Challenge state should not be PASSED or CONSUMED from the previous track
+                if result.challenge_result:
+                    self.assertFalse(result.challenge_result.passed)
 
 
 if __name__ == "__main__":

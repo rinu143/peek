@@ -68,7 +68,7 @@ class FaceTracker:
     def __init__(
         self,
         min_hits_to_confirm: int = 3,
-        max_missing_frames: int = 5,
+        max_missing_frames: int = 2,
         iou_threshold: float = 0.30,
         hysteresis_area_margin: float = 1.25
     ):

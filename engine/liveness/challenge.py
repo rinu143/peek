@@ -13,7 +13,7 @@ from typing import Optional, List
 @dataclass
 class ChallengeResult:
     passed: bool
-    state: str                          # "IDLE", "PENDING", "PASSED", "FAILED", "TIMEOUT"
+    state: str                          # "IDLE", "PENDING", "PASSED", "CONSUMED", "FAILED", "TIMEOUT"
     challenge_type: Optional[str] = None # "TURN_LEFT", "TURN_RIGHT", "TILT_UP", "BLINK"
     prompt_text: str = ""
     time_remaining: float = 0.0
@@ -79,6 +79,14 @@ class ChallengeManager:
         self._frame_count = 0
         self._wrong_direction_count = 0
 
+    def consume_pass(self):
+        """
+        Transitions from PASSED to CONSUMED state after the pass has been used.
+        This ensures a single challenge pass cannot be reused across multiple frames.
+        """
+        if self._state == "PASSED":
+            self._state = "CONSUMED"
+
     def update(
         self,
         pose_label: Optional[str],
@@ -88,6 +96,15 @@ class ChallengeManager:
         """
         Evaluates the current frame against the active challenge prompt.
         """
+        if self._state == "CONSUMED":
+            return ChallengeResult(
+                passed=False,
+                state="CONSUMED",
+                challenge_type=self._current_challenge,
+                prompt_text="",
+                time_remaining=0.0,
+                details="Challenge pass already used - new challenge required"
+            )
         if self._state != "PENDING" or not self._current_challenge:
             return ChallengeResult(
                 passed=(self._state == "PASSED"),

@@ -117,6 +117,52 @@ class TestChallengeResponse(unittest.TestCase):
         res = self.manager.update(pose_label="LEFT")
         self.assertEqual(res.state, "IDLE")
 
+    def test_passed_state_is_single_use(self):
+        """
+        Validates that a PASSED state becomes CONSUMED after consume_pass() is called,
+        preventing reuse of the same challenge pass across multiple frames.
+        """
+        self.manager.start_challenge()
+        self.manager._current_challenge = "TURN_LEFT"
+
+        # Pass the challenge
+        res = self.manager.update(pose_label="LEFT")
+        self.assertTrue(res.passed)
+        self.assertEqual(res.state, "PASSED")
+
+        # Consume the pass (simulating authorization)
+        self.manager.consume_pass()
+
+        # Next update should return CONSUMED state with passed=False
+        res = self.manager.update(pose_label="LEFT")
+        self.assertFalse(res.passed)
+        self.assertEqual(res.state, "CONSUMED")
+        self.assertIn("already used", res.details)
+
+    def test_consumed_state_blocks_reuse(self):
+        """
+        Validates that once in CONSUMED state, the challenge cannot be reused
+        until reset() is called.
+        """
+        self.manager.start_challenge()
+        self.manager._current_challenge = "TURN_LEFT"
+
+        # Pass and consume
+        res = self.manager.update(pose_label="LEFT")
+        self.assertTrue(res.passed)
+        self.manager.consume_pass()
+
+        # Multiple subsequent updates should all return CONSUMED
+        for _ in range(5):
+            res = self.manager.update(pose_label="LEFT")
+            self.assertFalse(res.passed)
+            self.assertEqual(res.state, "CONSUMED")
+
+        # Reset should clear to IDLE
+        self.manager.reset()
+        res = self.manager.update(pose_label="LEFT")
+        self.assertEqual(res.state, "IDLE")
+
 
 if __name__ == "__main__":
     unittest.main()
