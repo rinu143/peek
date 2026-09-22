@@ -30,6 +30,7 @@ COLOR_ACCENT = (235, 160, 52)      # Peek Blue/Cyan (BGR: 52, 160, 235)
 COLOR_GREEN = (72, 200, 80)       # Success Green
 COLOR_RED = (60, 60, 220)         # Alert Red
 COLOR_YELLOW = (40, 210, 240)     # Warning Yellow
+COLOR_AMBER = (50, 180, 220)      # Challenge Amber/Orange (BGR: 220, 180, 50)
 COLOR_WHITE = (245, 245, 245)
 COLOR_GRAY = (150, 150, 150)
 COLOR_MUTED = (90, 85, 85)
@@ -59,7 +60,8 @@ def draw_hud_footer(
     status_text: str,
     temporal_res,
     liveness_res,
-    is_authorized: bool = False
+    is_authorized: bool = False,
+    status_color=None
 ):
     """Draws status bar, temporal confirmation meter, liveness meter, and controls footer."""
     h, w = frame.shape[:2]
@@ -78,6 +80,11 @@ def draw_hud_footer(
         sec_notice = "Dual Gates: Biometric Temporal Match + Passive Liveness | DPAPI Protected"
         sec_color = COLOR_GRAY
     cv2.putText(frame, sec_notice, (20, h - 58), cv2.FONT_HERSHEY_SIMPLEX, 0.36, sec_color, 1, cv2.LINE_AA)
+
+    # Prominent status text when provided (e.g., challenge prompts)
+    if status_text:
+        text_color = status_color if status_color else COLOR_ACCENT
+        cv2.putText(frame, status_text, (20, h - 38), cv2.FONT_HERSHEY_SIMPLEX, 0.52, text_color, 1, cv2.LINE_AA)
 
     # Telemetry bars: Temporal Verification & Liveness Meters
     right_anchor = w - 20
@@ -135,7 +142,8 @@ def draw_face_overlay(
     is_temporally_confirmed: bool = False,
     liveness_res=None,
     is_authorized: bool = False,
-    pose_label: Optional[str] = None
+    pose_label: Optional[str] = None,
+    challenge_result=None
 ):
     """Draws bounding bracket, track ID tag, and landmarks."""
     bbox = detection.bbox.astype(int)
@@ -156,6 +164,10 @@ def draw_face_overlay(
     if is_authorized:
         color = COLOR_GREEN
         label = f"✓ {id_tag}AUTHORIZED TO UNLOCK{pose_tag}"
+    elif challenge_result and challenge_result.state == "PENDING":
+        color = COLOR_AMBER
+        prompt = challenge_result.prompt_text if challenge_result.prompt_text else "CHALLENGE"
+        label = f"⚡ {id_tag}CHALLENGE: {prompt}{pose_tag}"
     elif liveness_res and liveness_res.state == "SPOOF_DETECTED":
         color = COLOR_RED
         label = f"⚠ {id_tag}SPOOF DETECTED ({liveness_res.spoof_reason}){pose_tag}"
@@ -269,7 +281,8 @@ def run_prototype():
                     is_temporally_confirmed=result.is_temporally_confirmed,
                     liveness_res=result.liveness_result,
                     is_authorized=result.is_authorized_to_unlock,
-                    pose_label=result.estimated_pose
+                    pose_label=result.estimated_pose,
+                    challenge_result=result.challenge_result
                 )
 
             # Measure FPS
@@ -294,13 +307,19 @@ def run_prototype():
             if time.time() - status_notification_time < 3.0:
                 status_text = status_notification
 
+            # Determine status color for footer (amber for challenge)
+            status_color = None
+            if result.state_label == "CHALLENGE":
+                status_color = COLOR_AMBER
+
             draw_hud_footer(
                 frame,
                 prof_name,
                 status_text,
                 result.temporal_result,
                 result.liveness_result,
-                result.is_authorized_to_unlock
+                result.is_authorized_to_unlock,
+                status_color
             )
 
             # Central status banner when searching or unlocked
@@ -309,6 +328,20 @@ def run_prototype():
                 h, w = frame.shape[:2]
                 cv2.rectangle(frame, (0, 0), (w - 1, h - 1), COLOR_GREEN, 4)
                 cv2.putText(frame, "✓ UNLOCKED — LOOK, AND YOU'RE IN.", (35, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.72, COLOR_GREEN, 2, cv2.LINE_AA)
+            elif result.state_label == "CHALLENGE":
+                # Active challenge prompt with pulsing border
+                h, w = frame.shape[:2]
+                pulse = int(4 + 2 * np.sin(time.time() * 8))  # Pulsing thickness
+                cv2.rectangle(frame, (0, 0), (w - 1, h - 1), COLOR_AMBER, pulse)
+
+                # Challenge prompt text
+                prompt_text = result.details if result.details else "Action Required"
+                cv2.putText(frame, prompt_text, (20, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.68, COLOR_AMBER, 2, cv2.LINE_AA)
+
+                # Countdown timer if available
+                if result.challenge_result and result.challenge_result.time_remaining > 0:
+                    time_left = result.challenge_result.time_remaining
+                    cv2.putText(frame, f"Time: {time_left:.1f}s", (20, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.58, COLOR_AMBER, 2, cv2.LINE_AA)
             elif not result.has_face:
                 cv2.putText(frame, "Looking for you...", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_YELLOW, 2, cv2.LINE_AA)
             elif not engine.active_profile:
