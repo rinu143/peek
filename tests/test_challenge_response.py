@@ -163,6 +163,59 @@ class TestChallengeResponse(unittest.TestCase):
         res = self.manager.update(pose_label="LEFT")
         self.assertEqual(res.state, "IDLE")
 
+    def test_blink_bias_preference(self):
+        """
+        Validates that when bias_blink=True, BLINK is chosen significantly more often
+        than when bias_blink=False, while still respecting the non-repeat-previous-challenge guarantee.
+        """
+        # Test with bias_blink=True
+        blink_count_biased = 0
+        total_trials = 100
+
+        for _ in range(total_trials):
+            res = self.manager.start_challenge(bias_blink=True)
+            if res.challenge_type == "BLINK":
+                blink_count_biased += 1
+
+        blink_ratio_biased = blink_count_biased / total_trials
+
+        # Test with bias_blink=False (reset manager first)
+        self.manager.reset()
+        blink_count_unbiased = 0
+
+        for _ in range(total_trials):
+            res = self.manager.start_challenge(bias_blink=False)
+            if res.challenge_type == "BLINK":
+                blink_count_unbiased += 1
+
+        blink_ratio_unbiased = blink_count_unbiased / total_trials
+
+        # Biased mode should have significantly higher blink ratio
+        self.assertGreater(blink_ratio_biased, blink_ratio_unbiased * 1.5,
+                         f"Biased blink ratio {blink_ratio_biased:.2f} should be > 1.5x unbiased {blink_ratio_unbiased:.2f}")
+
+        # Biased mode should still have reasonable blink rate (>40% accounting for non-repeat)
+        self.assertGreater(blink_ratio_biased, 0.4, f"BLINK ratio {blink_ratio_biased:.2f} should be > 0.4")
+
+    def test_no_blink_bias_when_false(self):
+        """
+        Validates that when bias_blink=False, challenges are distributed
+        approximately evenly among available options.
+        """
+        from collections import Counter
+        challenge_counts = Counter()
+        total_trials = 100
+
+        for _ in range(total_trials):
+            res = self.manager.start_challenge(bias_blink=False)
+            challenge_counts[res.challenge_type] += 1
+
+        # Each challenge should appear roughly equally (15-35% each for 4 options)
+        for challenge_type, count in challenge_counts.items():
+            ratio = count / total_trials
+            self.assertGreater(ratio, 0.15, f"{challenge_type} ratio {ratio:.2f} should be > 0.15")
+            self.assertLess(ratio, 0.35, f"{challenge_type} ratio {ratio:.2f} should be < 0.35")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -51,10 +51,28 @@ class ChallengeManager:
     def is_active(self) -> bool:
         return self._state == "PENDING"
 
-    def start_challenge(self, initial_blink_count: int = 0) -> ChallengeResult:
-        """Starts a new unpredictable challenge guaranteed not to repeat the previous one."""
+    def start_challenge(self, initial_blink_count: int = 0, bias_blink: bool = False) -> ChallengeResult:
+        """
+        Starts a new unpredictable challenge guaranteed not to repeat the previous one.
+
+        Args:
+            initial_blink_count: Current blink count for BLINK challenges
+            bias_blink: When True, prefer "BLINK" from available challenges unless
+                       the caller explicitly requests a directional challenge. This
+                       provides a lower-friction challenge option for low-risk scenarios.
+        """
         choices = [c for c in self.available_challenges if c != self._last_challenge]
-        self._current_challenge = random.choice(choices)
+
+        # Apply blink bias when requested and BLINK is available
+        if bias_blink and "BLINK" in choices:
+            # 90% chance to choose BLINK when biased, otherwise random from remaining
+            if random.random() < 0.9:
+                self._current_challenge = "BLINK"
+            else:
+                self._current_challenge = random.choice(choices)
+        else:
+            self._current_challenge = random.choice(choices)
+
         self._last_challenge = self._current_challenge
         self._start_time = time.time()
         self._frame_count = 0

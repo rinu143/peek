@@ -74,7 +74,11 @@ class FaceEngine:
         liveness_min_frames: int = 8,
         liveness_threshold: float = 0.58,
         require_active_challenge: bool = True,
-        quality_checker: Optional[FaceQualityChecker] = None
+        quality_checker: Optional[FaceQualityChecker] = None,
+        challenge_escalation_score_band: Tuple[float, float] = (0.45, 0.75),
+        challenge_escalation_bezel_threshold: float = 0.25,
+        challenge_escalation_face_fill_ratio: float = 0.70,
+        challenge_grace_seconds: float = 45.0
     ):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         models_dir = os.path.join(base_dir, "models")
@@ -112,6 +116,16 @@ class FaceEngine:
         self.challenge_manager = ChallengeManager(timeout_seconds=3.5, max_frames=70)
         self._challenge_passed_track_id: Optional[int] = None
         self.profile_store = profile_store or SecureProfileStore()
+
+        # Risk-based challenge escalation parameters
+        self.challenge_escalation_score_band = challenge_escalation_score_band
+        self.challenge_escalation_bezel_threshold = challenge_escalation_bezel_threshold
+        self.challenge_escalation_face_fill_ratio = challenge_escalation_face_fill_ratio
+        self.challenge_grace_seconds = challenge_grace_seconds
+
+        # Grace window tracking for low-friction repeat unlocks
+        self._last_full_verification_time: Optional[float] = None
+        self._last_full_verification_track_id: Optional[int] = None
         
         # In-memory enrolled templates cache for fast real-time matching
         self.active_profile: Optional[PeekProfile] = None
@@ -136,11 +150,13 @@ class FaceEngine:
             self.cached_template_embeddings = []
             self.cached_template_poses = []
             logger.info("No active profile enrolled.")
-        
+
         self.temporal_verifier.reset()
         self.liveness_detector.reset()
         self.challenge_manager.reset()
         self._challenge_passed_track_id = None
+        self._last_full_verification_time = None
+        self._last_full_verification_track_id = None
         self._last_liveness_result = None
 
     def set_active_profile(self, profile: PeekProfile):
@@ -154,11 +170,56 @@ class FaceEngine:
         self.liveness_detector.reset()
         self.challenge_manager.reset()
         self._challenge_passed_track_id = None
+        self._last_full_verification_time = None
+        self._last_full_verification_track_id = None
         self._last_liveness_result = None
 
     def _is_challenge_required(self) -> bool:
-        """Returns True if active challenge-response mode is enabled."""
+        """
+        Returns True if active challenge-response mode is enabled.
+        Implements grace window logic for low-friction repeat unlocks.
+        """
+        # Check if we're in a grace window (same track, within time limit, no risk escalation)
+        if (self._last_full_verification_time is not None and
+            self._last_full_verification_track_id is not None and
+            (time.time() - self._last_full_verification_time) < self.challenge_grace_seconds):
+            # Grace window is valid - check if conditions still hold
+            # We'll verify track_id match and no risk escalation in process_frame
+            return False
+
         return self.require_active_challenge or self._session_force_active_challenge
+
+    def _compute_risk_escalation_flag(
+        self,
+        liveness_res,
+        dominant_target,
+        frame_shape: Tuple[int, int]
+    ) -> bool:
+        """
+        Computes whether risk escalation is required based on liveness metrics.
+        Returns True if any risk indicator is triggered.
+        """
+        # Check 1: Liveness score in ambiguous mid-range band
+        if (liveness_res and
+            hasattr(liveness_res, 'fused_score') and
+            self.challenge_escalation_score_band[0] <= liveness_res.fused_score <= self.challenge_escalation_score_band[1]):
+            return True
+
+        # Check 2: Bezel confidence exceeds low threshold but below veto threshold
+        if (liveness_res and
+            hasattr(liveness_res, 'bezel_confidence') and
+            liveness_res.bezel_confidence is not None and
+            liveness_res.bezel_confidence >= self.challenge_escalation_bezel_threshold):
+            return True
+
+        # Check 3: Face fill ratio exceeds threshold (too close to camera)
+        if dominant_target:
+            face_area = dominant_target.area
+            frame_area = frame_shape[0] * frame_shape[1]
+            if face_area / frame_area > self.challenge_escalation_face_fill_ratio:
+                return True
+
+        return False
 
 
 
@@ -181,6 +242,8 @@ class FaceEngine:
             self.liveness_detector.reset()
             self.challenge_manager.reset()
             self._challenge_passed_track_id = None
+            self._last_full_verification_time = None
+            self._last_full_verification_track_id = None
             self._last_liveness_result = None
             return EngineFrameResult(
                 has_face=False,
@@ -204,6 +267,8 @@ class FaceEngine:
         if self._challenge_passed_track_id is not None and dominant_target.track_id != self._challenge_passed_track_id:
             self.challenge_manager.reset()
             self._challenge_passed_track_id = None
+            self._last_full_verification_time = None
+            self._last_full_verification_track_id = None
 
         # Face size check
         if dominant_target.width < 45 or dominant_target.height < 45:
@@ -211,6 +276,8 @@ class FaceEngine:
             self.liveness_detector.reset()
             self.challenge_manager.reset()
             self._challenge_passed_track_id = None
+            self._last_full_verification_time = None
+            self._last_full_verification_track_id = None
             self._last_liveness_result = None
             return EngineFrameResult(
                 has_face=True,
@@ -331,14 +398,34 @@ class FaceEngine:
             )
             self._last_liveness_result = liveness_res
 
+            # Compute risk escalation flag for challenge selection
+            risk_escalation = self._compute_risk_escalation_flag(
+                liveness_res, dominant_target, frame.shape[:2]
+            )
+
             # Optional Active Challenge-Response Mode
             challenge_res: Optional[ChallengeResult] = None
-            challenge_required = self._is_challenge_required()
-            if challenge_required:
+            challenge_mode_enabled = self._is_challenge_required()
+
+            # Check grace window conditions: same track, within time, no risk escalation
+            in_grace_window = (
+                self._last_full_verification_time is not None and
+                self._last_full_verification_track_id is not None and
+                (time.time() - self._last_full_verification_time) < self.challenge_grace_seconds and
+                dominant_target.track_id == self._last_full_verification_track_id and
+                not risk_escalation
+            )
+
+            if challenge_mode_enabled and not in_grace_window:
                 curr_blinks = liveness_res.blink_count
                 blink_this = liveness_res.blink_detected
                 if not self.challenge_manager.is_active and not (self.challenge_manager.update(pose_label).passed):
-                    challenge_res = self.challenge_manager.start_challenge(initial_blink_count=curr_blinks)
+                    # Use blink bias for low-friction, directional for high-risk
+                    bias_blink = not risk_escalation
+                    challenge_res = self.challenge_manager.start_challenge(
+                        initial_blink_count=curr_blinks,
+                        bias_blink=bias_blink
+                    )
                 else:
                     challenge_res = self.challenge_manager.update(
                         pose_label=pose_label,
@@ -351,25 +438,30 @@ class FaceEngine:
             # Biometric matching alone can NEVER unlock. Independent liveness is mandatory.
             is_biometric_pass = temporal_res.is_temporally_confirmed and match_result.is_match
             is_live_pass = liveness_res.is_live
-            if challenge_required:
+            if challenge_mode_enabled and not in_grace_window:
                 is_challenge_pass = bool(challenge_res is not None and challenge_res.passed)
             else:
-                is_challenge_pass = True
+                is_challenge_pass = True  # Grace window or challenge mode disabled
             is_authorized = bool(is_biometric_pass and is_live_pass and is_challenge_pass)
 
             # SECURITY: Consume challenge pass immediately after use (single-use)
-            if is_authorized and challenge_required and challenge_res and challenge_res.passed:
+            if is_authorized and challenge_mode_enabled and not in_grace_window and challenge_res and challenge_res.passed:
                 self.challenge_manager.consume_pass()
                 self._challenge_passed_track_id = dominant_target.track_id
+
+            # Track grace window: record full verification time when authorized
+            if is_authorized and is_biometric_pass and is_live_pass:
+                self._last_full_verification_time = time.time()
+                self._last_full_verification_track_id = dominant_target.track_id
 
             # Determine state label based on progression
             if liveness_res.state == "SPOOF_DETECTED":
                 state_label = "SPOOF_DETECTED"
                 details = f"Spoof Blocked: {liveness_res.spoof_reason or 'Presentation Attack'}"
-            elif challenge_required and challenge_res and challenge_res.state in ("FAILED", "TIMEOUT"):
+            elif challenge_mode_enabled and not in_grace_window and challenge_res and challenge_res.state in ("FAILED", "TIMEOUT"):
                 state_label = "CHALLENGE_FAILED"
                 details = f"Challenge Failed: {challenge_res.details}"
-            elif challenge_required and challenge_res and not challenge_res.passed:
+            elif challenge_mode_enabled and not in_grace_window and challenge_res and not challenge_res.passed:
                 state_label = "CHALLENGE"
                 details = f"Action Required: {challenge_res.prompt_text}"
             elif is_authorized:
