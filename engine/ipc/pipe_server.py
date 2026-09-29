@@ -364,8 +364,12 @@ class PipeServer:
                 session.write_message(make_pong())
 
             elif msg_type == MSG_START_AUTH:
+                logger.info("START_AUTH message received from client")
                 timeout_sec = float(msg.get("timeout_seconds", self.default_auth_timeout))
+                logger.info(f"Starting authentication session with timeout: {timeout_sec}s")
+                logger.info("About to call _run_auth_session")
                 self._run_auth_session(session, timeout_seconds=timeout_sec)
+                logger.info("_run_auth_session completed")
 
             elif msg_type == MSG_CANCEL_AUTH:
                 logger.debug("CANCEL_AUTH received while idle; acknowledged.")
@@ -420,6 +424,7 @@ class PipeServer:
         6. Honors CANCEL_AUTH with bounded latency (<50ms)
         7. Releases camera upon completion
         """
+        logger.info("_run_auth_session started")
         session.write_message(make_camera_starting("Acquiring camera..."))
 
         cam_ok, camera, err_detail = self._acquire_camera()
@@ -497,6 +502,7 @@ class PipeServer:
                             detail=result.details or "Biometric & liveness verification confirmed"
                         )
                     )
+                    logger.info("AUTHENTICATED message sent to client")
                     return
 
                 # 6. Spoof Rejection Check
@@ -540,6 +546,19 @@ class PipeServer:
                             )
                         )
                         face_previously_found = True
+
+                # 9. Emit AUTHENTICATED when authorized
+                if result.is_authorized_to_unlock:
+                    logger.info(f"Emitted AUTHENTICATED for user: {result.display_name}")
+                    session.write_message(
+                        make_authenticated(
+                            display_name=result.display_name,
+                            is_authorized_to_unlock=True,
+                            detail="Authentication successful"
+                        )
+                    )
+                    # Log that we are sending the final authentication message
+                    logger.info("Final AUTHENTICATED message sent to client")
 
                     if result.state_label == "CHALLENGE" and result.challenge_result:
                         session.write_message(

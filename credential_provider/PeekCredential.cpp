@@ -122,6 +122,8 @@ HRESULT PeekCredential::UnAdvise()
 
 HRESULT PeekCredential::SetSelected(BOOL* pbAutoLogon)
 {
+    Logger::LogInfo("PeekCredential::SetSelected called");
+    
     if (pbAutoLogon)
     {
         *pbAutoLogon = FALSE;
@@ -140,9 +142,12 @@ HRESULT PeekCredential::SetSelected(BOOL* pbAutoLogon)
     }
 
     // Launch background asynchronous pipe authentication
+    Logger::LogInfo("Starting background authentication with StartAuthAsync");
+    Logger::LogInfo("About to call m_pipeClient.StartAuthAsync");
     m_pipeClient.StartAuthAsync([this](const PeekAuthResult& result) {
         this->OnEngineStateUpdate(result);
     }, 12.0f);
+    Logger::LogInfo("m_pipeClient.StartAuthAsync completed");
 
     return S_OK;
 }
@@ -393,6 +398,9 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
             LeaveCriticalSection(&m_cs);
 
             UpdateStatusText(L"Verified! Signing in...");
+            
+            // Log that we're about to signal Windows logon process
+            Logger::LogInfo("AUTHENTICATED received - About to call CredentialsChanged");
 
             // Signal LogonUI that credentials are confirmed and ready
             EnterCriticalSection(&m_cs);
@@ -402,10 +410,12 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
 
             if (pcpce)
             {
-                // OnCredentialsChanged is not available in standard Windows SDK
-                // This method was likely introduced in newer versions or specific implementations
-                // We'll skip calling it for compatibility with standard Windows SDKs
+                // Complete the authentication process by signaling that this credential is ready
+                // This should trigger Windows to proceed with the unlock
+                Logger::LogInfo("Calling CredentialsChanged to signal Windows logon");
+                pcpce->CredentialsChanged(this);
                 pcpce->Release();
+                Logger::LogInfo("CredentialsChanged completed successfully");
             }
         }
         break;

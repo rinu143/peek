@@ -95,8 +95,11 @@ bool PeekPipeClient::IsRunning() const
 
 bool PeekPipeClient::StartAuthAsync(PeekStateCallback callback, float timeoutSeconds)
 {
+    Logger::LogInfo("PeekPipeClient::StartAuthAsync called");
+    
     if (m_isRunning.load())
     {
+        Logger::LogError("StartAuthAsync called while already running");
         return false;
     }
 
@@ -105,6 +108,8 @@ bool PeekPipeClient::StartAuthAsync(PeekStateCallback callback, float timeoutSec
     ResetEvent(m_hCancelEvent);
     m_isRunning = true;
 
+    Logger::LogInfo("Creating worker thread for authentication");
+    
     m_hThread = CreateThread(
         nullptr,
         0,
@@ -116,10 +121,12 @@ bool PeekPipeClient::StartAuthAsync(PeekStateCallback callback, float timeoutSec
 
     if (!m_hThread)
     {
+        Logger::LogError("Failed to create worker thread for authentication");
         m_isRunning = false;
         return false;
     }
 
+    Logger::LogInfo("Authentication thread created successfully");
     return true;
 }
 
@@ -275,42 +282,52 @@ void PeekPipeClient::ParseAndDispatchMessage(const std::string& line, PeekAuthRe
 
     if (typeStr == L"ENGINE_READY")
     {
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received ENGINE_READY message");
         result.state = PeekIPCState::ENGINE_READY;
     }
     else if (typeStr == L"CAMERA_STARTING")
     {
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received CAMERA_STARTING message");
         result.state = PeekIPCState::CAMERA_STARTING;
     }
     else if (typeStr == L"SEARCHING")
     {
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received SEARCHING message");
         result.state = PeekIPCState::SEARCHING;
     }
     else if (typeStr == L"FACE_FOUND")
     {
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received FACE_FOUND message");
         result.state = PeekIPCState::FACE_FOUND;
     }
     else if (typeStr == L"VERIFYING")
     {
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received VERIFYING message");
         result.state = PeekIPCState::VERIFYING;
     }
     else if (typeStr == L"LIVENESS_CHECK")
     {
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received LIVENESS_CHECK message");
         result.state = PeekIPCState::LIVENESS_CHECK;
     }
     else if (typeStr == L"AUTHENTICATED")
     {
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received AUTHENTICATED message");
         result.state = PeekIPCState::AUTHENTICATED;
     }
     else if (typeStr == L"AUTH_FAILED")
     {
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received AUTH_FAILED message");
         result.state = PeekIPCState::AUTH_FAILED;
     }
     else if (typeStr == L"TIMEOUT")
     {
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received TIMEOUT message");
         result.state = PeekIPCState::TIMEOUT;
     }
     else if (typeStr == L"ERROR")
     {
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received ERROR message");
         result.state = PeekIPCState::ERROR_STATE;
     }
 
@@ -322,6 +339,8 @@ void PeekPipeClient::ParseAndDispatchMessage(const std::string& line, PeekAuthRe
 
 void PeekPipeClient::RunWorker()
 {
+    Logger::LogInfo("PeekPipeClient::RunWorker started");
+    
     PeekAuthResult result;
 
     // 1. Initial State: Connecting
@@ -338,8 +357,11 @@ void PeekPipeClient::RunWorker()
         result.reasonCode = L"SERVICE_UNAVAILABLE";
         if (m_callback) m_callback(result);
         m_isRunning = false;
+        Logger::LogError("Failed to connect to Peek engine pipe");
         return;
     }
+
+    Logger::LogInfo("Successfully connected to Peek engine pipe");
 
     // 3. Send START_AUTH
     std::ostringstream ss;
@@ -351,8 +373,11 @@ void PeekPipeClient::RunWorker()
         result.detail = L"Failed to send authentication request.";
         if (m_callback) m_callback(result);
         m_isRunning = false;
+        Logger::LogError("Failed to send START_AUTH message");
         return;
     }
+
+    Logger::LogInfo("START_AUTH message sent successfully");
 
     // 4. Stream responses until completion or cancel
     std::string line;
@@ -360,6 +385,7 @@ void PeekPipeClient::RunWorker()
     {
         if (!ReadNextMessage(line))
         {
+            Logger::LogInfo("Failed to read next message from pipe");
             break;
         }
 
@@ -371,6 +397,7 @@ void PeekPipeClient::RunWorker()
             result.state == PeekIPCState::TIMEOUT ||
             result.state == PeekIPCState::ERROR_STATE)
         {
+            Logger::LogInfo("Terminal authentication state reached, exiting loop");
             break;
         }
     }
@@ -382,4 +409,5 @@ void PeekPipeClient::RunWorker()
     }
 
     m_isRunning = false;
+    Logger::LogInfo("PeekPipeClient::RunWorker completed");
 }
