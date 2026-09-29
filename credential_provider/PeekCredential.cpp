@@ -2,6 +2,7 @@
 #include "PeekCredential.h"
 #include "Serialization.h"
 #include "resource.h"
+#include "SecretVault.h"
 
 PeekCredential::PeekCredential()
     : m_cRef(1)
@@ -290,11 +291,55 @@ HRESULT PeekCredential::GetSerialization(
         return S_OK;
     }
 
-    // Package standard Kerberos/Negotiate interactive logon
+    // For unlock scenarios, try to retrieve password from secret vault
+    if (m_cpus == CPUS_UNLOCK_WORKSTATION)
+    {
+        Logger::LogInfo(L"GetSerialization for unlock scenario - attempting to retrieve password from secret vault");
+
+        // Try to decrypt a wrapped secret file that should contain the password
+        BYTE buffer[1024];
+        DWORD cbActual = 0;
+        
+        if (PeekSecretVault::DecryptWrappedSecret(user.c_str(), buffer, sizeof(buffer), &cbActual))
+        {
+            Logger::LogInfo(L"Successfully decrypted secret from vault");
+            
+            // Convert bytes to wide string (assuming null-terminated)
+            if (cbActual > 0 && cbActual < sizeof(buffer))
+            {
+                buffer[cbActual] = 0; // Ensure null termination
+                
+                // Try to validate the password using LogonUser
+                if (PeekSecretVault::ValidateWindowsPassword(user.c_str(), domain.c_str(), 
+                    reinterpret_cast<LPCWSTR>(buffer)))
+                {
+                    Logger::LogInfo(L"Password validation successful - proceeding with serialization");
+                    
+                    // Package standard Kerberos/Negotiate interactive logon with the retrieved password
+                    HRESULT hr = PeekSerialization::PackageKerbLogon(
+                        domain.c_str(),
+                        user.c_str(),
+                        reinterpret_cast<LPCWSTR>(buffer),
+                        pcpcs
+                    );
+
+                    if (SUCCEEDED(hr))
+                    {
+                        *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED;
+                        return S_OK;
+                    }
+                }
+            }
+        }
+        
+        Logger::LogInfo(L"Failed to get valid password from secret vault - falling back to standard authentication");
+    }
+
+    // For non-unlock scenarios or if secret retrieval failed, use standard Kerberos/Negotiate interactive logon
     HRESULT hr = PeekSerialization::PackageKerbLogon(
         domain.c_str(),
         user.c_str(),
-        L"", // Password handled by DPAPI / unlock context
+        L"", // Password handled by DPAPI / unlock context for unlock scenarios
         pcpcs
     );
 
