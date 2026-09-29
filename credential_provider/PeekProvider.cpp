@@ -107,10 +107,14 @@ HRESULT PeekProvider::SetUsageScenario(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, 
 
     switch (cpus)
     {
-    case CPUS_LOGON:
     case CPUS_UNLOCK_WORKSTATION:
-    case CPUS_CREDUI:
         return S_OK;
+
+    case CPUS_LOGON:
+    case CPUS_CREDUI:
+        // Before first interactive sign-in the user's profile/DPAPI master key
+        // is not reliably available. Do not advertise a credential tile here.
+        return E_NOTIMPL;
 
     case CPUS_CHANGE_PASSWORD:
     default:

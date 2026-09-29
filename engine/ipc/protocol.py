@@ -254,6 +254,7 @@ def make_liveness_check(
 
 def make_authenticated(
     display_name: str,
+    profile_id: str = "",
     is_authorized_to_unlock: bool = True,
     detail: str = "Authentication successful"
 ) -> Dict[str, Any]:
@@ -272,6 +273,7 @@ def make_authenticated(
         "type": MSG_AUTHENTICATED,
         "is_authorized_to_unlock": True,
         "display_name": display_name,
+        "profile_id": profile_id,
         "detail": detail,
         "timestamp": time.time(),
     }

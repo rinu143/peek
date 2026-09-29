@@ -13,7 +13,9 @@ int main()
     DWORD cbActual = 0;
     
     // Try to read a non-existent secret (should fail gracefully)
-    bool result = PeekSecretVault::ReadWrappedSecret(L"nonexistent_user", buffer, sizeof(buffer), &cbActual);
+    // An invalid session must fail cleanly; this exercises the safe failure path
+    // when WTSQueryUserToken/impersonation is unavailable.
+    bool result = PeekSecretVault::ReadWrappedSecret(L"nonexistent_user", 0xFFFFFFFF, buffer, sizeof(buffer), &cbActual);
     std::wcout << L"ReadWrappedSecret for nonexistent user: " << (result ? L"SUCCESS" : L"FAILED") << L"\n";
     
     // Test 2: Check ValidateWindowsPassword function

@@ -12,6 +12,10 @@ import time
 import math
 import numpy as np
 import logging
+import ctypes
+import getpass
+import struct
+from ctypes import wintypes
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
@@ -27,6 +31,67 @@ from storage.template_store import SecureProfileStore
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("Peek.EnrollmentApp")
+
+
+def _current_windows_username() -> str:
+    """Return the interactive account name without relying on environment variables."""
+    size = wintypes.DWORD(256)
+    buffer = ctypes.create_unicode_buffer(size.value)
+    if not ctypes.windll.advapi32.GetUserNameW(buffer, ctypes.byref(size)):
+        raise ctypes.WinError()
+    return buffer.value
+
+
+def _verify_windows_password(username: str, password: str) -> bool:
+    token = wintypes.HANDLE()
+    ok = ctypes.windll.advapi32.LogonUserW(
+        username, None, password, 2, 0, ctypes.byref(token))  # interactive/default provider
+    if ok and token:
+        ctypes.windll.kernel32.CloseHandle(token)
+    return bool(ok)
+
+
+def link_windows_password(profile_id: str, password: str, store: SecureProfileStore | None = None) -> bool:
+    """Verify and DPAPI-wrap a password for this profile; never log password material."""
+    if os.name != "nt" or not profile_id or not password:
+        return False
+    username = _current_windows_username()
+    if not _verify_windows_password(username, password):
+        return False
+    plaintext = bytearray(struct.pack("<I", len(password.encode("utf-16-le"))))
+    plaintext.extend(password.encode("utf-16-le"))
+    try:
+        encrypted = __import__("storage.template_store", fromlist=["dpapi_encrypt"]).dpapi_encrypt(
+            bytes(plaintext), description="PeekCredentialSecret")
+        profiles_dir = (store or SecureProfileStore()).storage_dir
+        with open(os.path.join(profiles_dir, f"{profile_id}.secret"), "wb") as secret_file:
+            secret_file.write(encrypted)
+        return True
+    finally:
+        for i in range(len(plaintext)):
+            plaintext[i] = 0
+
+
+def prompt_optional_password_link(profile_id: str, store: SecureProfileStore) -> None:
+    """Offer linking only after enrollment; skipping leaves enrollment unchanged."""
+    print("Optional: link your current Windows password to enable Peek unlock at the lock screen.")
+    print("The password is verified now and stored only DPAPI-wrapped for this Windows account.")
+    while True:
+        choice = input("Link password now? [y/N]: ").strip().lower()
+        if choice not in ("y", "yes"):
+            print("Password linking skipped. You can still use password or PIN to unlock.")
+            return
+        password = getpass.getpass("Confirm current Windows password: ")
+        try:
+            if link_windows_password(profile_id, password, store):
+                print("Peek unlock password linked successfully.")
+                return
+            print("That Windows password was not accepted; nothing was saved.")
+        finally:
+            # CPython strings cannot be reliably wiped; drop this reference immediately.
+            password = None
+        if input("Retry? [y/N]: ").strip().lower() not in ("y", "yes"):
+            return
 
 # Color palette (BGR format for OpenCV)
 COLOR_BG_DARK = (20, 18, 18)
@@ -266,6 +331,10 @@ def run_enrollment_app(profile_name: str = "Primary User"):
                     # Save profile to DPAPI store
                     saved_profile = session.finalize_and_save_profile(display_name=profile_name)
                     logger.info("Enrollment finished and profile '%s' secured via DPAPI.", profile_name)
+                    try:
+                        prompt_optional_password_link(saved_profile.profile_id, store)
+                    except (EOFError, OSError, RuntimeError) as ex:
+                        logger.warning("Optional password linking was skipped: %s", ex)
 
                 # Completion overlay card
                 overlay = canvas.copy()

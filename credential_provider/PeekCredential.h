@@ -74,6 +74,7 @@ private:
     std::wstring m_domain;
     std::wstring m_sid;
     std::wstring m_displayName;
+    std::wstring m_profileId;
     std::wstring m_statusText;
     bool m_isAuthenticated;
     bool m_isSelected;

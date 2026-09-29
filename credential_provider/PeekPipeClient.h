@@ -29,6 +29,7 @@ struct PeekAuthResult
     PeekIPCState state;
     bool isAuthorizedToUnlock;
     std::wstring displayName;
+    std::wstring profileId;
     std::wstring detail;
     std::wstring reasonCode;
     std::wstring promptText;

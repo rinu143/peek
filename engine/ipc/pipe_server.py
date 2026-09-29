@@ -498,6 +498,7 @@ class PipeServer:
                     session.write_message(
                         make_authenticated(
                             display_name=display_name,
+                            profile_id=engine.active_profile.profile_id if engine.active_profile else "",
                             is_authorized_to_unlock=True,
                             detail=result.details or "Biometric & liveness verification confirmed"
                         )
@@ -546,53 +547,6 @@ class PipeServer:
                             )
                         )
                         face_previously_found = True
-
-                # 9. Emit AUTHENTICATED when authorized
-                if result.is_authorized_to_unlock:
-                    logger.info(f"Emitted AUTHENTICATED for user: {result.display_name}")
-                    session.write_message(
-                        make_authenticated(
-                            display_name=result.display_name,
-                            is_authorized_to_unlock=True,
-                            detail="Authentication successful"
-                        )
-                    )
-                    # Log that we are sending the final authentication message
-                    logger.info("Final AUTHENTICATED message sent to client")
-
-                    if result.state_label == "CHALLENGE" and result.challenge_result:
-                        session.write_message(
-                            make_liveness_check(
-                                track_id=result.track_id,
-                                prompt_text=result.challenge_result.prompt_text,
-                                detail=f"Challenge active: {result.challenge_result.prompt_text}"
-                            )
-                        )
-                        last_state_label = "CHALLENGE"
-
-                    elif result.state_label == "LIVENESS_CHECK":
-                        if last_state_label != "LIVENESS_CHECK":
-                            session.write_message(
-                                make_liveness_check(
-                                    track_id=result.track_id,
-                                    prompt_text=None,
-                                    detail=result.details or "Evaluating liveness..."
-                                )
-                            )
-                            last_state_label = "LIVENESS_CHECK"
-
-                    elif result.state_label in ("VERIFYING", "MATCH"):
-                        prog = None
-                        if result.temporal_result:
-                            prog = f"{result.temporal_result.positive_matches_in_window}/{result.temporal_result.required_matches}"
-                        session.write_message(
-                            make_verifying(
-                                track_id=result.track_id,
-                                progress=prog,
-                                detail=result.details or "Verifying biometric match..."
-                            )
-                        )
-                        last_state_label = "VERIFYING"
 
                 # Brief loop throttle to emulate ~30 FPS camera cycle
                 time.sleep(0.015)

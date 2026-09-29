@@ -276,6 +276,7 @@ void PeekPipeClient::ParseAndDispatchMessage(const std::string& line, PeekAuthRe
 
     ExtractJsonString(line, "detail", result.detail);
     ExtractJsonString(line, "display_name", result.displayName);
+    ExtractJsonString(line, "profile_id", result.profileId);
     ExtractJsonString(line, "reason_code", result.reasonCode);
     ExtractJsonString(line, "prompt_text", result.promptText);
     ExtractJsonBool(line, "is_authorized_to_unlock", result.isAuthorizedToUnlock);

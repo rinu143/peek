@@ -281,6 +281,7 @@ HRESULT PeekCredential::GetSerialization(
     bool isAuth = m_isAuthenticated;
     std::wstring user = m_username;
     std::wstring domain = m_domain;
+    std::wstring profileId = m_profileId;
     LeaveCriticalSection(&m_cs);
 
     // NON-NEGOTIABLE SECURITY INVARIANT:
@@ -297,21 +298,26 @@ HRESULT PeekCredential::GetSerialization(
         Logger::LogInfo(L"GetSerialization for unlock scenario - attempting to retrieve password from secret vault");
 
         // Try to decrypt a wrapped secret file that should contain the password
-        BYTE buffer[1024];
+        BYTE buffer[1024] = {};
         DWORD cbActual = 0;
+        DWORD sessionId = WTSGetActiveConsoleSessionId();
         
-        if (PeekSecretVault::DecryptWrappedSecret(user.c_str(), buffer, sizeof(buffer), &cbActual))
+        if (!profileId.empty() && PeekSecretVault::DecryptWrappedSecret(profileId.c_str(), sessionId, buffer, sizeof(buffer), &cbActual))
         {
             Logger::LogInfo(L"Successfully decrypted secret from vault");
             
-            // Convert bytes to wide string (assuming null-terminated)
-            if (cbActual > 0 && cbActual < sizeof(buffer))
+            // Secret plaintext is [DWORD UTF-16LE byte length][UTF-16LE bytes], never a C string.
+            if (cbActual >= sizeof(DWORD))
             {
-                buffer[cbActual] = 0; // Ensure null termination
-                
+                DWORD passwordBytes = 0;
+                memcpy(&passwordBytes, buffer, sizeof(passwordBytes));
+                if (passwordBytes <= cbActual - sizeof(DWORD) &&
+                    passwordBytes % sizeof(wchar_t) == 0)
+                {
+                    std::wstring password(reinterpret_cast<LPCWSTR>(buffer + sizeof(DWORD)), passwordBytes / sizeof(wchar_t));
                 // Try to validate the password using LogonUser
                 if (PeekSecretVault::ValidateWindowsPassword(user.c_str(), domain.c_str(), 
-                    reinterpret_cast<LPCWSTR>(buffer)))
+                    password.c_str()))
                 {
                     Logger::LogInfo(L"Password validation successful - proceeding with serialization");
                     
@@ -319,40 +325,41 @@ HRESULT PeekCredential::GetSerialization(
                     HRESULT hr = PeekSerialization::PackageKerbLogon(
                         domain.c_str(),
                         user.c_str(),
-                        reinterpret_cast<LPCWSTR>(buffer),
+                        password.c_str(),
                         pcpcs
                     );
-
+                    if (!password.empty())
+                    {
+                        SecureZeroMemory(&password[0], password.size() * sizeof(wchar_t));
+                    }
+                    SecureZeroMemory(buffer, sizeof(buffer));
                     if (SUCCEEDED(hr))
                     {
                         *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED;
                         return S_OK;
                     }
                 }
+                else
+                {
+                    Logger::LogInfo(L"Wrapped secret validation failed; deleting stale secret");
+                    PeekSecretVault::DeleteWrappedSecret(profileId.c_str(), sessionId);
+                }
+                if (!password.empty())
+                {
+                    SecureZeroMemory(&password[0], password.size() * sizeof(wchar_t));
+                }
+                SecureZeroMemory(buffer, sizeof(buffer));
+                }
             }
         }
+        SecureZeroMemory(buffer, sizeof(buffer));
         
         Logger::LogInfo(L"Failed to get valid password from secret vault - falling back to standard authentication");
     }
 
-    // For non-unlock scenarios or if secret retrieval failed, use standard Kerberos/Negotiate interactive logon
-    HRESULT hr = PeekSerialization::PackageKerbLogon(
-        domain.c_str(),
-        user.c_str(),
-        L"", // Password handled by DPAPI / unlock context for unlock scenarios
-        pcpcs
-    );
-
-    if (SUCCEEDED(hr))
-    {
-        *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED;
-    }
-    else
-    {
-        // Fail-open to password/PIN
-        *pcpgsr = CPGSR_NO_CREDENTIAL_FINISHED;
-    }
-
+    // Never serialize an empty password. Standard providers remain available
+    // for fail-open password/PIN sign-in when no valid linked secret exists.
+    *pcpgsr = CPGSR_NO_CREDENTIAL_FINISHED;
     return S_OK;
 }
 
@@ -439,6 +446,10 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
             if (!result.displayName.empty())
             {
                 m_displayName = result.displayName;
+            }
+            if (!result.profileId.empty())
+            {
+                m_profileId = result.profileId;
             }
             LeaveCriticalSection(&m_cs);
 

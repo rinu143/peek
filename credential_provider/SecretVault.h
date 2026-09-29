@@ -14,6 +14,7 @@ namespace PeekSecretVault
     // The secret file is named <profile_id>.secret and stored alongside the .peek file
     BOOL ReadWrappedSecret(
         _In_ PCWSTR pszProfileId,
+        _In_ DWORD dwSessionId,
         _Out_writes_bytes_to_(cbBuffer, *pcbActual) PBYTE pbBuffer,
         _In_ DWORD cbBuffer,
         _Out_ PDWORD pcbActual
@@ -22,6 +23,7 @@ namespace PeekSecretVault
     // Decrypts a DPAPI-wrapped secret using CryptUnprotectData
     BOOL DecryptWrappedSecret(
         _In_ PCWSTR pszProfileId,
+        _In_ DWORD dwSessionId,
         _Out_writes_bytes_to_(cbBuffer, *pcbActual) PBYTE pbBuffer,
         _In_ DWORD cbBuffer,
         _Out_ PDWORD pcbActual
@@ -33,4 +35,7 @@ namespace PeekSecretVault
         _In_ PCWSTR pszDomain,
         _In_ PCWSTR pszPassword
     );
+
+    // Deletes a user's wrapped secret while impersonating that user's session.
+    BOOL DeleteWrappedSecret(_In_ PCWSTR pszProfileId, _In_ DWORD dwSessionId);
 }

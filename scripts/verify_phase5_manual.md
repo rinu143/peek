@@ -21,6 +21,13 @@ Follow this step-by-step checklist to validate the native C++ Credential Provide
 
 ## Test Cases
 
+### Password linking and stale-secret checks
+
+- [ ] During enrollment, choose to link the current Windows password; a `<profile_id>.secret` file appears under `%LOCALAPPDATA%\Peek\Profiles`.
+- [ ] Skip linking on another enrollment and confirm Peek fails open to password/PIN after face verification.
+- [ ] Enter a wrong password while linking; confirm it is rejected and no `.secret` file is written.
+- [ ] Change the real Windows password, lock the workstation, and authenticate with Peek; confirm the stale `.secret` is deleted and Windows falls open to password/PIN.
+
 ### Test 1: DLL Registration & Registry Verification
 
 **Goal**: Confirm that the COM in-process server and Windows Credential Provider registry keys are cleanly created.
