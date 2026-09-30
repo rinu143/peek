@@ -129,7 +129,66 @@ Follow this step-by-step checklist to validate the native C++ Credential Provide
 
 ---
 
-### Test 7: Clean Unregistration
+### Test 7: Phase 7 Lock-Screen UX — 1:1 State Icon Progression & Animation
+
+**Goal**: Verify that the tile image icon and status text change in exact 1:1 synchrony, driven solely by real IPC pipe state messages.
+
+1. Ensure `python scripts/run_engine_service.py --debug` is running.
+2. Lock the workstation: `Win + L`.
+3. Select the "Peek Facial Recognition" tile.
+4. Verify visual progression:
+   - [ ] **SEARCHING**: Status text `"Looking for face..."` is accompanied by the 3-frame radial radar scan pulse animation cycling at ~200ms per frame.
+   - [ ] **FACE_FOUND**: Status text `"Face detected — verifying..."` pairs immediately with the focused corner bracket lock-on icon.
+   - [ ] **VERIFYING**: Status text `"Verifying biometric match..."` pairs with the biometric alignment node icon.
+   - [ ] **LIVENESS**: Active challenge prompt or `"Checking liveness..."` pairs with the dynamic glance guidance icon.
+   - [ ] State transitions immediately override in-flight animation frames with zero visual lag or lingering pulse frames.
+
+---
+
+### Test 8: Phase 7 Success Copy & Pre-Unlock Hold Duration
+
+**Goal**: Verify dynamic name greeting and deliberate brief pause on SUCCESS before Windows unlock completes.
+
+1. Authenticate with an enrolled profile with display name set (e.g. `"Rinu"`):
+   - [ ] Status text transitions to: `"Hello, Rinu!"` (displays the real enrolled name, NOT the Windows username, and never a placeholder).
+   - [ ] Icon switches to the smiling teal success icon (`frame_success.png`).
+   - [ ] The success icon and greeting hold steady for ~750ms so the user clearly sees the visual confirmation.
+   - [ ] Windows automatically unlocks workstation after the hold beat.
+2. Authenticate with an enrolled profile where no custom display name was configured:
+   - [ ] Status text displays: `"Welcome back"` (clean fallback, never an empty string or hardcoded placeholder).
+   - [ ] Smiling success icon displays for the brief hold before unlocking.
+
+---
+
+### Test 9: Phase 7 Calm Failure & Explicit RETRY Beat
+
+**Goal**: Verify calm failure treatment with no alarming artifacts, followed by an explicit RETRY beat before re-scanning.
+
+1. Present an unauthorized face or photo spoof to trigger failure:
+   - [ ] Status text displays `"Authentication failed. Try again or sign in with password/PIN."`
+   - [ ] Icon displays the calm failure sad silhouette (`frame_failure.png`) in neutral slate monochrome.
+   - [ ] **CRITICAL**: Confirm NO red screen, NO shake effect, NO sound.
+2. Observe automatic recovery loop:
+   - [ ] Failure presentation holds calmly for ~1.2s.
+   - [ ] Tile transitions to explicit **RETRY** beat: status text displays `"Try again..."` accompanied by circular reload arrow icon (`frame_retry.png`) for ~600ms.
+   - [ ] Tile smoothly transitions back to **SEARCHING** radar pulse animation and resumes scanning without requiring manual user clicks.
+3. Allow engine session to time out:
+   - [ ] Status text displays `"Timed out. Try again or sign in with password."` paired with the calm failure icon, followed by the explicit RETRY beat.
+
+---
+
+### Test 10: Fail-Soft Fallback (Missing Resources or GDI+ Failure)
+
+**Goal**: Confirm that if TileAnimator encounters any resource loading failure, the credential provider fails soft to the static logo.
+
+1. If resource extraction fails or GDI+ is unavailable:
+   - [ ] Provider falls back to `IDB_PEEK_LOGO` static bitmap.
+   - [ ] Winlogon never crashes or freezes.
+   - [ ] Authentication and password/PIN fallback continue to function normally.
+
+---
+
+### Test 11: Clean Unregistration
 
 **Goal**: Verify that unregistering the DLL cleanly removes all registry keys and restores default Windows lock screen behavior.
 

@@ -10,12 +10,59 @@
 #include <credentialprovider.h>
 #include <ntsecapi.h>
 #include <shlwapi.h>
+#include <shlobj.h>
 #include <strsafe.h>
 #include <string>
 #include <vector>
 #include <memory>
 
 #include "guid.h"
+
+// Lightweight debug logger for Credential Provider (writes to DebugView / Winlogon debug stream)
+class Logger
+{
+public:
+    static void LogInfo(const char* pszMsg)
+    {
+        if (pszMsg)
+        {
+            OutputDebugStringA("[PeekCP][INFO] ");
+            OutputDebugStringA(pszMsg);
+            OutputDebugStringA("\n");
+        }
+    }
+    static void LogInfo(const wchar_t* pwszMsg)
+    {
+        if (pwszMsg)
+        {
+            OutputDebugStringW(L"[PeekCP][INFO] ");
+            OutputDebugStringW(pwszMsg);
+            OutputDebugStringW(L"\n");
+        }
+    }
+    static void LogInfo(const std::wstring& msg)
+    {
+        LogInfo(msg.c_str());
+    }
+    static void LogError(const char* pszMsg)
+    {
+        if (pszMsg)
+        {
+            OutputDebugStringA("[PeekCP][ERROR] ");
+            OutputDebugStringA(pszMsg);
+            OutputDebugStringA("\n");
+        }
+    }
+    static void LogError(const wchar_t* pwszMsg)
+    {
+        if (pwszMsg)
+        {
+            OutputDebugStringW(L"[PeekCP][ERROR] ");
+            OutputDebugStringW(pwszMsg);
+            OutputDebugStringW(L"\n");
+        }
+    }
+};
 
 #define PEEK_PIPE_NAME L"\\\\.\\pipe\\PeekEngine"
 

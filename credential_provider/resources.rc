@@ -4,6 +4,21 @@
 
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 
+// Static Fallback Bitmap
+IDB_PEEK_LOGO            BITMAP  "res\\peek_logo.bmp"
+
+// 32-bit ARGB Tile Animation PNG Frames
+IDR_PNG_FRAME_IDLE       RCDATA  "res\\frame_idle.png"
+IDR_PNG_FRAME_SEARCH_1   RCDATA  "res\\frame_search_1.png"
+IDR_PNG_FRAME_SEARCH_2   RCDATA  "res\\frame_search_2.png"
+IDR_PNG_FRAME_SEARCH_3   RCDATA  "res\\frame_search_3.png"
+IDR_PNG_FRAME_FACE_FOUND RCDATA  "res\\frame_face_found.png"
+IDR_PNG_FRAME_VERIFYING  RCDATA  "res\\frame_verifying.png"
+IDR_PNG_FRAME_LIVENESS   RCDATA  "res\\frame_liveness.png"
+IDR_PNG_FRAME_SUCCESS    RCDATA  "res\\frame_success.png"
+IDR_PNG_FRAME_FAILURE    RCDATA  "res\\frame_failure.png"
+IDR_PNG_FRAME_RETRY      RCDATA  "res\\frame_retry.png"
+
 // Version Information
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 1,0,0,1

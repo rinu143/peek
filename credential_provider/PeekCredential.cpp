@@ -1,25 +1,55 @@
 // Peek Face Engine - Credential Implementation
 #include "PeekCredential.h"
+#include "PeekProvider.h"
 #include "Serialization.h"
 #include "resource.h"
 #include "SecretVault.h"
+#include <cassert>
 
 PeekCredential::PeekCredential()
     : m_cRef(1)
     , m_cpus(CPUS_LOGON)
     , m_pcpce(nullptr)
+    , m_pProvider(nullptr)
     , m_isAuthenticated(false)
     , m_isSelected(false)
     , m_displayName(L"Peek Facial Recognition")
     , m_statusText(L"Looking for face...")
+    , m_hRetryCancelEvent(NULL)
 {
     InitializeCriticalSection(&m_cs);
+    m_hRetryCancelEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+
+    // Initialize TileAnimator with a frame update callback that notifies LogonUI via SetFieldBitmap
+    m_animator.Initialize(g_hinst, [this](HBITMAP hbmp) {
+        EnterCriticalSection(&m_cs);
+        ICredentialProviderCredentialEvents* pcpce = m_pcpce;
+        if (pcpce) pcpce->AddRef();
+        LeaveCriticalSection(&m_cs);
+
+        if (pcpce)
+        {
+            HBITMAP hCopy = static_cast<HBITMAP>(CopyImage(hbmp, IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION));
+            pcpce->SetFieldBitmap(this, PFI_LOGO, hCopy ? hCopy : hbmp);
+            pcpce->Release();
+        }
+    });
+
     DllAddRef();
 }
 
 PeekCredential::~PeekCredential()
 {
+    if (m_hRetryCancelEvent)
+    {
+        SetEvent(m_hRetryCancelEvent);
+        CloseHandle(m_hRetryCancelEvent);
+        m_hRetryCancelEvent = NULL;
+    }
+
     m_pipeClient.Cancel();
+    m_animator.Shutdown();
+
     if (m_pcpce)
     {
         m_pcpce->Release();
@@ -27,6 +57,21 @@ PeekCredential::~PeekCredential()
     }
     DeleteCriticalSection(&m_cs);
     DllRelease();
+}
+
+void PeekCredential::SetProvider(PeekProvider* pProvider)
+{
+    EnterCriticalSection(&m_cs);
+    m_pProvider = pProvider;
+    LeaveCriticalSection(&m_cs);
+}
+
+bool PeekCredential::IsAuthenticated() const
+{
+    EnterCriticalSection(&const_cast<CRITICAL_SECTION&>(m_cs));
+    bool auth = m_isAuthenticated;
+    LeaveCriticalSection(&const_cast<CRITICAL_SECTION&>(m_cs));
+    return auth;
 }
 
 HRESULT PeekCredential::Initialize(
@@ -111,6 +156,11 @@ HRESULT PeekCredential::Advise(ICredentialProviderCredentialEvents* pcpce)
 HRESULT PeekCredential::UnAdvise()
 {
     EnterCriticalSection(&m_cs);
+    m_isSelected = false;
+    if (m_hRetryCancelEvent)
+    {
+        SetEvent(m_hRetryCancelEvent);
+    }
     m_pipeClient.Cancel();
     if (m_pcpce)
     {
@@ -118,6 +168,7 @@ HRESULT PeekCredential::UnAdvise()
         m_pcpce = nullptr;
     }
     LeaveCriticalSection(&m_cs);
+    m_animator.SetState(PeekUiState::IDLE);
     return S_OK;
 }
 
@@ -134,9 +185,15 @@ HRESULT PeekCredential::SetSelected(BOOL* pbAutoLogon)
     m_isSelected = true;
     m_isAuthenticated = false;
     m_statusText = L"Initializing camera...";
+    if (m_hRetryCancelEvent)
+    {
+        ResetEvent(m_hRetryCancelEvent);
+    }
     LeaveCriticalSection(&m_cs);
 
-    // Notify LogonUI of initial status text
+    // Initial state presentation: searching animation and status text
+    m_animator.SetState(PeekUiState::SEARCHING);
+
     if (m_pcpce)
     {
         m_pcpce->SetFieldString(this, PFI_STATUS_TEXT, m_statusText.c_str());
@@ -144,11 +201,9 @@ HRESULT PeekCredential::SetSelected(BOOL* pbAutoLogon)
 
     // Launch background asynchronous pipe authentication
     Logger::LogInfo("Starting background authentication with StartAuthAsync");
-    Logger::LogInfo("About to call m_pipeClient.StartAuthAsync");
     m_pipeClient.StartAuthAsync([this](const PeekAuthResult& result) {
         this->OnEngineStateUpdate(result);
     }, 12.0f);
-    Logger::LogInfo("m_pipeClient.StartAuthAsync completed");
 
     return S_OK;
 }
@@ -157,8 +212,13 @@ HRESULT PeekCredential::SetDeselected()
 {
     EnterCriticalSection(&m_cs);
     m_isSelected = false;
+    if (m_hRetryCancelEvent)
+    {
+        SetEvent(m_hRetryCancelEvent);
+    }
     m_pipeClient.Cancel();
     LeaveCriticalSection(&m_cs);
+    m_animator.SetState(PeekUiState::IDLE);
     return S_OK;
 }
 
@@ -215,7 +275,15 @@ HRESULT PeekCredential::GetBitmapValue(DWORD dwFieldID, HBITMAP* phbmp)
 
     if (dwFieldID == PFI_LOGO)
     {
-        // Load embedded Peek tile bitmap if present
+        // 1. Return current 32bpp ARGB frame from TileAnimator if available
+        HBITMAP hFrame = m_animator.GetCurrentFrame();
+        if (hFrame)
+        {
+            *phbmp = static_cast<HBITMAP>(CopyImage(hFrame, IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION));
+            if (*phbmp) return S_OK;
+        }
+
+        // 2. Fail-soft fallback to static embedded bitmap if TileAnimator has no frames
         *phbmp = LoadBitmapW(g_hinst, MAKEINTRESOURCEW(IDB_PEEK_LOGO));
         return S_OK;
     }
@@ -315,40 +383,39 @@ HRESULT PeekCredential::GetSerialization(
                     passwordBytes % sizeof(wchar_t) == 0)
                 {
                     std::wstring password(reinterpret_cast<LPCWSTR>(buffer + sizeof(DWORD)), passwordBytes / sizeof(wchar_t));
-                // Try to validate the password using LogonUser
-                if (PeekSecretVault::ValidateWindowsPassword(user.c_str(), domain.c_str(), 
-                    password.c_str()))
-                {
-                    Logger::LogInfo(L"Password validation successful - proceeding with serialization");
-                    
-                    // Package standard Kerberos/Negotiate interactive logon with the retrieved password
-                    HRESULT hr = PeekSerialization::PackageKerbLogon(
-                        domain.c_str(),
-                        user.c_str(),
-                        password.c_str(),
-                        pcpcs
-                    );
+                    // Try to validate the password using LogonUser
+                    if (PeekSecretVault::ValidateWindowsPassword(user.c_str(), domain.c_str(), password.c_str()))
+                    {
+                        Logger::LogInfo(L"Password validation successful - proceeding with serialization");
+                        
+                        // Package standard Kerberos/Negotiate interactive logon with the retrieved password
+                        HRESULT hr = PeekSerialization::PackageKerbLogon(
+                            domain.c_str(),
+                            user.c_str(),
+                            password.c_str(),
+                            pcpcs
+                        );
+                        if (!password.empty())
+                        {
+                            SecureZeroMemory(&password[0], password.size() * sizeof(wchar_t));
+                        }
+                        SecureZeroMemory(buffer, sizeof(buffer));
+                        if (SUCCEEDED(hr))
+                        {
+                            *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED;
+                            return S_OK;
+                        }
+                    }
+                    else
+                    {
+                        Logger::LogInfo(L"Wrapped secret validation failed; deleting stale secret");
+                        PeekSecretVault::DeleteWrappedSecret(profileId.c_str(), sessionId);
+                    }
                     if (!password.empty())
                     {
                         SecureZeroMemory(&password[0], password.size() * sizeof(wchar_t));
                     }
                     SecureZeroMemory(buffer, sizeof(buffer));
-                    if (SUCCEEDED(hr))
-                    {
-                        *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED;
-                        return S_OK;
-                    }
-                }
-                else
-                {
-                    Logger::LogInfo(L"Wrapped secret validation failed; deleting stale secret");
-                    PeekSecretVault::DeleteWrappedSecret(profileId.c_str(), sessionId);
-                }
-                if (!password.empty())
-                {
-                    SecureZeroMemory(&password[0], password.size() * sizeof(wchar_t));
-                }
-                SecureZeroMemory(buffer, sizeof(buffer));
                 }
             }
         }
@@ -402,29 +469,46 @@ void PeekCredential::UpdateStatusText(const std::wstring& newText)
     }
 }
 
+void PeekCredential::NotifyCredentialsReady()
+{
+    EnterCriticalSection(&m_cs);
+    PeekProvider* pProvider = m_pProvider;
+    LeaveCriticalSection(&m_cs);
+
+    if (pProvider)
+    {
+        pProvider->NotifyCredentialsChanged();
+    }
+}
+
 void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
 {
     switch (result.state)
     {
     case PeekIPCState::CONNECTING:
         UpdateStatusText(L"Connecting to Peek Face Engine...");
+        m_animator.SetState(PeekUiState::IDLE);
         break;
 
     case PeekIPCState::ENGINE_READY:
     case PeekIPCState::CAMERA_STARTING:
         UpdateStatusText(L"Acquiring camera device...");
+        m_animator.SetState(PeekUiState::SEARCHING);
         break;
 
     case PeekIPCState::SEARCHING:
         UpdateStatusText(L"Looking for face...");
+        m_animator.SetState(PeekUiState::SEARCHING);
         break;
 
     case PeekIPCState::FACE_FOUND:
         UpdateStatusText(L"Face detected — verifying...");
+        m_animator.SetState(PeekUiState::FACE_FOUND);
         break;
 
     case PeekIPCState::VERIFYING:
         UpdateStatusText(result.detail.empty() ? L"Verifying biometric match..." : result.detail);
+        m_animator.SetState(PeekUiState::VERIFYING);
         break;
 
     case PeekIPCState::LIVENESS_CHECK:
@@ -436,6 +520,7 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
         {
             UpdateStatusText(L"Checking liveness...");
         }
+        m_animator.SetState(PeekUiState::LIVENESS);
         break;
 
     case PeekIPCState::AUTHENTICATED:
@@ -451,44 +536,133 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
             {
                 m_profileId = result.profileId;
             }
+            std::wstring enrolledName = m_displayName;
+            std::wstring rawUser = m_username;
             LeaveCriticalSection(&m_cs);
 
-            UpdateStatusText(L"Verified! Signing in...");
-            
-            // Log that we're about to signal Windows logon process
-            Logger::LogInfo("AUTHENTICATED received - About to call CredentialsChanged");
-
-            // Signal LogonUI that credentials are confirmed and ready
-            EnterCriticalSection(&m_cs);
-            ICredentialProviderCredentialEvents* pcpce = m_pcpce;
-            if (pcpce) pcpce->AddRef();
-            LeaveCriticalSection(&m_cs);
-
-            if (pcpce)
+            // Dynamic Greeting Copy:
+            // "when AUTHENTICATED arrives, set status text to
+            //  L"Hello, " + m_displayName + L"!" if m_displayName is non-empty and not
+            //  the placeholder "Peek Facial Recognition"/raw username fallback; if no
+            //  real enrolled display name is available, use "Welcome back" — never a
+            //  hardcoded example name."
+            std::wstring greeting;
+            if (!enrolledName.empty() &&
+                enrolledName != L"Peek Facial Recognition" &&
+                enrolledName != rawUser)
             {
-                // Complete the authentication process by signaling that this credential is ready
-                // This should trigger Windows to proceed with the unlock
-                Logger::LogInfo("Calling CredentialsChanged to signal Windows logon");
-                pcpce->CredentialsChanged(this);
-                pcpce->Release();
-                Logger::LogInfo("CredentialsChanged completed successfully");
+                greeting = L"Hello, " + enrolledName + L"!";
             }
+            else
+            {
+                greeting = L"Welcome back";
+            }
+
+            UpdateStatusText(greeting);
+            m_animator.SetState(PeekUiState::SUCCESS);
+
+            // SECURITY INVARIANT ASSERTION & TIMING:
+            // The SUCCESS presentation delay (~750ms) applies strictly AFTER the
+            // authentication dual-gate has verified isAuthorizedToUnlock == true and
+            // m_isAuthenticated == true under m_cs lock.
+            // Introducing this brief visual hold does not create a window where the
+            // tile could be manipulated into calling GetSerialization before
+            // m_isAuthenticated is genuinely true:
+            // 1. GetSerialization explicitly enforces `if (!isAuth) return CPGSR_NO_CREDENTIAL_FINISHED;`.
+            // 2. TileAnimator is a pure presentation component with no capability to
+            //    affect authentication state or trigger serialization.
+            // 3. CredentialsChanged is notified only after this hold, allowing the user
+            //    to visually see the success confirmation before Windows proceeds.
+            assert(result.isAuthorizedToUnlock && m_isAuthenticated);
+            Sleep(750);
+
+            Logger::LogInfo("AUTHENTICATED received - signaling CredentialsChanged");
+            NotifyCredentialsReady();
         }
         break;
 
     case PeekIPCState::AUTH_FAILED:
-        UpdateStatusText(L"Authentication failed. Please use password/PIN.");
+        // Calm failure treatment: sad icon + "Try again" phrasing, no alarming visuals
+        UpdateStatusText(L"Authentication failed. Try again or sign in with password/PIN.");
+        m_animator.SetState(PeekUiState::FAILURE);
+        QueueRetry();
         break;
 
     case PeekIPCState::TIMEOUT:
-        UpdateStatusText(L"Timed out. Select tile to retry or sign in with password.");
+        // Calm failure treatment: sad icon + "Try again" phrasing
+        UpdateStatusText(L"Timed out. Try again or sign in with password.");
+        m_animator.SetState(PeekUiState::FAILURE);
+        QueueRetry();
         break;
 
     case PeekIPCState::DISCONNECTED:
     case PeekIPCState::ERROR_STATE:
     default:
-        // Fail-open: inform user clearly to sign in with password/PIN
+        // Fail-open: calm failure icon, inform user to sign in with password/PIN
         UpdateStatusText(L"Peek engine offline. Sign in with password or PIN.");
+        m_animator.SetState(PeekUiState::FAILURE);
         break;
     }
+}
+
+void PeekCredential::QueueRetry()
+{
+    EnterCriticalSection(&m_cs);
+    bool canRetry = m_isSelected && !m_isAuthenticated;
+    LeaveCriticalSection(&m_cs);
+    if (!canRetry) return;
+
+    // Launch asynchronous retry thread so the pipe client worker thread can cleanly exit
+    AddRef();
+    HANDLE hRetry = CreateThread(nullptr, 0, [](LPVOID param) -> DWORD {
+        PeekCredential* pThis = static_cast<PeekCredential*>(param);
+        pThis->RunRetrySequence();
+        pThis->Release();
+        return 0;
+    }, this, 0, nullptr);
+
+    if (hRetry)
+    {
+        CloseHandle(hRetry);
+    }
+    else
+    {
+        Release();
+    }
+}
+
+void PeekCredential::RunRetrySequence()
+{
+    // 1. Hold calm failure presentation for cooldown period (~1200ms)
+    if (WaitForSingleObject(m_hRetryCancelEvent, 1200) != WAIT_TIMEOUT)
+    {
+        return; // cancelled or deselected
+    }
+
+    EnterCriticalSection(&m_cs);
+    bool stillActive = m_isSelected && !m_isAuthenticated;
+    LeaveCriticalSection(&m_cs);
+    if (!stillActive) return;
+
+    // 2. Explicit RETRY beat between FAILURE and resetting to SEARCHING
+    UpdateStatusText(L"Try again...");
+    m_animator.SetState(PeekUiState::RETRY);
+
+    if (WaitForSingleObject(m_hRetryCancelEvent, 600) != WAIT_TIMEOUT)
+    {
+        return; // cancelled or deselected
+    }
+
+    EnterCriticalSection(&m_cs);
+    stillActive = m_isSelected && !m_isAuthenticated;
+    LeaveCriticalSection(&m_cs);
+    if (!stillActive) return;
+
+    // 3. Return to SEARCHING state and restart pipe authentication
+    UpdateStatusText(L"Looking for face...");
+    m_animator.SetState(PeekUiState::SEARCHING);
+
+    m_pipeClient.StartAuthAsync([this](const PeekAuthResult& res) {
+        this->OnEngineStateUpdate(res);
+    }, 12.0f);
 }

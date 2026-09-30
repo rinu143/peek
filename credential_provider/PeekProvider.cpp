@@ -61,8 +61,17 @@ void PeekProvider::ReleaseCredential()
 {
     if (m_pCredential)
     {
+        m_pCredential->SetProvider(nullptr);
         m_pCredential->Release();
         m_pCredential = nullptr;
+    }
+}
+
+void PeekProvider::NotifyCredentialsChanged()
+{
+    if (m_pcpe)
+    {
+        m_pcpe->CredentialsChanged(m_upAdviseContext);
     }
 }
 
@@ -201,6 +210,7 @@ HRESULT PeekProvider::GetCredentialCount(
             return E_OUTOFMEMORY;
         }
 
+        m_pCredential->SetProvider(this);
         HRESULT hr = m_pCredential->Initialize(m_cpus, s_rgcpfd, PFI_COUNT);
         if (FAILED(hr))
         {
@@ -208,6 +218,16 @@ HRESULT PeekProvider::GetCredentialCount(
             *pdwCount = 0;
             return hr;
         }
+    }
+    else
+    {
+        m_pCredential->SetProvider(this);
+    }
+
+    if (m_pCredential->IsAuthenticated())
+    {
+        *pdwDefault = 0;
+        *pbAutoLogonWithDefault = TRUE;
     }
 
     *pdwCount = 1;

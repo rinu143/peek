@@ -4,12 +4,10 @@
 
 #include "common.h"
 #include "PeekPipeClient.h"
+#include "TileAnimator.h"
 
-// Make sure we have the IID for the credential events interface
-#ifndef __ICredentialProviderCredentialEvents2_INTERFACE_DEFINED__
-// This is a workaround for missing definitions in some SDK versions
-// We'll use the standard Windows SDK definition if needed
-#endif
+// Forward declaration of provider class
+class PeekProvider;
 
 class PeekCredential : public ICredentialProviderCredential2
 {
@@ -25,6 +23,10 @@ public:
         PCWSTR pszDomain = nullptr,
         PCWSTR pszSid = nullptr
     );
+
+    // Provider linkage for logon notifications
+    void SetProvider(PeekProvider* pProvider);
+    bool IsAuthenticated() const;
 
     // IUnknown
     IFACEMETHODIMP QueryInterface(REFIID riid, void** ppv);
@@ -66,10 +68,14 @@ public:
 private:
     void OnEngineStateUpdate(const PeekAuthResult& result);
     void UpdateStatusText(const std::wstring& newText);
+    void NotifyCredentialsReady();
+    void QueueRetry();
+    void RunRetrySequence();
 
     long m_cRef;
     CREDENTIAL_PROVIDER_USAGE_SCENARIO m_cpus;
     ICredentialProviderCredentialEvents* m_pcpce;
+    PeekProvider* m_pProvider;
     std::wstring m_username;
     std::wstring m_domain;
     std::wstring m_sid;
@@ -79,5 +85,7 @@ private:
     bool m_isAuthenticated;
     bool m_isSelected;
     PeekPipeClient m_pipeClient;
+    TileAnimator m_animator;
+    HANDLE m_hRetryCancelEvent;
     CRITICAL_SECTION m_cs;
 };

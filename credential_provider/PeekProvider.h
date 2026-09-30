@@ -26,6 +26,9 @@ public:
     IFACEMETHODIMP GetCredentialCount(DWORD* pdwCount, DWORD* pdwDefault, BOOL* pbAutoLogonWithDefault);
     IFACEMETHODIMP GetCredentialAt(DWORD dwIndex, ICredentialProviderCredential** ppcpc);
 
+    // Notify LogonUI that credentials have changed
+    void NotifyCredentialsChanged();
+
 private:
     void ReleaseCredential();
 

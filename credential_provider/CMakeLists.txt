@@ -15,6 +15,8 @@ set(SOURCES
     PeekCredential.cpp
     PeekPipeClient.cpp
     Serialization.cpp
+    SecretVault.cpp
+    TileAnimator.cpp
     resources.rc
     credential_provider.def
 )
@@ -27,6 +29,8 @@ set(HEADERS
     PeekCredential.h
     PeekPipeClient.h
     Serialization.h
+    SecretVault.h
+    TileAnimator.h
 )
 
 add_library(PeekCredentialProvider SHARED
@@ -38,9 +42,12 @@ target_link_libraries(PeekCredentialProvider PRIVATE
     Secur32
     Shlwapi
     Advapi32
+    Wtsapi32
+    Crypt32
     Ole32
     User32
     Gdi32
+    Gdiplus
 )
 
 set_target_properties(PeekCredentialProvider PROPERTIES

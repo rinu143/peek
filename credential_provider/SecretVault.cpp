@@ -7,6 +7,7 @@
 #include <ntsecapi.h>
 #include <vector>
 #include <shlwapi.h>
+#include <shlobj.h>
 #include <string>
 #include <direct.h>
 #include <wtsapi32.h>
@@ -15,6 +16,7 @@
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "Wtsapi32.lib")
 #pragma comment(lib, "Crypt32.lib")
+#pragma comment(lib, "Shell32.lib")
 
 namespace PeekSecretVault
 {
@@ -64,6 +66,70 @@ namespace PeekSecretVault
         return L"";
     }
 
+    // Internal helper to read the wrapped secret file under the active impersonation context
+    static BOOL ReadWrappedSecretFileInternal(
+        _In_ PCWSTR pszProfileId,
+        _Out_writes_bytes_to_(cbBuffer, *pcbActual) PBYTE pbBuffer,
+        _In_ DWORD cbBuffer,
+        _Out_ PDWORD pcbActual
+    )
+    {
+        if (!pszProfileId || !pbBuffer || !pcbActual)
+        {
+            return FALSE;
+        }
+
+        *pcbActual = 0;
+
+        std::wstring secretPath = GetSecretFilePath(pszProfileId);
+        if (secretPath.empty())
+        {
+            return FALSE;
+        }
+
+        // Check if file exists
+        DWORD dwAttrib = GetFileAttributesW(secretPath.c_str());
+        if (dwAttrib == INVALID_FILE_ATTRIBUTES)
+        {
+            return FALSE;
+        }
+
+        // Read the entire file
+        HANDLE hFile = CreateFileW(
+            secretPath.c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ,
+            NULL,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            NULL
+        );
+
+        if (hFile == INVALID_HANDLE_VALUE)
+        {
+            return FALSE;
+        }
+
+        DWORD cbFileSize = GetFileSize(hFile, NULL);
+        if (cbFileSize == 0 || cbFileSize > cbBuffer)
+        {
+            CloseHandle(hFile);
+            return FALSE;
+        }
+
+        DWORD cbRead = 0;
+        BOOL bResult = ReadFile(hFile, pbBuffer, cbFileSize, &cbRead, NULL);
+        CloseHandle(hFile);
+
+        if (!bResult)
+        {
+            return FALSE;
+        }
+
+        *pcbActual = cbRead;
+        return TRUE;
+    }
+
     BOOL ReadWrappedSecret(
         _In_ PCWSTR pszProfileId,
         _In_ DWORD dwSessionId,
@@ -91,59 +157,9 @@ namespace PeekSecretVault
             return FALSE;
         }
 
-        std::wstring secretPath = GetSecretFilePath(pszProfileId);
-        if (secretPath.empty())
-        {
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        // Check if file exists
-        DWORD dwAttrib = GetFileAttributesW(secretPath.c_str());
-        if (dwAttrib == INVALID_FILE_ATTRIBUTES)
-        {
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        // Read the entire file
-        HANDLE hFile = CreateFileW(
-            secretPath.c_str(),
-            GENERIC_READ,
-            FILE_SHARE_READ,
-            NULL,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            NULL
-        );
-
-        if (hFile == INVALID_HANDLE_VALUE)
-        {
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        DWORD cbFileSize = GetFileSize(hFile, NULL);
-        if (cbFileSize == 0 || cbFileSize > cbBuffer)
-        {
-            CloseHandle(hFile);
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        DWORD cbRead = 0;
-        BOOL bResult = ReadFile(hFile, pbBuffer, cbFileSize, &cbRead, NULL);
-        CloseHandle(hFile);
-
-        if (!bResult)
-        {
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        *pcbActual = cbRead;
+        BOOL bResult = ReadWrappedSecretFileInternal(pszProfileId, pbBuffer, cbBuffer, pcbActual);
         CloseHandle(hUserToken);
-        return TRUE;
+        return bResult;
     }
 
     BOOL ValidateWindowsPassword(
@@ -210,23 +226,23 @@ namespace PeekSecretVault
         BYTE wrappedData[4096];
         DWORD cbWrappedData = 0;
         
-        // ReadWrappedSecret resolves the file under the target user's token.
-        // DPAPI must be invoked under that same token as well.
+        // Consolidate token fetch and impersonation: fetch user token once and hold
+        // the impersonation scope across both the file read and CryptUnprotectData.
         HANDLE hUserToken = GetUserTokenFromSessionId(dwSessionId);
         if (!hUserToken)
         {
-            return FALSE;
-        }
-        if (!ReadWrappedSecret(pszProfileId, dwSessionId, wrappedData, sizeof(wrappedData), &cbWrappedData))
-        {
-            CloseHandle(hUserToken);
             return FALSE;
         }
 
         ImpersonationGuard impersonation(hUserToken);
         if (!impersonation.IsImpersonated())
         {
-            SecureZeroMemory(wrappedData, sizeof(wrappedData));
+            CloseHandle(hUserToken);
+            return FALSE;
+        }
+
+        if (!ReadWrappedSecretFileInternal(pszProfileId, wrappedData, sizeof(wrappedData), &cbWrappedData))
+        {
             CloseHandle(hUserToken);
             return FALSE;
         }

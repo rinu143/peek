@@ -51,12 +51,13 @@ def _verify_windows_password(username: str, password: str) -> bool:
     return bool(ok)
 
 
-def link_windows_password(profile_id: str, password: str, store: SecureProfileStore | None = None) -> bool:
+def link_windows_password(profile_id: str, password: str, store: SecureProfileStore | None = None,
+                          verify_password=None) -> bool:
     """Verify and DPAPI-wrap a password for this profile; never log password material."""
     if os.name != "nt" or not profile_id or not password:
         return False
     username = _current_windows_username()
-    if not _verify_windows_password(username, password):
+    if not (verify_password or _verify_windows_password)(username, password):
         return False
     plaintext = bytearray(struct.pack("<I", len(password.encode("utf-16-le"))))
     plaintext.extend(password.encode("utf-16-le"))
