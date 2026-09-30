@@ -52,8 +52,14 @@ def _verify_windows_password(username: str, password: str) -> bool:
 
 
 def link_windows_password(profile_id: str, password: str, store: SecureProfileStore | None = None,
-                          verify_password=None) -> bool:
-    """Verify and DPAPI-wrap a password for this profile; never log password material."""
+                          verify_password=None, entropy: bytes | None = None) -> bool:
+    """Verify and DPAPI-wrap a password for this profile; never log password material.
+    
+    SECURITY RESIDUAL-RISK NOTE:
+    Wrapping the password with machine-bound entropy provides defense-in-depth against
+    casual or offline decryption, but does NOT prevent malicious code executing in the
+    enrolled user's context from discovering the entropy value and decrypting the password.
+    """
     if os.name != "nt" or not profile_id or not password:
         return False
     username = _current_windows_username()
@@ -62,8 +68,11 @@ def link_windows_password(profile_id: str, password: str, store: SecureProfileSt
     plaintext = bytearray(struct.pack("<I", len(password.encode("utf-16-le"))))
     plaintext.extend(password.encode("utf-16-le"))
     try:
-        encrypted = __import__("storage.template_store", fromlist=["dpapi_encrypt"]).dpapi_encrypt(
-            bytes(plaintext), description="PeekCredentialSecret")
+        from storage.template_store import dpapi_encrypt, get_machine_entropy
+        entropy_to_use = entropy if entropy is not None else get_machine_entropy()
+        encrypted = dpapi_encrypt(
+            bytes(plaintext), description="PeekCredentialSecret", entropy=entropy_to_use
+        )
         profiles_dir = (store or SecureProfileStore()).storage_dir
         with open(os.path.join(profiles_dir, f"{profile_id}.secret"), "wb") as secret_file:
             secret_file.write(encrypted)
@@ -71,6 +80,55 @@ def link_windows_password(profile_id: str, password: str, store: SecureProfileSt
     finally:
         for i in range(len(plaintext)):
             plaintext[i] = 0
+
+
+def migrate_legacy_secret(profile_id: str, store: SecureProfileStore | None = None,
+                          entropy: bytes | None = None) -> bool:
+    """Migrate a legacy no-entropy .secret file to machine-bound entropy in place.
+    
+    If decryption with machine entropy succeeds, the secret is already migrated.
+    If decryption with machine entropy fails, attempts legacy decryption (entropy=None).
+    Upon legacy success, re-encrypts with machine entropy and overwrites the file.
+    """
+    if os.name != "nt" or not profile_id:
+        return False
+    profiles_dir = (store or SecureProfileStore()).storage_dir
+    secret_path = os.path.join(profiles_dir, f"{profile_id}.secret")
+    if not os.path.exists(secret_path):
+        return False
+
+    with open(secret_path, "rb") as f:
+        ciphertext = f.read()
+
+    from storage.template_store import dpapi_encrypt, dpapi_decrypt, get_machine_entropy
+    entropy_to_use = entropy if entropy is not None else get_machine_entropy()
+
+    # If it already decrypts with entropy, no migration required
+    try:
+        decrypted = dpapi_decrypt(ciphertext, entropy=entropy_to_use)
+        del decrypted
+        return True
+    except Exception:
+        pass
+
+    # Attempt legacy decrypt with NULL entropy
+    plaintext = None
+    try:
+        plaintext = bytearray(dpapi_decrypt(ciphertext, entropy=None))
+        new_encrypted = dpapi_encrypt(
+            bytes(plaintext), description="PeekCredentialSecret", entropy=entropy_to_use
+        )
+        with open(secret_path, "wb") as f:
+            f.write(new_encrypted)
+        logger.info("Migrated legacy secret file for profile %s to machine-bound entropy", profile_id)
+        return True
+    except Exception as ex:
+        logger.error("Failed to migrate legacy secret file for profile %s: %s", profile_id, ex)
+        return False
+    finally:
+        if plaintext is not None:
+            for i in range(len(plaintext)):
+                plaintext[i] = 0
 
 
 def prompt_optional_password_link(profile_id: str, store: SecureProfileStore) -> None:

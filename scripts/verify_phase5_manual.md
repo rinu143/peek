@@ -201,3 +201,26 @@ Follow this step-by-step checklist to validate the native C++ Credential Provide
 3. Lock the workstation: `Win + L`.
    - [ ] Peek tile is completely removed from the lock screen.
    - [ ] Default Windows logon tiles function as normal.
+
+---
+
+### Test 12: Stale-Secret Deletion via ReportResult on External Password Change
+
+**Goal**: Verify that when a user's Windows password is changed outside Peek, Peek's Credential Provider does not redundantly attempt LogonUserW pre-validation; instead, Winlogon serves as the single authority, rejects the stale password, and invokes `ReportResult` with `STATUS_LOGON_FAILURE` / `STATUS_WRONG_PASSWORD`, which triggers automatic deletion of that user's `<profile_id>.secret` file while cleanly falling back to standard authentication.
+
+1. Ensure the user is enrolled and has linked their current Windows password:
+   - Confirm `%LOCALAPPDATA%\Peek\Profiles\<profile_id>.secret` exists and is encrypted with machine-bound entropy.
+2. Deliberately change the Windows password externally (e.g., via `Ctrl + Alt + Del -> Change a password` or `net user <username> <new_password>`).
+3. Lock the workstation: `Win + L`.
+4. Select the Peek tile and look at the camera to trigger successful face verification.
+5. Observe authentication flow:
+   - [ ] Peek packages the decrypted stored password directly without performing a local `LogonUserW` pre-check (Winlogon is the sole authority; lockout counters are not double-incremented).
+   - [ ] Winlogon receives the serialized Kerberos logon and rejects the stale password.
+   - [ ] Winlogon invokes `PeekCredential::ReportResult` with `STATUS_LOGON_FAILURE` (0xC000006D) / `STATUS_WRONG_PASSWORD` (0xC000006A).
+   - [ ] `ReportResult` executes `PeekSecretVault::DeleteWrappedSecret` targeted strictly to the failing profile and session.
+   - [ ] LogonUI displays the standard Windows sign-in error or sign-in options tile.
+6. Unlock the workstation manually using the new password or PIN.
+7. Verify filesystem state:
+   - [ ] Confirm `%LOCALAPPDATA%\Peek\Profiles\<profile_id>.secret` has been deleted.
+   - [ ] Confirm no other profiles or data files were removed.
+   - [ ] Lock workstation again (`Win + L`); confirm subsequent face match cleanly falls back to standard password/PIN entry with `CPGSR_NO_CREDENTIAL_FINISHED` without attempting to submit stale credentials.

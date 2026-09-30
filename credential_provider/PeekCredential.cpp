@@ -4,7 +4,6 @@
 #include "Serialization.h"
 #include "resource.h"
 #include "SecretVault.h"
-#include <cassert>
 
 PeekCredential::PeekCredential()
     : m_cRef(1)
@@ -383,39 +382,25 @@ HRESULT PeekCredential::GetSerialization(
                     passwordBytes % sizeof(wchar_t) == 0)
                 {
                     std::wstring password(reinterpret_cast<LPCWSTR>(buffer + sizeof(DWORD)), passwordBytes / sizeof(wchar_t));
-                    // Try to validate the password using LogonUser
-                    if (PeekSecretVault::ValidateWindowsPassword(user.c_str(), domain.c_str(), password.c_str()))
-                    {
-                        Logger::LogInfo(L"Password validation successful - proceeding with serialization");
-                        
-                        // Package standard Kerberos/Negotiate interactive logon with the retrieved password
-                        HRESULT hr = PeekSerialization::PackageKerbLogon(
-                            domain.c_str(),
-                            user.c_str(),
-                            password.c_str(),
-                            pcpcs
-                        );
-                        if (!password.empty())
-                        {
-                            SecureZeroMemory(&password[0], password.size() * sizeof(wchar_t));
-                        }
-                        SecureZeroMemory(buffer, sizeof(buffer));
-                        if (SUCCEEDED(hr))
-                        {
-                            *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED;
-                            return S_OK;
-                        }
-                    }
-                    else
-                    {
-                        Logger::LogInfo(L"Wrapped secret validation failed; deleting stale secret");
-                        PeekSecretVault::DeleteWrappedSecret(profileId.c_str(), sessionId);
-                    }
+                    
+                    // Directly package standard Kerberos/Negotiate interactive logon with the retrieved password.
+                    // The redundant LogonUserW pre-check is removed so Winlogon is the single authority on password validity.
+                    HRESULT hr = PeekSerialization::PackageKerbLogon(
+                        domain.c_str(),
+                        user.c_str(),
+                        password.c_str(),
+                        pcpcs
+                    );
                     if (!password.empty())
                     {
                         SecureZeroMemory(&password[0], password.size() * sizeof(wchar_t));
                     }
                     SecureZeroMemory(buffer, sizeof(buffer));
+                    if (SUCCEEDED(hr))
+                    {
+                        *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED;
+                        return S_OK;
+                    }
                 }
             }
         }
@@ -430,13 +415,46 @@ HRESULT PeekCredential::GetSerialization(
     return S_OK;
 }
 
+#ifndef STATUS_LOGON_FAILURE
+#define STATUS_LOGON_FAILURE ((NTSTATUS)0xC000006DL)
+#endif
+#ifndef STATUS_WRONG_PASSWORD
+#define STATUS_WRONG_PASSWORD ((NTSTATUS)0xC000006AL)
+#endif
+#ifndef STATUS_PASSWORD_EXPIRED
+#define STATUS_PASSWORD_EXPIRED ((NTSTATUS)0xC0000071L)
+#endif
+
 HRESULT PeekCredential::ReportResult(
-    NTSTATUS /*ntsStatus*/,
-    NTSTATUS /*ntsSubstatus*/,
+    NTSTATUS ntsStatus,
+    NTSTATUS ntsSubstatus,
     PWSTR* /*ppszOptionalStatusText*/,
     CREDENTIAL_PROVIDER_STATUS_ICON* /*pcpsiOptionalStatusIcon*/
 )
 {
+    EnterCriticalSection(&m_cs);
+    std::wstring profileId = m_profileId;
+    CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus = m_cpus;
+    LeaveCriticalSection(&m_cs);
+
+    // If Winlogon reports bad credentials (STATUS_LOGON_FAILURE, STATUS_WRONG_PASSWORD,
+    // or STATUS_PASSWORD_EXPIRED), delete the stale stored secret for this profile/session
+    // so a stale linked password doesn't keep silently failing on subsequent unlock attempts.
+    if (ntsStatus == STATUS_LOGON_FAILURE ||
+        ntsStatus == STATUS_WRONG_PASSWORD ||
+        ntsStatus == STATUS_PASSWORD_EXPIRED ||
+        ntsSubstatus == STATUS_WRONG_PASSWORD ||
+        ntsSubstatus == STATUS_LOGON_FAILURE ||
+        ntsSubstatus == STATUS_PASSWORD_EXPIRED)
+    {
+        if (!profileId.empty() && cpus == CPUS_UNLOCK_WORKSTATION)
+        {
+            Logger::LogInfo(L"ReportResult received authentication failure from Winlogon; deleting stale secret");
+            DWORD sessionId = WTSGetActiveConsoleSessionId();
+            PeekSecretVault::DeleteWrappedSecret(profileId.c_str(), sessionId);
+        }
+    }
+
     return S_OK;
 }
 
@@ -561,19 +579,30 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
             UpdateStatusText(greeting);
             m_animator.SetState(PeekUiState::SUCCESS);
 
-            // SECURITY INVARIANT ASSERTION & TIMING:
+            // SECURITY INVARIANT ENFORCEMENT & TIMING:
             // The SUCCESS presentation delay (~750ms) applies strictly AFTER the
             // authentication dual-gate has verified isAuthorizedToUnlock == true and
             // m_isAuthenticated == true under m_cs lock.
-            // Introducing this brief visual hold does not create a window where the
-            // tile could be manipulated into calling GetSerialization before
-            // m_isAuthenticated is genuinely true:
-            // 1. GetSerialization explicitly enforces `if (!isAuth) return CPGSR_NO_CREDENTIAL_FINISHED;`.
-            // 2. TileAnimator is a pure presentation component with no capability to
-            //    affect authentication state or trigger serialization.
-            // 3. CredentialsChanged is notified only after this hold, allowing the user
-            //    to visually see the success confirmation before Windows proceeds.
-            assert(result.isAuthorizedToUnlock && m_isAuthenticated);
+            //
+            // NOTE ON INVARIANT ENFORCEMENT:
+            // The debug assert() previously placed here was not load-bearing (assert()
+            // compiles away to a no-op under NDEBUG in production Release builds).
+            // The real, load-bearing invariant enforcement is (and remains) the check in GetSerialization:
+            //   `if (!isAuth) return CPGSR_NO_CREDENTIAL_FINISHED;`
+            // which guarantees credentials can NEVER be serialized or returned unless
+            // the face engine strictly authenticated the user and authorized unlock.
+            // As defense-in-depth, we also perform an explicit runtime check here to
+            // safely abort signaling if authorization state was somehow violated:
+            EnterCriticalSection(&m_cs);
+            bool isAuthConfirmed = m_isAuthenticated;
+            LeaveCriticalSection(&m_cs);
+
+            if (!result.isAuthorizedToUnlock || !isAuthConfirmed)
+            {
+                Logger::LogError("Security invariant violation: AUTHENTICATED reached without confirmed unlock authorization; aborting");
+                return;
+            }
+
             Sleep(750);
 
             Logger::LogInfo("AUTHENTICATED received - signaling CredentialsChanged");

@@ -52,24 +52,87 @@ def _get_dpapi_libs():
     return _crypt32, _kernel32
 
 
-def dpapi_encrypt(data: bytes, description: str = "PeekBiometricData") -> bytes:
-    """Encrypts bytes using Windows DPAPI (CryptProtectData)."""
+def get_machine_entropy() -> bytes:
+    """Return the machine-bound entropy value used for DPAPI secret wrapping.
+    
+    SECURITY RESIDUAL-RISK NOTE:
+    Adding machine-bound entropy is defense-in-depth against casual or scripted
+    decryption and prevents offline decryption if the .secret file is copied to
+    another system. It is NOT a fix for the fundamental risk that any process
+    running under the enrolled user's logon session can locate this entropy value,
+    invoke CryptUnprotectData, and recover the plaintext Windows account password.
+    This does NOT make stored passwords inherently safe.
+    """
+    # 1. Environment variable override (useful for isolated unit testing)
+    env_entropy = os.environ.get("PEEK_MACHINE_ENTROPY")
+    if env_entropy:
+        return env_entropy.strip().encode("utf-8")
+
+    # 2. Check %ProgramData%\Peek\machine_entropy.bin
+    program_data = os.environ.get("ProgramData", r"C:\ProgramData")
+    entropy_dir = os.path.join(program_data, "Peek")
+    entropy_file = os.path.join(entropy_dir, "machine_entropy.bin")
+    try:
+        if os.path.isfile(entropy_file):
+            with open(entropy_file, "rb") as f:
+                content = f.read().strip()
+                if content:
+                    return content
+    except Exception as ex:
+        logger.warning("Could not read machine entropy file: %s", ex)
+
+    # 3. First-run creation: write a per-install machine GUID
+    try:
+        os.makedirs(entropy_dir, exist_ok=True)
+        new_guid = str(uuid.uuid4()).encode("utf-8")
+        with open(entropy_file, "wb") as f:
+            f.write(new_guid)
+        return new_guid
+    except Exception as ex:
+        logger.warning("Could not persist machine entropy file: %s", ex)
+
+    # 4. Fallback to Windows MachineGuid in registry
+    if _IS_WINDOWS:
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as key:
+                val, _ = winreg.QueryValueEx(key, "MachineGuid")
+                if val:
+                    return str(val).strip().encode("utf-8")
+        except Exception as ex:
+            logger.warning("Could not read Windows MachineGuid: %s", ex)
+
+    # 5. Last-resort fallback to stable machine node
+    return str(uuid.getnode()).encode("utf-8")
+
+
+def dpapi_encrypt(data: bytes, description: str = "PeekBiometricData", entropy: Optional[bytes] = None) -> bytes:
+    """Encrypts bytes using Windows DPAPI (CryptProtectData) with optional machine entropy."""
     crypt32, kernel32 = _get_dpapi_libs()
     in_blob = DATA_BLOB(len(data), ctypes.cast(ctypes.create_string_buffer(data), ctypes.POINTER(ctypes.c_byte)))
     out_blob = DATA_BLOB()
-    if not crypt32.CryptProtectData(ctypes.byref(in_blob), description, None, None, None, 0, ctypes.byref(out_blob)):
+    p_entropy = None
+    if entropy is not None:
+        entropy_blob = DATA_BLOB(len(entropy), ctypes.cast(ctypes.create_string_buffer(entropy), ctypes.POINTER(ctypes.c_byte)))
+        p_entropy = ctypes.byref(entropy_blob)
+    if not crypt32.CryptProtectData(ctypes.byref(in_blob), description, p_entropy, None, None, 0, ctypes.byref(out_blob)):
         raise ctypes.WinError()
     try:
         return ctypes.string_at(out_blob.pbData, out_blob.cbData)
     finally:
         kernel32.LocalFree(out_blob.pbData)
 
-def dpapi_decrypt(ciphertext: bytes) -> bytes:
-    """Decrypts bytes using Windows DPAPI (CryptUnprotectData)."""
+
+def dpapi_decrypt(ciphertext: bytes, entropy: Optional[bytes] = None) -> bytes:
+    """Decrypts bytes using Windows DPAPI (CryptUnprotectData) with optional machine entropy."""
     crypt32, kernel32 = _get_dpapi_libs()
     in_blob = DATA_BLOB(len(ciphertext), ctypes.cast(ctypes.create_string_buffer(ciphertext), ctypes.POINTER(ctypes.c_byte)))
     out_blob = DATA_BLOB()
-    if not crypt32.CryptUnprotectData(ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)):
+    p_entropy = None
+    if entropy is not None:
+        entropy_blob = DATA_BLOB(len(entropy), ctypes.cast(ctypes.create_string_buffer(entropy), ctypes.POINTER(ctypes.c_byte)))
+        p_entropy = ctypes.byref(entropy_blob)
+    if not crypt32.CryptUnprotectData(ctypes.byref(in_blob), None, p_entropy, None, None, 0, ctypes.byref(out_blob)):
         raise ctypes.WinError()
     try:
         return ctypes.string_at(out_blob.pbData, out_blob.cbData)

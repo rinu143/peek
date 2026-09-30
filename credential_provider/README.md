@@ -58,6 +58,30 @@ On receiving `AUTHENTICATED` with `is_authorized_to_unlock == true`, `PeekCreden
 
 ---
 
+## Security Model & Residual Risk Disclosure: Password-Vault Unlock Mechanism
+
+> [!CAUTION]
+> **CRITICAL SECURITY DISCLOSURE & RESIDUAL RISK NOTICE**
+>
+> **Reversible Password Storage & Replay**:
+> Peek's workstation unlock mechanism stores the user's actual Windows account password in a DPAPI-wrapped file (`%LOCALAPPDATA%\Peek\Profiles\<profile_id>.secret`) protected with machine-bound entropy (stored separately in `%ProgramData%\Peek\machine_entropy.bin` or Windows `MachineGuid`). Upon a genuine face and liveness match (`AUTHENTICATED` with `isAuthorizedToUnlock == true`), the Credential Provider decrypts that file and replays the plaintext password to Winlogon via a `KERB_INTERACTIVE_LOGON` structure.
+>
+> **Fundamental Difference from Windows Hello Face**:
+> This architecture differs materially from Windows Hello Face:
+> - **Windows Hello Face** never stores the Windows account password in reversible form. It uses asymmetric TPM 2.0 / VBS hardware-backed key pairs where biometric authentication unlocks access to the private key for Kerberos/FIDO sign-in.
+> - **Peek Password Vault** stores the user's real Windows account password in reversible form and replays it.
+>
+> **Residual Risk of DPAPI User-Context Decryption**:
+> Because DPAPI (`CryptProtectData`/`CryptUnprotectData`) user-scope encryption decrypts under the user's own logon session:
+> - **Any process or malware achieving code execution under the enrolled user's own Windows account token can locate the entropy value and invoke `CryptUnprotectData` to recover the user's plaintext Windows account password.**
+> - The Credential Provider is not the only entity that can decrypt this secret; any process running under that user's logon session can do so.
+>
+> **What Machine-Bound Entropy Does and Does NOT Protect Against**:
+> - **What it protects against**: Defense-in-depth against casual or scripted decryption, and prevents offline decryption if `<profile_id>.secret` is copied to another machine.
+> - **What it does NOT protect against**: It does NOT prevent malware or local processes in the user's session from locating the entropy value, unprotecting the secret, and obtaining the plaintext password. This pass does not eliminate that risk, and DPAPI wrapping must not be mistaken for a complete solution.
+
+---
+
 ## Building the Project
 
 ### Prerequisites
