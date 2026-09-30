@@ -44,4 +44,11 @@ __all__ = [
     "ProtocolError",
     "serialize_message",
     "parse_message",
+    "EnrollmentPipeServer",
+    "EnrollmentPipeClient",
+    "SessionCoordinator",
 ]
+
+from engine.ipc.enrollment_pipe_server import EnrollmentPipeServer
+from engine.ipc.enrollment_pipe_client import EnrollmentPipeClient
+from engine.ipc.session_coordinator import SessionCoordinator

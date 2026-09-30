@@ -1,10 +1,10 @@
 """
 Peek Face Engine - Background Service Entrypoint
-Starts FaceEngine and Named Pipe IPC server as a long-running standalone process.
+Starts FaceEngine and Named Pipe IPC servers (Auth & Guided Enrollment) as a long-running standalone process.
 This entrypoint can be executed directly from the console or wrapped as a Windows Service.
 
 Usage:
-    python scripts/run_engine_service.py [--pipe-name \\\\.\\pipe\\PeekEngine] [--debug]
+    python scripts/run_engine_service.py [--pipe-name \\\\.\\pipe\\PeekEngine] [--enrollment-pipe-name \\\\.\\pipe\\PeekEnrollment] [--debug]
 """
 
 import os
@@ -21,6 +21,8 @@ if PROJECT_ROOT not in sys.path:
 from engine.pipeline.face_engine import FaceEngine
 from storage.template_store import SecureProfileStore
 from engine.ipc.pipe_server import PipeServer, DEFAULT_PIPE_NAME, DEFAULT_SDDL
+from engine.ipc.enrollment_pipe_server import EnrollmentPipeServer, DEFAULT_ENROLLMENT_PIPE_NAME
+from engine.ipc.session_coordinator import SessionCoordinator
 
 logger = logging.getLogger("Peek.EngineService")
 
@@ -38,7 +40,13 @@ def main():
         "--pipe-name",
         type=str,
         default=DEFAULT_PIPE_NAME,
-        help=f"Named pipe URI (default: {DEFAULT_PIPE_NAME})"
+        help=f"Auth named pipe URI (default: {DEFAULT_PIPE_NAME})"
+    )
+    parser.add_argument(
+        "--enrollment-pipe-name",
+        type=str,
+        default=DEFAULT_ENROLLMENT_PIPE_NAME,
+        help=f"Enrollment named pipe URI (default: {DEFAULT_ENROLLMENT_PIPE_NAME})"
     )
     parser.add_argument(
         "--timeout",
@@ -75,28 +83,50 @@ def main():
         require_active_challenge=True
     )
 
-    server = PipeServer(
+    coordinator = SessionCoordinator()
+
+    auth_server = PipeServer(
         pipe_name=args.pipe_name,
         face_engine=engine,
         default_auth_timeout=args.timeout,
-        sddl=DEFAULT_SDDL
+        sddl=DEFAULT_SDDL,
+        coordinator=coordinator,
+    )
+
+    enrollment_server = EnrollmentPipeServer(
+        pipe_name=args.enrollment_pipe_name,
+        coordinator=coordinator,
+        sddl=DEFAULT_SDDL,
+        profile_store=profile_store,
     )
 
     # Register OS signal handlers for graceful shutdown
     def handle_signal(sig, frame):
-        logger.info(f"Signal {sig} received; shutting down engine service...")
-        server.stop()
+        logger.info(f"Signal {sig} received; shutting down engine services...")
+        auth_server.stop()
+        enrollment_server.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    logger.info(f"Listening on Named Pipe: {args.pipe_name}")
+    logger.info(f"Listening on Auth Pipe: {args.pipe_name}")
+    logger.info(f"Listening on Enrollment Pipe: {args.enrollment_pipe_name}")
     logger.info(f"Security Descriptor (SDDL): {DEFAULT_SDDL}")
-    logger.info(f"Service ready. Press Ctrl+C to terminate.")
+    logger.info(f"Services ready. Press Ctrl+C to terminate.")
 
-    # Start blocking server loop
-    server.serve_forever()
+    # Start both servers in background listener threads
+    auth_server.start()
+    enrollment_server.start()
+
+    try:
+        while True:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt received; stopping engine services...")
+    finally:
+        auth_server.stop()
+        enrollment_server.stop()
 
 
 if __name__ == "__main__":

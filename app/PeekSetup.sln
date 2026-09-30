@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PeekSetup", "PeekSetup\PeekSetup.csproj", "{BFC0C370-BFD9-4DFC-9044-A8B2E4F648B0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PeekSetup.Tests", "PeekSetup.Tests\PeekSetup.Tests.csproj", "{CFE0E049-17EE-4AC9-BCA3-FC299DF0009A}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{BFC0C370-BFD9-4DFC-9044-A8B2E4F648B0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BFC0C370-BFD9-4DFC-9044-A8B2E4F648B0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BFC0C370-BFD9-4DFC-9044-A8B2E4F648B0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BFC0C370-BFD9-4DFC-9044-A8B2E4F648B0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CFE0E049-17EE-4AC9-BCA3-FC299DF0009A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CFE0E049-17EE-4AC9-BCA3-FC299DF0009A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CFE0E049-17EE-4AC9-BCA3-FC299DF0009A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CFE0E049-17EE-4AC9-BCA3-FC299DF0009A}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

@@ -180,12 +180,14 @@ class PipeServer:
         camera: Optional[Any] = None,
         default_auth_timeout: float = 12.0,
         sddl: str = DEFAULT_SDDL,
+        coordinator: Optional[Any] = None,
     ):
         self.pipe_name = pipe_name
         self.face_engine = face_engine
         self._injected_camera = camera
         self.default_auth_timeout = default_auth_timeout
         self.sddl = sddl
+        self.coordinator = coordinator
 
         self._stop_event = threading.Event()
         self._is_running = False
@@ -365,11 +367,22 @@ class PipeServer:
 
             elif msg_type == MSG_START_AUTH:
                 logger.info("START_AUTH message received from client")
-                timeout_sec = float(msg.get("timeout_seconds", self.default_auth_timeout))
-                logger.info(f"Starting authentication session with timeout: {timeout_sec}s")
-                logger.info("About to call _run_auth_session")
-                self._run_auth_session(session, timeout_seconds=timeout_sec)
-                logger.info("_run_auth_session completed")
+                if self.coordinator is not None and not self.coordinator.acquire_auth():
+                    logger.warning("Rejecting START_AUTH: enrollment session currently active.")
+                    session.write_message(
+                        make_error(REASON_CAMERA_UNAVAILABLE, "Cannot start authentication: enrollment session is currently active")
+                    )
+                    continue
+
+                try:
+                    timeout_sec = float(msg.get("timeout_seconds", self.default_auth_timeout))
+                    logger.info(f"Starting authentication session with timeout: {timeout_sec}s")
+                    logger.info("About to call _run_auth_session")
+                    self._run_auth_session(session, timeout_seconds=timeout_sec)
+                    logger.info("_run_auth_session completed")
+                finally:
+                    if self.coordinator is not None:
+                        self.coordinator.release_auth()
 
             elif msg_type == MSG_CANCEL_AUTH:
                 logger.debug("CANCEL_AUTH received while idle; acknowledged.")

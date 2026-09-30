@@ -224,3 +224,39 @@ Follow this step-by-step checklist to validate the native C++ Credential Provide
    - [ ] Confirm `%LOCALAPPDATA%\Peek\Profiles\<profile_id>.secret` has been deleted.
    - [ ] Confirm no other profiles or data files were removed.
    - [ ] Lock workstation again (`Win + L`); confirm subsequent face match cleanly falls back to standard password/PIN entry with `CPGSR_NO_CREDENTIAL_FINISHED` without attempting to submit stale credentials.
+
+---
+
+### Test 13: Native WPF Setup App (`app/PeekSetup`) End-to-End Enrollment & Credential Provider Unlock
+
+**Goal**: Verify that a user profile and linked password created entirely through the native WPF desktop app (`app/PeekSetup/`) is 100% binary-compatible with the native C++ Credential Provider for lock screen auto-unlock.
+
+1. Start the Peek engine service in an Administrator console:
+   ```cmd
+   python scripts/run_engine_service.py --debug
+   ```
+2. Launch the native WPF setup application:
+   ```cmd
+   dotnet run --project app/PeekSetup/PeekSetup.csproj
+   ```
+3. Complete Step 1 (Welcome):
+   - [ ] Confirm display name is pre-filled from current Windows username (`Environment.UserName`).
+   - [ ] Click "Begin Face Enrollment".
+4. Complete Step 2 (Face Enrollment):
+   - [ ] Verify the WPF Image displays decoded camera preview frames over `\\.\pipe\PeekEnrollment`.
+   - [ ] Observe guidance text overlay and 9-pose progress indicators updating in real time.
+   - [ ] Complete all 9 head poses; verify automatic transition to Step 3 upon `ENROLLMENT_COMPLETE`.
+5. Complete Step 3 (Optional Password Linking):
+   - [ ] Enter the correct current Windows account password into the secure `PasswordBox`.
+   - [ ] Click "Link Password & Finish".
+   - [ ] Confirm verification succeeds and transitions to Step 4.
+   - [ ] Inspect `%LOCALAPPDATA%\Peek\Profiles`: confirm `<profile_id>.json` and `<profile_id>.secret` exist.
+6. Test Lock Screen Unlock with Credential Provider:
+   - [ ] Lock the workstation: `Win + L`.
+   - [ ] Select the "Peek Facial Recognition" tile.
+   - [ ] Face the camera: Credential Provider decrypts the `.secret` file written by `PeekSetup`, submits Kerberos interactive logon serialization, and successfully unlocks Windows directly to the desktop.
+7. Test Face-Only Mode (Password Skipped):
+   - [ ] Run `app/PeekSetup` again, enroll a new profile, but click "Skip for Now" on Step 3.
+   - [ ] Confirm no `.secret` file is written for this profile.
+   - [ ] Lock workstation (`Win + L`): confirm face verification succeeds and Credential Provider cleanly falls open to PIN/password entry.
+
