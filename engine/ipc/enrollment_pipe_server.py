@@ -45,6 +45,8 @@ from engine.ipc.enrollment_protocol import (
     MSG_ENROLLMENT_FAILED,
     MSG_ERROR,
     MSG_PONG,
+    MSG_STATUS_REQUEST,
+    MSG_STATUS_RESPONSE,
     REASON_CANCELLED,
     REASON_CAMERA_ERROR,
     REASON_CAMERA_UNAVAILABLE,
@@ -61,6 +63,7 @@ from engine.ipc.enrollment_protocol import (
     make_enrollment_failed,
     make_error,
     make_pong,
+    make_status_response,
 )
 from engine.enrollment.enrollment_runner import EnrollmentRunner, EnrollmentStepResult
 from engine.enrollment.enrollment_session import EnrollmentState
@@ -162,6 +165,7 @@ class EnrollmentPipeServer:
         target_fps: float = 15.0,
         camera: Optional[Any] = None,
         profile_store: Optional[SecureProfileStore] = None,
+        face_engine: Optional[Any] = None,
     ):
         self.pipe_name = pipe_name
         self._runner = runner
@@ -169,7 +173,13 @@ class EnrollmentPipeServer:
         self.sddl = sddl
         self.target_fps = target_fps
         self._injected_camera = camera
-        self.profile_store = profile_store or SecureProfileStore()
+        self.face_engine = face_engine
+        if profile_store is not None:
+            self.profile_store = profile_store
+        elif face_engine is not None and getattr(face_engine, "profile_store", None) is not None:
+            self.profile_store = face_engine.profile_store
+        else:
+            self.profile_store = SecureProfileStore()
 
         self._stop_event = threading.Event()
         self._is_running = False
@@ -364,6 +374,32 @@ class EnrollmentPipeServer:
             if msg_type == MSG_PING:
                 session.write_message(make_pong())
 
+            elif msg_type == MSG_STATUS_REQUEST:
+                try:
+                    profiles = self.profile_store.list_profiles()
+                    enabled_profile = next((p for p in profiles if p.enabled), None)
+                    if enabled_profile is not None:
+                        session.write_message(
+                            make_status_response(
+                                has_enrolled_profile=True,
+                                display_name=enabled_profile.display_name,
+                                profile_id=enabled_profile.profile_id,
+                            )
+                        )
+                    else:
+                        session.write_message(
+                            make_status_response(
+                                has_enrolled_profile=False,
+                                display_name="",
+                                profile_id="",
+                            )
+                        )
+                except Exception as ex:
+                    logger.error(f"Error checking profile status: {ex}")
+                    session.write_message(
+                        make_error(REASON_INTERNAL_ERROR, f"Status check failed: {ex}")
+                    )
+
             elif msg_type == MSG_START_ENROLLMENT:
                 logger.info("START_ENROLLMENT message received from client")
                 if self.coordinator is not None and not self.coordinator.acquire_enrollment():
@@ -487,6 +523,16 @@ class EnrollmentPipeServer:
                 # 6. Completion check
                 if runner.is_complete:
                     if runner.saved_profile is not None and runner.saved_profile.profile_id:
+                        if self.face_engine is not None:
+                            try:
+                                self.face_engine.reload_active_profile()
+                                logger.info(
+                                    "Shared FaceEngine active profile reloaded successfully after enrollment of '%s'",
+                                    runner.saved_profile.display_name,
+                                )
+                            except Exception as ex:
+                                logger.error("Failed to reload active profile on shared FaceEngine: %s", ex)
+
                         complete_msg = make_enrollment_complete(
                             profile_id=runner.saved_profile.profile_id,
                             display_name=runner.saved_profile.display_name,

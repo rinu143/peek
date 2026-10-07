@@ -33,6 +33,8 @@ from engine.ipc.enrollment_protocol import (
     MSG_ENROLLMENT_COMPLETE,
     MSG_ENROLLMENT_FAILED,
     MSG_ERROR,
+    MSG_STATUS_REQUEST,
+    MSG_STATUS_RESPONSE,
     REASON_CANCELLED,
     REASON_CAMERA_UNAVAILABLE,
     REASON_CAMERA_ERROR,
@@ -40,7 +42,11 @@ from engine.ipc.enrollment_protocol import (
     REASON_INVALID_MESSAGE,
     REASON_INTERNAL_ERROR,
     serialize_message,
+    make_status_request,
 )
+import tempfile
+import shutil
+from storage.template_store import SecureProfileStore
 from engine.enrollment.enrollment_runner import EnrollmentStepResult
 from engine.enrollment.enrollment_session import EnrollmentState
 from storage.template_store import PeekProfile
@@ -467,6 +473,96 @@ class TestEnrollmentPipeServer(unittest.TestCase):
             self.assertEqual(pong.get("type"), MSG_PONG)
 
             client.close()
+
+    def test_enrollment_complete_reloads_shared_face_engine_before_emitting_complete(self):
+        """
+        Asserts that after a successful finalize_and_save_profile, the shared FaceEngine's
+        reload_active_profile() is invoked before ENROLLMENT_COMPLETE is emitted across the pipe.
+        """
+        class MockFaceEngineTrackingReload:
+            def __init__(self):
+                self.reload_called = False
+                self.reload_called_before_client_received = False
+                self.client_received_complete = False
+
+            def reload_active_profile(self):
+                self.reload_called = True
+                if not self.client_received_complete:
+                    self.reload_called_before_client_received = True
+
+        mock_engine = MockFaceEngineTrackingReload()
+        runner = MockEnrollmentRunner(frames_to_complete=2, display_name="Shared Engine User")
+        self.server = EnrollmentPipeServer(
+            pipe_name=self.pipe_name,
+            runner=runner,
+            face_engine=mock_engine,
+            target_fps=60.0
+        )
+        self.server.start()
+
+        self.client = EnrollmentPipeClient(pipe_name=self.pipe_name)
+        self.assertTrue(self.client.connect(timeout_seconds=3.0))
+        self.client.read_message(timeout_seconds=2.0)  # ENROLLMENT_READY
+
+        complete_received = False
+        for msg in self.client.stream_enrollment(display_name="Shared Engine User", timeout_seconds=5.0):
+            if msg.get("type") == MSG_ENROLLMENT_COMPLETE:
+                complete_received = True
+                mock_engine.client_received_complete = True
+                break
+
+        self.assertTrue(complete_received, "ENROLLMENT_COMPLETE was not received")
+        self.assertTrue(mock_engine.reload_called, "reload_active_profile() was not called on shared engine")
+        self.assertTrue(
+            mock_engine.reload_called_before_client_received,
+            "reload_active_profile() must be called BEFORE ENROLLMENT_COMPLETE is emitted"
+        )
+
+    def test_status_request_handling_with_and_without_profile(self):
+        """
+        Validates STATUS_REQUEST handling:
+        - When no profile is enrolled: returns has_enrolled_profile=False
+        - When an enabled profile exists: returns has_enrolled_profile=True with display_name and profile_id
+        """
+        temp_dir = tempfile.mkdtemp(prefix="peek_test_status_")
+        try:
+            store = SecureProfileStore(storage_dir=temp_dir)
+            self.server = EnrollmentPipeServer(
+                pipe_name=self.pipe_name,
+                profile_store=store,
+            )
+            self.server.start()
+
+            self.client = EnrollmentPipeClient(pipe_name=self.pipe_name)
+            self.assertTrue(self.client.connect(timeout_seconds=3.0))
+            self.client.read_message(timeout_seconds=2.0)  # ENROLLMENT_READY
+
+            # 1. Query status with no profiles
+            resp1 = self.client.request_status(timeout_seconds=2.0)
+            self.assertIsNotNone(resp1)
+            self.assertEqual(resp1.get("type"), MSG_STATUS_RESPONSE)
+            self.assertFalse(resp1.get("has_enrolled_profile"))
+            self.assertEqual(resp1.get("display_name"), "")
+            self.assertEqual(resp1.get("profile_id"), "")
+
+            # 2. Add an enabled profile to the store
+            p = PeekProfile(
+                profile_id="profile_status_test_1",
+                display_name="Charlie Brown",
+                enabled=True,
+                templates=[]
+            )
+            store.save_profile(p)
+
+            # 3. Query status again
+            resp2 = self.client.request_status(timeout_seconds=2.0)
+            self.assertIsNotNone(resp2)
+            self.assertEqual(resp2.get("type"), MSG_STATUS_RESPONSE)
+            self.assertTrue(resp2.get("has_enrolled_profile"))
+            self.assertEqual(resp2.get("display_name"), "Charlie Brown")
+            self.assertEqual(resp2.get("profile_id"), "profile_status_test_1")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

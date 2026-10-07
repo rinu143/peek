@@ -18,6 +18,7 @@ namespace PeekSetup.Services
         private CancellationTokenSource? _cts;
         private Task? _readTask;
         private readonly SemaphoreSlim _writeLock = new(1, 1);
+        private TaskCompletionSource<StatusResponseData?>? _statusTcs;
         private int _isDisposed;
 
         public bool IsConnected => _pipeStream?.IsConnected == true;
@@ -56,6 +57,32 @@ namespace PeekSetup.Services
             {
                 await DisconnectAsync();
                 throw new EngineUnavailableException("Peek engine isn't running — start it and try again.", ex);
+            }
+        }
+
+        public async Task<StatusResponseData?> RequestStatusAsync(int timeoutMs = 2000, CancellationToken ct = default)
+        {
+            if (!IsConnected || _writer == null)
+            {
+                throw new InvalidOperationException("Not connected to Peek Enrollment Named Pipe.");
+            }
+
+            var tcs = new TaskCompletionSource<StatusResponseData?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _statusTcs = tcs;
+
+            using var timeoutCts = new CancellationTokenSource(timeoutMs);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            using var reg = linkedCts.Token.Register(() => tcs.TrySetResult(null));
+
+            try
+            {
+                string message = EnrollmentProtocol.CreateStatusRequest();
+                await SendLineAsync(message, linkedCts.Token).ConfigureAwait(false);
+                return await tcs.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                _statusTcs = null;
             }
         }
 
@@ -178,6 +205,10 @@ namespace PeekSetup.Services
                     case EnrollmentProtocol.MsgError:
                         HandleError(root);
                         break;
+
+                    case EnrollmentProtocol.MsgStatusResponse:
+                        HandleStatusResponse(root);
+                        break;
                 }
             }
             catch
@@ -272,8 +303,19 @@ namespace PeekSetup.Services
             ErrorOccurred?.Invoke(this, new EnrollmentErrorEventArgs(reasonCode, detail));
         }
 
+        private void HandleStatusResponse(JsonElement root)
+        {
+            bool hasEnrolled = root.TryGetProperty("has_enrolled_profile", out var p) && p.GetBoolean();
+            string displayName = root.TryGetProperty("display_name", out p) ? p.GetString() ?? "" : "";
+            string profileId = root.TryGetProperty("profile_id", out p) ? p.GetString() ?? "" : "";
+
+            var data = new StatusResponseData(hasEnrolled, displayName, profileId);
+            _statusTcs?.TrySetResult(data);
+        }
+
         public async Task DisconnectAsync()
         {
+            _statusTcs?.TrySetResult(null);
             if (_cts != null)
             {
                 _cts.Cancel();

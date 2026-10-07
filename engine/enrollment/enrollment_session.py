@@ -252,6 +252,29 @@ class EnrollmentSession:
         if not self.final_templates:
             raise ValueError("No templates enrolled to create a profile.")
 
+        # Active-profile replacement semantics (single-user operation):
+        # Look up existing enabled profiles and set enabled=False on all of them
+        # (persisting the change) before saving the new profile as enabled=True.
+        # Exactly one profile should be enabled at a time under normal single-user operation.
+        #
+        # NOTE ON RECOVERABILITY & FUTURE WORK:
+        # We do not delete old profiles outright — we only disable them — so previous
+        # profiles remain on disk and recoverable if needed. Multi-profile/multi-user
+        # profile switching is a PROPOSED future feature, not implemented in this pass.
+        try:
+            existing_profiles = self.profile_store.list_profiles()
+            for prev_profile in existing_profiles:
+                if prev_profile.enabled:
+                    prev_profile.enabled = False
+                    self.profile_store.save_profile(prev_profile)
+                    logger.info(
+                        "Disabled previous active profile '%s' (%s) for single-user replacement.",
+                        prev_profile.display_name,
+                        prev_profile.profile_id,
+                    )
+        except Exception as ex:
+            logger.warning("Error disabling previous profiles during re-enrollment: %s", ex)
+
         pid = profile_id or f"profile_{int(time.time())}"
         profile = PeekProfile(
             profile_id=pid,

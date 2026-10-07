@@ -25,6 +25,8 @@ from engine.ipc.enrollment_protocol import (
     MSG_ENROLLMENT_FAILED,
     MSG_ERROR,
     MSG_PONG,
+    MSG_STATUS_REQUEST,
+    MSG_STATUS_RESPONSE,
     REASON_CANCELLED,
     REASON_CAMERA_ERROR,
     REASON_CAMERA_UNAVAILABLE,
@@ -39,6 +41,7 @@ from engine.ipc.enrollment_protocol import (
     make_start_enrollment,
     make_cancel_enrollment,
     make_ping,
+    make_status_request,
     make_enrollment_ready,
     make_preview_frame,
     make_pose_complete,
@@ -46,6 +49,7 @@ from engine.ipc.enrollment_protocol import (
     make_enrollment_failed,
     make_error,
     make_pong,
+    make_status_response,
 )
 
 
@@ -70,6 +74,9 @@ class TestEnrollmentProtocol(unittest.TestCase):
             make_enrollment_failed(reason_code=REASON_CANCELLED, detail="User aborted"),
             make_error(reason_code=REASON_CAMERA_ERROR, detail="Device busy"),
             make_pong(),
+            make_status_request(),
+            make_status_response(has_enrolled_profile=True, display_name="Test User", profile_id="prof_123"),
+            make_status_response(has_enrolled_profile=False),
         ]
 
         for msg in messages:
@@ -77,6 +84,36 @@ class TestEnrollmentProtocol(unittest.TestCase):
             self.assertEqual(msg["protocol_version"], PROTOCOL_VERSION)
             self.assertIn("type", msg)
             self.assertIsInstance(msg["type"], str)
+
+    def test_status_request_and_response_schema(self):
+        """Validates that status request and response messages serialize and deserialize correctly."""
+        req = make_status_request()
+        self.assertEqual(req["type"], MSG_STATUS_REQUEST)
+        req_parsed = parse_message(serialize_message(req))
+        self.assertEqual(req_parsed["type"], MSG_STATUS_REQUEST)
+
+        # Has enrolled profile
+        resp_true = make_status_response(
+            has_enrolled_profile=True,
+            display_name="Alice Smith",
+            profile_id="profile_9999"
+        )
+        self.assertEqual(resp_true["type"], MSG_STATUS_RESPONSE)
+        self.assertTrue(resp_true["has_enrolled_profile"])
+        self.assertEqual(resp_true["display_name"], "Alice Smith")
+        self.assertEqual(resp_true["profile_id"], "profile_9999")
+        parsed_true = parse_message(serialize_message(resp_true))
+        self.assertTrue(parsed_true["has_enrolled_profile"])
+        self.assertEqual(parsed_true["display_name"], "Alice Smith")
+        self.assertEqual(parsed_true["profile_id"], "profile_9999")
+
+        # No enrolled profile
+        resp_false = make_status_response(has_enrolled_profile=False)
+        self.assertFalse(resp_false["has_enrolled_profile"])
+        self.assertEqual(resp_false["display_name"], "")
+        self.assertEqual(resp_false["profile_id"], "")
+        parsed_false = parse_message(serialize_message(resp_false))
+        self.assertFalse(parsed_false["has_enrolled_profile"])
 
     def test_serialization_round_trip(self):
         """Validates that messages serialize to UTF-8 JSON lines and parse back identically."""

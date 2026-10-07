@@ -98,6 +98,7 @@ def main():
         coordinator=coordinator,
         sddl=DEFAULT_SDDL,
         profile_store=profile_store,
+        face_engine=engine,
     )
 
     # Register OS signal handlers for graceful shutdown

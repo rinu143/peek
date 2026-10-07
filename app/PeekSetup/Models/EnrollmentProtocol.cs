@@ -12,6 +12,7 @@ namespace PeekSetup.Models
         public const string MsgStartEnrollment = "START_ENROLLMENT";
         public const string MsgCancelEnrollment = "CANCEL_ENROLLMENT";
         public const string MsgPing = "PING";
+        public const string MsgStatusRequest = "STATUS_REQUEST";
 
         // Server -> Client
         public const string MsgEnrollmentReady = "ENROLLMENT_READY";
@@ -21,6 +22,7 @@ namespace PeekSetup.Models
         public const string MsgEnrollmentFailed = "ENROLLMENT_FAILED";
         public const string MsgError = "ERROR";
         public const string MsgPong = "PONG";
+        public const string MsgStatusResponse = "STATUS_RESPONSE";
 
         // Reason Codes
         public const string ReasonCancelled = "CANCELLED";
@@ -110,6 +112,17 @@ namespace PeekSetup.Models
             };
             return JsonSerializer.Serialize(msg, JsonOptions);
         }
+
+        public static string CreateStatusRequest()
+        {
+            var msg = new
+            {
+                protocol_version = ProtocolVersion,
+                type = MsgStatusRequest,
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+            };
+            return JsonSerializer.Serialize(msg, JsonOptions);
+        }
     }
 
     public record PreviewFrameData(
@@ -142,5 +155,11 @@ namespace PeekSetup.Models
     public record EnrollmentErrorData(
         string ReasonCode,
         string Detail
+    );
+
+    public record StatusResponseData(
+        bool HasEnrolledProfile,
+        string DisplayName,
+        string ProfileId
     );
 }

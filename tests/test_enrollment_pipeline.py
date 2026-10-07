@@ -176,5 +176,82 @@ class TestEnrollmentPipeline(unittest.TestCase):
         self.assertEqual(loaded.templates[0].pose_label, "CENTER")
         self.assertEqual(loaded.templates[1].pose_label, "LEFT")
 
+    def test_re_enrollment_replaces_and_disables_previous_profile(self):
+        """
+        Validates active-profile replacement semantics:
+        Enrolling a second profile sets any existing profile's enabled flag to False,
+        persists that change, and ensures exactly one profile is enabled afterward.
+        Old profiles are NOT deleted outright (retaining recoverability).
+        """
+        from storage.template_store import PeekTemplate
+
+        aligner = FaceAligner()
+        embedder = ArcFaceEmbedder(self.emb_path)
+
+        dummy_embedding = np.random.randn(512).astype(np.float32)
+        dummy_embedding /= np.linalg.norm(dummy_embedding)
+
+        # 1. Enroll First Profile
+        session1 = EnrollmentSession(
+            detector=None,
+            aligner=aligner,
+            embedder=embedder,
+            profile_store=self.profile_store,
+        )
+        session1.final_templates = [
+            PeekTemplate(
+                template_id=f"tmpl1_{p.value.lower()}",
+                embedding=dummy_embedding.tolist(),
+                pose_label=p.value,
+                quality_score=0.95
+            )
+            for p in session1.poses
+        ]
+        profile1 = session1.finalize_and_save_profile("User One", profile_id="profile_first")
+        self.assertTrue(profile1.enabled)
+
+        # Verify profile 1 is enabled on disk
+        stored_p1 = self.profile_store.load_profile("profile_first")
+        self.assertIsNotNone(stored_p1)
+        self.assertTrue(stored_p1.enabled)
+
+        # 2. Enroll Second Profile (Re-enrollment)
+        session2 = EnrollmentSession(
+            detector=None,
+            aligner=aligner,
+            embedder=embedder,
+            profile_store=self.profile_store,
+        )
+        session2.final_templates = [
+            PeekTemplate(
+                template_id=f"tmpl2_{p.value.lower()}",
+                embedding=dummy_embedding.tolist(),
+                pose_label=p.value,
+                quality_score=0.95
+            )
+            for p in session2.poses
+        ]
+        profile2 = session2.finalize_and_save_profile("User Two", profile_id="profile_second")
+        self.assertTrue(profile2.enabled)
+
+        # Verify profile 1 was disabled, NOT deleted
+        reloaded_p1 = self.profile_store.load_profile("profile_first")
+        self.assertIsNotNone(reloaded_p1, "Old profile was deleted; must be retained in disabled state")
+        self.assertFalse(reloaded_p1.enabled, "Old profile was not disabled")
+
+        # Verify profile 2 is enabled
+        reloaded_p2 = self.profile_store.load_profile("profile_second")
+        self.assertIsNotNone(reloaded_p2)
+        self.assertTrue(reloaded_p2.enabled)
+
+        # Verify list_profiles has both profiles, but exactly ONE is enabled
+        all_profiles = self.profile_store.list_profiles()
+        self.assertEqual(len(all_profiles), 2)
+        enabled_profiles = [p for p in all_profiles if p.enabled]
+        self.assertEqual(len(enabled_profiles), 1)
+        self.assertEqual(enabled_profiles[0].profile_id, "profile_second")
+        self.assertEqual(enabled_profiles[0].display_name, "User Two")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,7 @@ PROTOCOL_VERSION = "1.0"
 MSG_START_ENROLLMENT = "START_ENROLLMENT"
 MSG_CANCEL_ENROLLMENT = "CANCEL_ENROLLMENT"
 MSG_PING = "PING"
+MSG_STATUS_REQUEST = "STATUS_REQUEST"
 
 # Server -> Client Message Types
 MSG_ENROLLMENT_READY = "ENROLLMENT_READY"
@@ -29,12 +30,14 @@ MSG_ENROLLMENT_COMPLETE = "ENROLLMENT_COMPLETE"
 MSG_ENROLLMENT_FAILED = "ENROLLMENT_FAILED"
 MSG_ERROR = "ERROR"
 MSG_PONG = "PONG"
+MSG_STATUS_RESPONSE = "STATUS_RESPONSE"
 
 # Valid Message Sets
 VALID_CLIENT_MESSAGES = {
     MSG_START_ENROLLMENT,
     MSG_CANCEL_ENROLLMENT,
     MSG_PING,
+    MSG_STATUS_REQUEST,
 }
 
 VALID_SERVER_MESSAGES = {
@@ -45,6 +48,7 @@ VALID_SERVER_MESSAGES = {
     MSG_ENROLLMENT_FAILED,
     MSG_ERROR,
     MSG_PONG,
+    MSG_STATUS_RESPONSE,
 }
 
 # Machine-Readable Reason Codes
@@ -153,6 +157,14 @@ def make_ping() -> Dict[str, Any]:
     }
 
 
+def make_status_request() -> Dict[str, Any]:
+    return {
+        "protocol_version": PROTOCOL_VERSION,
+        "type": MSG_STATUS_REQUEST,
+        "timestamp": time.time(),
+    }
+
+
 # --- Helper Constructors for Server Messages ---
 
 def make_enrollment_ready(message: str = "Enrollment engine ready") -> Dict[str, Any]:
@@ -246,5 +258,20 @@ def make_pong() -> Dict[str, Any]:
     return {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_PONG,
+        "timestamp": time.time(),
+    }
+
+
+def make_status_response(
+    has_enrolled_profile: bool,
+    display_name: str = "",
+    profile_id: str = "",
+) -> Dict[str, Any]:
+    return {
+        "protocol_version": PROTOCOL_VERSION,
+        "type": MSG_STATUS_RESPONSE,
+        "has_enrolled_profile": bool(has_enrolled_profile),
+        "display_name": str(display_name) if has_enrolled_profile and display_name else "",
+        "profile_id": str(profile_id) if has_enrolled_profile and profile_id else "",
         "timestamp": time.time(),
     }

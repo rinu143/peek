@@ -17,7 +17,8 @@ namespace PeekSetup.ViewModels
         Welcome = 1,
         Enrollment = 2,
         PasswordLink = 3,
-        Done = 4
+        Done = 4,
+        AlreadyEnrolled = 5
     }
 
     public enum EnrollmentViewMode
@@ -55,6 +56,11 @@ namespace PeekSetup.ViewModels
         private string _passwordErrorMessage = string.Empty;
         private bool _isPasswordLinked;
 
+        // Existing profile state
+        private string _existingProfileName = string.Empty;
+        private string _existingProfileId = string.Empty;
+        private bool _isCheckingStatus;
+
         public SetupStep CurrentStep
         {
             get => _currentStep;
@@ -68,16 +74,61 @@ namespace PeekSetup.ViewModels
                     OnPropertyChanged(nameof(IsEnrollmentStep));
                     OnPropertyChanged(nameof(IsPasswordLinkStep));
                     OnPropertyChanged(nameof(IsDoneStep));
+                    OnPropertyChanged(nameof(IsAlreadyEnrolledStep));
                     OnPropertyChanged(nameof(StepNumberText));
                 }
             }
         }
 
-        public bool IsWelcomeStep => CurrentStep == SetupStep.Welcome;
+        public bool IsWelcomeStep => CurrentStep == SetupStep.Welcome && !IsCheckingStatus;
         public bool IsEnrollmentStep => CurrentStep == SetupStep.Enrollment;
         public bool IsPasswordLinkStep => CurrentStep == SetupStep.PasswordLink;
         public bool IsDoneStep => CurrentStep == SetupStep.Done;
-        public string StepNumberText => $"Step {(int)CurrentStep} of 4";
+        public bool IsAlreadyEnrolledStep => CurrentStep == SetupStep.AlreadyEnrolled;
+        public string StepNumberText => CurrentStep == SetupStep.AlreadyEnrolled ? "Active Profile" : $"Step {(int)CurrentStep} of 4";
+
+        public string ExistingProfileName
+        {
+            get => _existingProfileName;
+            set
+            {
+                if (_existingProfileName != value)
+                {
+                    _existingProfileName = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(AlreadyEnrolledTitle));
+                }
+            }
+        }
+
+        public string ExistingProfileId
+        {
+            get => _existingProfileId;
+            set
+            {
+                if (_existingProfileId != value)
+                {
+                    _existingProfileId = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public bool IsCheckingStatus
+        {
+            get => _isCheckingStatus;
+            set
+            {
+                if (_isCheckingStatus != value)
+                {
+                    _isCheckingStatus = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(IsWelcomeStep));
+                }
+            }
+        }
+
+        public string AlreadyEnrolledTitle => $"You're already set up as {ExistingProfileName}";
 
         public string DisplayName
         {
@@ -326,6 +377,14 @@ namespace PeekSetup.ViewModels
         public ICommand BackToWelcomeCommand { get; }
         public ICommand SkipPasswordCommand { get; }
         public ICommand FinishCommand { get; }
+        public ICommand ReEnrollCommand { get; }
+        public ICommand GoToPasswordLinkCommand { get; }
+        public ICommand ExitCommand { get; }
+
+        public MainViewModel()
+            : this(null, null)
+        {
+        }
 
         public MainViewModel(IEnrollmentPipeClient? pipeClient = null, IPasswordLinker? passwordLinker = null)
         {
@@ -348,6 +407,9 @@ namespace PeekSetup.ViewModels
             BackToWelcomeCommand = new RelayCommand(GoBackToWelcome);
             SkipPasswordCommand = new RelayCommand(SkipPasswordLinking);
             FinishCommand = new RelayCommand(FinishSetup);
+            ReEnrollCommand = new AsyncRelayCommand(StartEnrollmentFlowAsync);
+            GoToPasswordLinkCommand = new RelayCommand(GoToPasswordLink);
+            ExitCommand = new RelayCommand(FinishSetup);
         }
 
         private void InitializePoses()
@@ -477,6 +539,67 @@ namespace PeekSetup.ViewModels
             Application.Current?.Shutdown();
         }
 
+        public void GoToPasswordLink()
+        {
+            if (!string.IsNullOrEmpty(ExistingProfileId))
+            {
+                EnrolledProfileId = ExistingProfileId;
+                EnrolledDisplayName = ExistingProfileName;
+            }
+            CurrentStep = SetupStep.PasswordLink;
+        }
+
+        public async Task CheckExistingProfileAsync(CancellationToken ct = default)
+        {
+            RunOnUi(() => IsCheckingStatus = true);
+            try
+            {
+                if (!_pipeClient.IsConnected)
+                {
+                    await _pipeClient.ConnectAsync(timeoutMs: 1500, ct: ct).ConfigureAwait(false);
+                }
+
+                var status = await _pipeClient.RequestStatusAsync(timeoutMs: 1500, ct: ct).ConfigureAwait(false);
+                if (status != null && status.HasEnrolledProfile)
+                {
+                    string name = !string.IsNullOrWhiteSpace(status.DisplayName) ? status.DisplayName : "Primary User";
+                    string id = status.ProfileId;
+                    RunOnUi(() =>
+                    {
+                        ExistingProfileName = name;
+                        ExistingProfileId = id;
+                        DisplayName = name;
+                        EnrolledDisplayName = name;
+                        EnrolledProfileId = id;
+                        CurrentStep = SetupStep.AlreadyEnrolled;
+                    });
+                }
+                else
+                {
+                    RunOnUi(() => CurrentStep = SetupStep.Welcome);
+                }
+            }
+            catch (Exception)
+            {
+                RunOnUi(() => CurrentStep = SetupStep.Welcome);
+            }
+            finally
+            {
+                try
+                {
+                    if (CurrentStep != SetupStep.Enrollment)
+                    {
+                        await _pipeClient.DisconnectAsync().ConfigureAwait(false);
+                    }
+                }
+                catch
+                {
+                    // Ignore disconnect error on startup check
+                }
+                RunOnUi(() => IsCheckingStatus = false);
+            }
+        }
+
         // IPC Event Handlers
         private void OnPreviewFrameReceived(object? sender, PreviewFrameEventArgs e)
         {
@@ -596,7 +719,7 @@ namespace PeekSetup.ViewModels
             var app = Application.Current;
             if (app != null && app.Dispatcher != null && !app.Dispatcher.CheckAccess())
             {
-                app.Dispatcher.InvokeAsync(action);
+                app.Dispatcher.Invoke(action);
             }
             else
             {

@@ -2,6 +2,7 @@ using System;
 using System.Security;
 using System.Threading;
 using System.Threading.Tasks;
+using PeekSetup.Models;
 using PeekSetup.Services;
 using PeekSetup.ViewModels;
 using Xunit;
@@ -13,6 +14,9 @@ namespace PeekSetup.Tests
         public bool IsConnected { get; set; }
         public bool ThrowOnConnect { get; set; }
         public bool ThrowGenericOnConnect { get; set; }
+        public StatusResponseData? MockStatusResponse { get; set; }
+        public bool ThrowOnStatusRequest { get; set; }
+        public bool StatusRequestCalled { get; private set; }
         public string? LastStartedDisplayName { get; private set; }
         public bool CancelCalled { get; private set; }
         public bool DisconnectCalled { get; private set; }
@@ -37,6 +41,16 @@ namespace PeekSetup.Tests
             }
             IsConnected = true;
             return Task.CompletedTask;
+        }
+
+        public Task<StatusResponseData?> RequestStatusAsync(int timeoutMs = 2000, CancellationToken ct = default)
+        {
+            StatusRequestCalled = true;
+            if (ThrowOnStatusRequest)
+            {
+                throw new EngineUnavailableException("Peek engine isn't running — start it and try again.");
+            }
+            return Task.FromResult(MockStatusResponse);
         }
 
         public Task StartEnrollmentAsync(string displayName, CancellationToken ct = default)
@@ -330,6 +344,115 @@ namespace PeekSetup.Tests
 
             Assert.Equal(EnrollmentViewMode.EngineUnavailable, vm.EnrollmentMode);
             Assert.Contains("lost", vm.EngineErrorMessage);
+        }
+
+        [Fact]
+        public async Task CheckExistingProfile_WhenProfileExists_ShowsAlreadySetUpScreen()
+        {
+            var mockPipe = new MockEnrollmentPipeClient
+            {
+                MockStatusResponse = new StatusResponseData(true, "Alice Cooper", "profile_alice_123")
+            };
+            var vm = new MainViewModel(mockPipe, new MockPasswordLinker());
+
+            await vm.CheckExistingProfileAsync();
+
+            Assert.True(mockPipe.StatusRequestCalled);
+            Assert.Equal(SetupStep.AlreadyEnrolled, vm.CurrentStep);
+            Assert.True(vm.IsAlreadyEnrolledStep);
+            Assert.False(vm.IsWelcomeStep);
+            Assert.Equal("Alice Cooper", vm.ExistingProfileName);
+            Assert.Equal("profile_alice_123", vm.ExistingProfileId);
+            Assert.Equal("You're already set up as Alice Cooper", vm.AlreadyEnrolledTitle);
+        }
+
+        [Fact]
+        public async Task CheckExistingProfile_WhenNoProfileExists_FallsThroughToWelcome()
+        {
+            var mockPipe = new MockEnrollmentPipeClient
+            {
+                MockStatusResponse = new StatusResponseData(false, "", "")
+            };
+            var vm = new MainViewModel(mockPipe, new MockPasswordLinker());
+
+            await vm.CheckExistingProfileAsync();
+
+            Assert.True(mockPipe.StatusRequestCalled);
+            Assert.Equal(SetupStep.Welcome, vm.CurrentStep);
+            Assert.True(vm.IsWelcomeStep);
+            Assert.False(vm.IsAlreadyEnrolledStep);
+        }
+
+        [Fact]
+        public async Task CheckExistingProfile_WhenEngineUnreachableOnConnect_FallsThroughToWelcome()
+        {
+            var mockPipe = new MockEnrollmentPipeClient
+            {
+                ThrowOnConnect = true
+            };
+            var vm = new MainViewModel(mockPipe, new MockPasswordLinker());
+
+            await vm.CheckExistingProfileAsync();
+
+            Assert.Equal(SetupStep.Welcome, vm.CurrentStep);
+            Assert.True(vm.IsWelcomeStep);
+            Assert.False(vm.IsAlreadyEnrolledStep);
+        }
+
+        [Fact]
+        public async Task CheckExistingProfile_WhenEngineFailsOnStatusRequest_FallsThroughToWelcome()
+        {
+            var mockPipe = new MockEnrollmentPipeClient
+            {
+                ThrowOnStatusRequest = true
+            };
+            var vm = new MainViewModel(mockPipe, new MockPasswordLinker());
+
+            await vm.CheckExistingProfileAsync();
+
+            Assert.Equal(SetupStep.Welcome, vm.CurrentStep);
+            Assert.True(vm.IsWelcomeStep);
+            Assert.False(vm.IsAlreadyEnrolledStep);
+        }
+
+        [Fact]
+        public async Task AlreadyEnrolledScreen_ReEnrollCommand_TransitionsToEnrollmentFlow()
+        {
+            var mockPipe = new MockEnrollmentPipeClient
+            {
+                MockStatusResponse = new StatusResponseData(true, "Alice", "prof_123")
+            };
+            var vm = new MainViewModel(mockPipe, new MockPasswordLinker());
+
+            await vm.CheckExistingProfileAsync();
+            Assert.Equal(SetupStep.AlreadyEnrolled, vm.CurrentStep);
+
+            // Re-enroll replaces current profile using standard enrollment flow
+            vm.ReEnrollCommand.Execute(null);
+
+            Assert.Equal(SetupStep.Enrollment, vm.CurrentStep);
+            Assert.True(vm.IsEnrollmentStep);
+        }
+
+        [Fact]
+        public async Task AlreadyEnrolledScreen_GoToPasswordLinkCommand_TransitionsWithExistingProfile()
+        {
+            var mockPipe = new MockEnrollmentPipeClient
+            {
+                MockStatusResponse = new StatusResponseData(true, "Alice", "prof_123")
+            };
+            var vm = new MainViewModel(mockPipe, new MockPasswordLinker());
+
+            await vm.CheckExistingProfileAsync();
+            Assert.Equal(SetupStep.AlreadyEnrolled, vm.CurrentStep);
+
+            // Link/replace password transitions to PasswordLink step with existing profile ID
+            vm.GoToPasswordLinkCommand.Execute(null);
+
+            Assert.Equal(SetupStep.PasswordLink, vm.CurrentStep);
+            Assert.True(vm.IsPasswordLinkStep);
+            Assert.Equal("prof_123", vm.EnrolledProfileId);
+            Assert.Equal("Alice", vm.EnrolledDisplayName);
         }
     }
 }

@@ -24,11 +24,14 @@ from engine.ipc.enrollment_protocol import (
     MSG_ENROLLMENT_FAILED,
     MSG_ERROR,
     MSG_PONG,
+    MSG_STATUS_REQUEST,
+    MSG_STATUS_RESPONSE,
     serialize_message,
     parse_message,
     make_start_enrollment,
     make_cancel_enrollment,
     make_ping,
+    make_status_request,
 )
 
 logger = logging.getLogger("Peek.EnrollmentPipeClient")
@@ -161,6 +164,12 @@ class EnrollmentPipeClient:
     def ping(self) -> bool:
         """Convenience method to send PING."""
         return self.send_message(make_ping())
+
+    def request_status(self, timeout_seconds: float = 3.0) -> Optional[Dict[str, Any]]:
+        """Convenience method to send STATUS_REQUEST and wait for STATUS_RESPONSE."""
+        if not self.send_message(make_status_request()):
+            return None
+        return self.read_message(timeout_seconds=timeout_seconds)
 
     def stream_enrollment(
         self,

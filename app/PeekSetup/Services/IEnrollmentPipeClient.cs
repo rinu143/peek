@@ -110,6 +110,7 @@ namespace PeekSetup.Services
         event EventHandler? Disconnected;
 
         Task ConnectAsync(string pipeName = "PeekEnrollment", int timeoutMs = 4000, CancellationToken ct = default);
+        Task<StatusResponseData?> RequestStatusAsync(int timeoutMs = 2000, CancellationToken ct = default);
         Task StartEnrollmentAsync(string displayName, CancellationToken ct = default);
         Task CancelEnrollmentAsync(string reason = "USER_CANCELLED", CancellationToken ct = default);
         Task DisconnectAsync();

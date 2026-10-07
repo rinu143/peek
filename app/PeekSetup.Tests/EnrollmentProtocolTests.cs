@@ -50,6 +50,18 @@ namespace PeekSetup.Tests
         }
 
         [Fact]
+        public void CreateStatusRequest_ProducesValidJson()
+        {
+            string json = EnrollmentProtocol.CreateStatusRequest();
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            Assert.Equal("1.0", root.GetProperty("protocol_version").GetString());
+            Assert.Equal(EnrollmentProtocol.MsgStatusRequest, root.GetProperty("type").GetString());
+            Assert.True(root.TryGetProperty("timestamp", out _));
+        }
+
+        [Fact]
         public void OrderedPoses_ContainsExactlyNineDistinctPoses()
         {
             Assert.Equal(9, EnrollmentProtocol.OrderedPoses.Length);

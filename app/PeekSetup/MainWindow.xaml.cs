@@ -13,6 +13,13 @@ namespace PeekSetup
         public MainWindow()
         {
             InitializeComponent();
+            Loaded += async (_, _) =>
+            {
+                if (DataContext is MainViewModel vm)
+                {
+                    await vm.CheckExistingProfileAsync();
+                }
+            };
         }
 
         private async void OnLinkPasswordClicked(object sender, RoutedEventArgs e)
