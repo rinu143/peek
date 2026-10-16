@@ -265,6 +265,7 @@ HRESULT PeekCredential::GetFieldState(
     switch (dwFieldID)
     {
     case PFI_LOGO:
+    case PFI_LABEL:
     case PFI_DISPLAY_NAME:
         *pcpfs = CPFS_DISPLAY_IN_BOTH;
         break;
@@ -291,6 +292,10 @@ HRESULT PeekCredential::GetStringValue(DWORD dwFieldID, PWSTR* ppsz)
 
     switch (dwFieldID)
     {
+    case PFI_LABEL:
+        hr = CoTaskMemAllocString(L"Peek - Face Unlock", ppsz);
+        break;
+
     case PFI_DISPLAY_NAME:
         hr = CoTaskMemAllocString(m_displayName.c_str(), ppsz);
         break;

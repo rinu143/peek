@@ -69,12 +69,14 @@ static bool ExtractJsonBool(const std::string& json, const std::string& key, boo
 
 static std::wstring GetConfiguredPipeName(const std::wstring& defaultName = PEEK_PIPE_NAME)
 {
+#ifdef PEEK_TEST_BUILD
     wchar_t szEnv[256] = {};
     DWORD dwLen = GetEnvironmentVariableW(L"PEEK_PIPE_NAME_OVERRIDE", szEnv, ARRAYSIZE(szEnv));
     if (dwLen > 0 && dwLen < ARRAYSIZE(szEnv))
     {
         return szEnv;
     }
+#endif
     return defaultName;
 }
 

@@ -384,9 +384,10 @@ int main()
     {
         PeekCredential credential;
         CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR rgcpfd[PFI_COUNT] = {
-            { PFI_LOGO, CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo") },
-            { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User") },
-            { PFI_STATUS_TEXT, CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status") },
+            { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
+            { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Peek - Face Unlock"), CPFG_CREDENTIAL_PROVIDER_LABEL },
+            { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User"),   GUID_NULL },
+            { PFI_STATUS_TEXT,  CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status"), GUID_NULL },
         };
         credential.Initialize(CPUS_UNLOCK_WORKSTATION, rgcpfd, PFI_COUNT);
 
@@ -428,9 +429,10 @@ int main()
     {
         PeekCredential credential;
         CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR rgcpfd[PFI_COUNT] = {
-            { PFI_LOGO, CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo") },
-            { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User") },
-            { PFI_STATUS_TEXT, CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status") },
+            { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
+            { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Peek - Face Unlock"), CPFG_CREDENTIAL_PROVIDER_LABEL },
+            { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User"),   GUID_NULL },
+            { PFI_STATUS_TEXT,  CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status"), GUID_NULL },
         };
         credential.Initialize(CPUS_UNLOCK_WORKSTATION, rgcpfd, PFI_COUNT);
 
@@ -470,21 +472,21 @@ int main()
     }
 
     // -------------------------------------------------------------
-    // Test 9: SetSerialization workstation unlock return value
+    // Test 9: SetSerialization returns E_NOTIMPL (standard sample behavior)
     // -------------------------------------------------------------
-    std::wcout << L"[Test 9] Testing SetSerialization returns S_OK for unlock scenario...\n";
+    std::wcout << L"[Test 9] Testing SetSerialization returns E_NOTIMPL...\n";
     {
         PeekProvider provider;
         provider.SetUsageScenario(CPUS_UNLOCK_WORKSTATION, 0);
         CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION cpcs = {};
         HRESULT hr = provider.SetSerialization(&cpcs);
-        if (hr == S_OK)
+        if (hr == E_NOTIMPL)
         {
-            std::wcout << L"  PASS: SetSerialization returns S_OK (LogonUI will not drop provider on unlock)\n";
+            std::wcout << L"  PASS: SetSerialization returns E_NOTIMPL (standard sample behavior)\n";
         }
         else
         {
-            std::wcout << L"  FAIL: SetSerialization did not return S_OK (hr=" << hr << L")\n";
+            std::wcout << L"  FAIL: SetSerialization did not return E_NOTIMPL (hr=" << hr << L")\n";
             failed++;
         }
     }
@@ -496,9 +498,10 @@ int main()
     {
         PeekCredential credWithSid;
         CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR rgcpfd[PFI_COUNT] = {
-            { PFI_LOGO, CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo") },
-            { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User") },
-            { PFI_STATUS_TEXT, CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status") },
+            { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
+            { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Peek - Face Unlock"), CPFG_CREDENTIAL_PROVIDER_LABEL },
+            { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User"),   GUID_NULL },
+            { PFI_STATUS_TEXT,  CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status"), GUID_NULL },
         };
         credWithSid.Initialize(CPUS_UNLOCK_WORKSTATION, rgcpfd, PFI_COUNT, L"TestUser", L"TestDomain", L"S-1-5-21-12345678-1001");
 
@@ -526,38 +529,151 @@ int main()
     }
 
     // -------------------------------------------------------------
-    // Test 11: Tile field states for deselected tile visibility
+    // Test 11: Tile field states and string values (including PFI_LABEL)
     // -------------------------------------------------------------
-    std::wcout << L"[Test 11] Testing GetFieldState for deselected tile visibility (CPFS_DISPLAY_IN_BOTH)...\n";
+    std::wcout << L"[Test 11] Testing GetFieldState and GetStringValue for PFI_LABEL...\n";
     {
         PeekCredential credential;
         CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR rgcpfd[PFI_COUNT] = {
-            { PFI_LOGO, CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo") },
-            { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User") },
-            { PFI_STATUS_TEXT, CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status") },
+            { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
+            { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Peek - Face Unlock"), CPFG_CREDENTIAL_PROVIDER_LABEL },
+            { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User"),   GUID_NULL },
+            { PFI_STATUS_TEXT,  CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status"), GUID_NULL },
         };
         credential.Initialize(CPUS_UNLOCK_WORKSTATION, rgcpfd, PFI_COUNT);
 
         CREDENTIAL_PROVIDER_FIELD_STATE stateLogo = CPFS_HIDDEN;
+        CREDENTIAL_PROVIDER_FIELD_STATE stateLabel = CPFS_HIDDEN;
         CREDENTIAL_PROVIDER_FIELD_STATE stateName = CPFS_HIDDEN;
         CREDENTIAL_PROVIDER_FIELD_STATE stateStatus = CPFS_HIDDEN;
         CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE istate;
 
         credential.GetFieldState(PFI_LOGO, &stateLogo, &istate);
+        credential.GetFieldState(PFI_LABEL, &stateLabel, &istate);
         credential.GetFieldState(PFI_DISPLAY_NAME, &stateName, &istate);
         credential.GetFieldState(PFI_STATUS_TEXT, &stateStatus, &istate);
 
+        PWSTR pszLabel = nullptr;
+        credential.GetStringValue(PFI_LABEL, &pszLabel);
+        std::wstring labelStr = pszLabel ? pszLabel : L"";
+        if (pszLabel) CoTaskMemFree(pszLabel);
+
         if (stateLogo == CPFS_DISPLAY_IN_BOTH &&
+            stateLabel == CPFS_DISPLAY_IN_BOTH &&
             stateName == CPFS_DISPLAY_IN_BOTH &&
-            stateStatus == CPFS_DISPLAY_IN_SELECTED_TILE)
+            stateStatus == CPFS_DISPLAY_IN_SELECTED_TILE &&
+            labelStr == L"Peek - Face Unlock")
         {
-            std::wcout << L"  PASS: Logo and DisplayName visible in deselected state (CPFS_DISPLAY_IN_BOTH)\n";
+            std::wcout << L"  PASS: PFI_LABEL is CPFS_DISPLAY_IN_BOTH with text 'Peek - Face Unlock'\n";
         }
         else
         {
-            std::wcout << L"  FAIL: Unexpected field states: Logo=" << stateLogo 
-                       << L", Name=" << stateName << L", Status=" << stateStatus << L"\n";
+            std::wcout << L"  FAIL: Unexpected field states or label string: Logo=" << stateLogo 
+                       << L", Label=" << stateLabel << L", Name=" << stateName 
+                       << L", Status=" << stateStatus << L", Text='" << labelStr << L"'\n";
             failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 12: Field descriptors and GUIDs validation on PeekProvider
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 12] Testing Field descriptors and GUIDs on PeekProvider...\n";
+    {
+        PeekProvider provider;
+        DWORD fieldCount = 0;
+        provider.GetFieldDescriptorCount(&fieldCount);
+
+        CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR* pLogoDesc = nullptr;
+        CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR* pLabelDesc = nullptr;
+        provider.GetFieldDescriptorAt(PFI_LOGO, &pLogoDesc);
+        provider.GetFieldDescriptorAt(PFI_LABEL, &pLabelDesc);
+
+        bool countOk = (fieldCount == 4);
+        bool logoOk = (pLogoDesc != nullptr && 
+                       pLogoDesc->cpft == CPFT_TILE_IMAGE && 
+                       IsEqualGUID(pLogoDesc->guidFieldType, CPFG_CREDENTIAL_PROVIDER_LOGO));
+        bool labelOk = (pLabelDesc != nullptr && 
+                        pLabelDesc->cpft == CPFT_SMALL_TEXT && 
+                        IsEqualGUID(pLabelDesc->guidFieldType, CPFG_CREDENTIAL_PROVIDER_LABEL) &&
+                        std::wstring(pLabelDesc->pszLabel) == L"Peek - Face Unlock");
+
+        if (pLogoDesc)
+        {
+            CoTaskMemFree(pLogoDesc->pszLabel);
+            CoTaskMemFree(pLogoDesc);
+        }
+        if (pLabelDesc)
+        {
+            CoTaskMemFree(pLabelDesc->pszLabel);
+            CoTaskMemFree(pLabelDesc);
+        }
+
+        if (countOk && logoOk && labelOk)
+        {
+            std::wcout << L"  PASS: Field descriptors validated: count=4, CPFG_CREDENTIAL_PROVIDER_LOGO, CPFG_CREDENTIAL_PROVIDER_LABEL\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Field descriptor mismatch: countOk=" << countOk 
+                       << L", logoOk=" << logoOk << L", labelOk=" << labelOk << L"\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 13: Shipped DLL ignores PEEK_PIPE_NAME_OVERRIDE build check
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 13] Testing shipped DLL binary does not contain PEEK_PIPE_NAME_OVERRIDE...\n";
+    {
+        wchar_t szModulePath[MAX_PATH] = {};
+        GetModuleFileNameW(NULL, szModulePath, ARRAYSIZE(szModulePath));
+        std::wstring exeDir = szModulePath;
+        size_t lastSlash = exeDir.find_last_of(L"\\/");
+        if (lastSlash != std::wstring::npos)
+        {
+            exeDir = exeDir.substr(0, lastSlash);
+        }
+
+        std::wstring dllPath = exeDir + L"\\PeekCredentialProvider.dll";
+        HANDLE hDll = CreateFileW(dllPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hDll != INVALID_HANDLE_VALUE)
+        {
+            DWORD dwSize = GetFileSize(hDll, NULL);
+            std::vector<char> buffer(dwSize);
+            DWORD bytesRead = 0;
+            ReadFile(hDll, buffer.data(), dwSize, &bytesRead, NULL);
+            CloseHandle(hDll);
+
+            const wchar_t* target = L"PEEK_PIPE_NAME_OVERRIDE";
+            size_t targetByteLen = wcslen(target) * sizeof(wchar_t);
+
+            bool found = false;
+            if (bytesRead >= targetByteLen)
+            {
+                for (size_t i = 0; i <= bytesRead - targetByteLen; ++i)
+                {
+                    if (memcmp(buffer.data() + i, target, targetByteLen) == 0)
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!found)
+            {
+                std::wcout << L"  PASS: Shipped DLL binary does not contain PEEK_PIPE_NAME_OVERRIDE\n";
+            }
+            else
+            {
+                std::wcout << L"  FAIL: Shipped DLL contains PEEK_PIPE_NAME_OVERRIDE; production build must omit it\n";
+                failed++;
+            }
+        }
+        else
+        {
+            std::wcout << L"  SKIP: Could not locate PeekCredentialProvider.dll at " << dllPath << L" for binary inspection\n";
         }
     }
 

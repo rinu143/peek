@@ -11,6 +11,7 @@
 #include <ntsecapi.h>
 #include <shlwapi.h>
 #include <shlobj.h>
+#include <shlguid.h>
 #include <strsafe.h>
 #include <string>
 #include <vector>
@@ -69,10 +70,11 @@ public:
 // Tile UI Field Identifiers
 enum PEEK_FIELD_ID
 {
-    PFI_LOGO = 0,             // CPFT_TILE_IMAGE: Peek Biometric Logo
-    PFI_DISPLAY_NAME = 1,     // CPFT_LARGE_TEXT: User display name / Peek greeting
-    PFI_STATUS_TEXT = 2,      // CPFT_SMALL_TEXT: Dynamic IPC state updates
-    PFI_COUNT = 3
+    PFI_LOGO = 0,             // CPFT_TILE_IMAGE: Peek Biometric Logo (guidFieldType = CPFG_CREDENTIAL_PROVIDER_LOGO)
+    PFI_LABEL = 1,            // CPFT_SMALL_TEXT: Credential Provider label/title ("Peek - Face Unlock")
+    PFI_DISPLAY_NAME = 2,     // CPFT_LARGE_TEXT: User display name / Peek greeting
+    PFI_STATUS_TEXT = 3,      // CPFT_SMALL_TEXT: Dynamic IPC state updates
+    PFI_COUNT = 4
 };
 
 // Global DLL Module Handle and Reference Counting

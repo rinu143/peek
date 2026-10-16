@@ -50,6 +50,7 @@ target_link_libraries(PeekCredentialProvider PRIVATE
     Gdiplus
     Userenv
     Propsys
+    Shell32
 )
 
 set_target_properties(PeekCredentialProvider PROPERTIES
@@ -68,6 +69,10 @@ add_executable(test_autoselect
     resources.rc
 )
 
+target_compile_definitions(test_autoselect PRIVATE
+    PEEK_TEST_BUILD
+)
+
 target_include_directories(test_autoselect PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
@@ -84,6 +89,7 @@ target_link_libraries(test_autoselect PRIVATE
     Gdiplus
     Userenv
     Propsys
+    Shell32
 )
 
 add_executable(test_secret_vault

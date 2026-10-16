@@ -4,10 +4,35 @@
 
 static const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR s_rgcpfd[PFI_COUNT] =
 {
-    { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Peek Biometrics") },
-    { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User") },
-    { PFI_STATUS_TEXT,  CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status") },
+    { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Peek Biometrics"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
+    { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Peek - Face Unlock"), CPFG_CREDENTIAL_PROVIDER_LABEL },
+    { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User"),              GUID_NULL },
+    { PFI_STATUS_TEXT,  CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status"),            GUID_NULL },
 };
+
+static void LogFieldTableOnce()
+{
+    static bool s_logged = false;
+    if (s_logged) return;
+    s_logged = true;
+
+    Logger::LogInfo("=== Peek Credential Provider Field Table ===");
+    for (DWORD i = 0; i < PFI_COUNT; i++)
+    {
+        wchar_t szGuid[64] = {};
+        StringFromGUID2(s_rgcpfd[i].guidFieldType, szGuid, ARRAYSIZE(szGuid));
+        wchar_t szBuf[256] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf),
+            L"Field %u: ID=%u, cpft=%d, label='%s', guidFieldType=%s",
+            i,
+            s_rgcpfd[i].dwFieldID,
+            s_rgcpfd[i].cpft,
+            s_rgcpfd[i].pszLabel ? s_rgcpfd[i].pszLabel : L"(null)",
+            szGuid);
+        Logger::LogInfo(szBuf);
+    }
+    Logger::LogInfo("============================================");
+}
 
 static HRESULT FieldDescriptorCoTaskAlloc(
     const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR& rcpfd,
@@ -24,6 +49,7 @@ static HRESULT FieldDescriptorCoTaskAlloc(
 
     pcpfd->dwFieldID = rcpfd.dwFieldID;
     pcpfd->cpft = rcpfd.cpft;
+    pcpfd->guidFieldType = rcpfd.guidFieldType;
 
     HRESULT hr = CoTaskMemAllocString(rcpfd.pszLabel, &pcpfd->pszLabel);
     if (FAILED(hr))
@@ -46,6 +72,7 @@ PeekProvider::PeekProvider()
     , m_pUserArray(nullptr)
 {
     DllAddRef();
+    LogFieldTableOnce();
 }
 
 PeekProvider::~PeekProvider()
@@ -156,8 +183,9 @@ HRESULT PeekProvider::SetUsageScenario(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, 
 
 HRESULT PeekProvider::SetSerialization(const CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* /*pcpcs*/)
 {
-    // Return S_OK so LogonUI retains the provider for the workstation unlock scenario
-    return S_OK;
+    // Reverted to E_NOTIMPL matching standard Microsoft Credential Provider samples.
+    // LogonUI calls SetSerialization for prepopulating tiles in CredUI or remote scenarios.
+    return E_NOTIMPL;
 }
 
 HRESULT PeekProvider::Advise(ICredentialProviderEvents* pcpe, UINT_PTR upAdviseContext)
@@ -190,6 +218,7 @@ HRESULT PeekProvider::UnAdvise()
 HRESULT PeekProvider::GetFieldDescriptorCount(DWORD* pdwCount)
 {
     if (!pdwCount) return E_POINTER;
+    LogFieldTableOnce();
     *pdwCount = PFI_COUNT;
     return S_OK;
 }
