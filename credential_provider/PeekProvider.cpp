@@ -121,20 +121,31 @@ HRESULT PeekProvider::QueryInterface(REFIID riid, void** ppv)
     if (!ppv) return E_POINTER;
     *ppv = nullptr;
 
+    std::wstring iidStr = GuidToString(riid);
+    HRESULT hr = E_NOINTERFACE;
+
     if (riid == IID_IUnknown || riid == IID_ICredentialProvider)
     {
         *ppv = static_cast<ICredentialProvider*>(this);
         AddRef();
-        return S_OK;
+        hr = S_OK;
+        Logger::LogInfo(L"PeekProvider::QueryInterface: accepted IID=" + iidStr + L" (ICredentialProvider) -> S_OK");
     }
     else if (riid == IID_ICredentialProviderSetUserArray)
     {
         *ppv = static_cast<ICredentialProviderSetUserArray*>(this);
         AddRef();
-        return S_OK;
+        hr = S_OK;
+        Logger::LogInfo(L"PeekProvider::QueryInterface: accepted IID=" + iidStr + L" (ICredentialProviderSetUserArray) -> S_OK");
+    }
+    else
+    {
+        wchar_t szBuf[256] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::QueryInterface: rejected IID=%s -> E_NOINTERFACE (0x%08X)", iidStr.c_str(), hr);
+        Logger::LogInfo(szBuf);
     }
 
-    return E_NOINTERFACE;
+    return hr;
 }
 
 ULONG PeekProvider::AddRef()
@@ -159,37 +170,60 @@ HRESULT PeekProvider::SetUsageScenario(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, 
     m_cpus = cpus;
     m_dwFlags = dwFlags;
 
-    std::string logMsg = "PeekProvider::SetUsageScenario: scenario=" + std::to_string(cpus) +
-                         ", flags=" + std::to_string(dwFlags);
-    Logger::LogInfo(logMsg.c_str());
+    const wchar_t* pszScenario = L"UNKNOWN";
+    switch (cpus)
+    {
+    case CPUS_LOGON:              pszScenario = L"CPUS_LOGON"; break;
+    case CPUS_UNLOCK_WORKSTATION: pszScenario = L"CPUS_UNLOCK_WORKSTATION"; break;
+    case CPUS_CHANGE_PASSWORD:    pszScenario = L"CPUS_CHANGE_PASSWORD"; break;
+    case CPUS_CREDUI:             pszScenario = L"CPUS_CREDUI"; break;
+    default:                      break;
+    }
 
+    HRESULT hr = E_NOTIMPL;
     switch (cpus)
     {
     case CPUS_UNLOCK_WORKSTATION:
-        return S_OK;
+        hr = S_OK;
+        break;
 
     case CPUS_LOGON:
     case CPUS_CREDUI:
         // Before first interactive sign-in the user's profile/DPAPI master key
         // is not reliably available. Do not advertise a credential tile here.
-        return E_NOTIMPL;
+        hr = E_NOTIMPL;
+        break;
 
     case CPUS_CHANGE_PASSWORD:
     default:
         // Biometrics cannot perform password change; gracefully decline scenario
-        return E_NOTIMPL;
+        hr = E_NOTIMPL;
+        break;
     }
+
+    wchar_t szBuf[256] = {};
+    swprintf_s(szBuf, ARRAYSIZE(szBuf),
+        L"PeekProvider::SetUsageScenario: scenario=%u (%s), flags=0x%08X -> hr=0x%08X",
+        cpus, pszScenario, dwFlags, hr);
+    Logger::LogInfo(szBuf);
+
+    return hr;
 }
 
 HRESULT PeekProvider::SetSerialization(const CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* /*pcpcs*/)
 {
     // Reverted to E_NOTIMPL matching standard Microsoft Credential Provider samples.
     // LogonUI calls SetSerialization for prepopulating tiles in CredUI or remote scenarios.
+    Logger::LogInfo("PeekProvider::SetSerialization called -> E_NOTIMPL");
     return E_NOTIMPL;
 }
 
 HRESULT PeekProvider::Advise(ICredentialProviderEvents* pcpe, UINT_PTR upAdviseContext)
 {
+    wchar_t szBuf[256] = {};
+    swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::Advise: pcpe=%p, upAdviseContext=0x%p", pcpe, (void*)upAdviseContext);
+    Logger::LogInfo(szBuf);
+
     if (m_pcpe)
     {
         m_pcpe->Release();
@@ -200,11 +234,13 @@ HRESULT PeekProvider::Advise(ICredentialProviderEvents* pcpe, UINT_PTR upAdviseC
     {
         m_pcpe->AddRef();
     }
+    Logger::LogInfo("PeekProvider::Advise -> S_OK");
     return S_OK;
 }
 
 HRESULT PeekProvider::UnAdvise()
 {
+    Logger::LogInfo("PeekProvider::UnAdvise called");
     if (m_pcpe)
     {
         m_pcpe->Release();
@@ -212,28 +248,52 @@ HRESULT PeekProvider::UnAdvise()
     }
     m_upAdviseContext = 0;
     ReleaseUserArray();
+    Logger::LogInfo("PeekProvider::UnAdvise -> S_OK");
     return S_OK;
 }
 
 HRESULT PeekProvider::GetFieldDescriptorCount(DWORD* pdwCount)
 {
-    if (!pdwCount) return E_POINTER;
+    if (!pdwCount)
+    {
+        Logger::LogError("PeekProvider::GetFieldDescriptorCount: pdwCount is null -> E_POINTER");
+        return E_POINTER;
+    }
     LogFieldTableOnce();
     *pdwCount = PFI_COUNT;
+    wchar_t szBuf[128] = {};
+    swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetFieldDescriptorCount: count=%u -> S_OK", *pdwCount);
+    Logger::LogInfo(szBuf);
     return S_OK;
 }
 
 HRESULT PeekProvider::GetFieldDescriptorAt(DWORD dwIndex, CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR** ppcpfd)
 {
-    if (!ppcpfd) return E_POINTER;
+    if (!ppcpfd)
+    {
+        Logger::LogError("PeekProvider::GetFieldDescriptorAt: ppcpfd is null -> E_POINTER");
+        return E_POINTER;
+    }
     *ppcpfd = nullptr;
 
     if (dwIndex >= PFI_COUNT)
     {
+        wchar_t szBuf[128] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetFieldDescriptorAt: dwIndex=%u >= PFI_COUNT(%u) -> E_INVALIDARG", dwIndex, PFI_COUNT);
+        Logger::LogError(szBuf);
         return E_INVALIDARG;
     }
 
-    return FieldDescriptorCoTaskAlloc(s_rgcpfd[dwIndex], ppcpfd);
+    HRESULT hr = FieldDescriptorCoTaskAlloc(s_rgcpfd[dwIndex], ppcpfd);
+    wchar_t szBuf[256] = {};
+    swprintf_s(szBuf, ARRAYSIZE(szBuf),
+        L"PeekProvider::GetFieldDescriptorAt: dwIndex=%u, label='%s', cpft=%d -> hr=0x%08X",
+        dwIndex,
+        s_rgcpfd[dwIndex].pszLabel ? s_rgcpfd[dwIndex].pszLabel : L"(null)",
+        s_rgcpfd[dwIndex].cpft,
+        hr);
+    Logger::LogInfo(szBuf);
+    return hr;
 }
 
 // --- ICredentialProviderSetUserArray ---
@@ -284,7 +344,11 @@ HRESULT PeekProvider::GetCredentialCount(
     BOOL* pbAutoLogonWithDefault
 )
 {
-    if (!pdwCount || !pdwDefault || !pbAutoLogonWithDefault) return E_POINTER;
+    if (!pdwCount || !pdwDefault || !pbAutoLogonWithDefault)
+    {
+        Logger::LogError("PeekProvider::GetCredentialCount: null pointer arg -> E_POINTER");
+        return E_POINTER;
+    }
 
     *pdwCount = 0;
     *pdwDefault = CREDENTIAL_PROVIDER_NO_DEFAULT;
@@ -292,17 +356,21 @@ HRESULT PeekProvider::GetCredentialCount(
 
     if (m_cpus != CPUS_UNLOCK_WORKSTATION)
     {
-        std::string logMsg = "PeekProvider::GetCredentialCount: count=0, default=" +
-                             std::to_string(*pdwDefault) + " (non-unlock scenario)";
-        Logger::LogInfo(logMsg.c_str());
+        wchar_t szBuf[256] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf),
+            L"PeekProvider::GetCredentialCount: early return count=0, default=%u, autoLogon=%d (reason: non-unlock scenario %u) -> S_OK",
+            *pdwDefault, *pbAutoLogonWithDefault, m_cpus);
+        Logger::LogInfo(szBuf);
         return S_OK;
     }
 
     if (!m_pUserArray)
     {
-        std::string logMsg = "PeekProvider::GetCredentialCount: count=0, default=" +
-                             std::to_string(*pdwDefault) + " (m_pUserArray is null)";
-        Logger::LogInfo(logMsg.c_str());
+        wchar_t szBuf[256] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf),
+            L"PeekProvider::GetCredentialCount: early return count=0, default=%u, autoLogon=%d (reason: m_pUserArray is null) -> S_OK",
+            *pdwDefault, *pbAutoLogonWithDefault);
+        Logger::LogInfo(szBuf);
         return S_OK;
     }
 
@@ -310,9 +378,11 @@ HRESULT PeekProvider::GetCredentialCount(
     HRESULT hr = m_pUserArray->GetCount(&dwUserCount);
     if (FAILED(hr) || dwUserCount == 0)
     {
-        std::string logMsg = "PeekProvider::GetCredentialCount: count=0, default=" +
-                             std::to_string(*pdwDefault) + " (user count is 0)";
-        Logger::LogInfo(logMsg.c_str());
+        wchar_t szBuf[256] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf),
+            L"PeekProvider::GetCredentialCount: early return count=0, default=%u, autoLogon=%d (reason: user count is 0 or GetCount failed hr=0x%08X) -> S_OK",
+            *pdwDefault, *pbAutoLogonWithDefault, hr);
+        Logger::LogInfo(szBuf);
         return S_OK;
     }
 
@@ -320,9 +390,11 @@ HRESULT PeekProvider::GetCredentialCount(
     hr = m_pUserArray->GetAt(0, &pUser);
     if (FAILED(hr) || !pUser)
     {
-        std::string logMsg = "PeekProvider::GetCredentialCount: count=0, default=" +
-                             std::to_string(*pdwDefault) + " (failed to get user 0)";
-        Logger::LogInfo(logMsg.c_str());
+        wchar_t szBuf[256] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf),
+            L"PeekProvider::GetCredentialCount: early return count=0, default=%u, autoLogon=%d (reason: failed to get user 0 hr=0x%08X) -> S_OK",
+            *pdwDefault, *pbAutoLogonWithDefault, hr);
+        Logger::LogInfo(szBuf);
         return S_OK;
     }
 
@@ -424,6 +496,7 @@ HRESULT PeekProvider::GetCredentialCount(
         if (!m_pCredential)
         {
             *pdwCount = 0;
+            Logger::LogError("PeekProvider::GetCredentialCount: out of memory allocating PeekCredential -> E_OUTOFMEMORY");
             return E_OUTOFMEMORY;
         }
 
@@ -440,6 +513,9 @@ HRESULT PeekProvider::GetCredentialCount(
         {
             ReleaseCredential();
             *pdwCount = 0;
+            wchar_t szBuf[128] = {};
+            swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetCredentialCount: credential Initialize failed -> hr=0x%08X", hr);
+            Logger::LogError(szBuf);
             return hr;
         }
     }
@@ -465,25 +541,40 @@ HRESULT PeekProvider::GetCredentialCount(
 
     *pdwCount = 1;
 
-    std::string logMsg = "PeekProvider::GetCredentialCount: count=" + std::to_string(*pdwCount) +
-                         ", default=" + std::to_string(*pdwDefault);
-    Logger::LogInfo(logMsg.c_str());
+    wchar_t szBuf[512] = {};
+    swprintf_s(szBuf, ARRAYSIZE(szBuf),
+        L"PeekProvider::GetCredentialCount: count=%u, default=%u, autoLogon=%d, user='%s', domain='%s', SID='%s' -> S_OK",
+        *pdwCount, *pdwDefault, *pbAutoLogonWithDefault,
+        m_userName.c_str(), m_userDomain.c_str(), m_userSid.c_str());
+    Logger::LogInfo(szBuf);
 
     return S_OK;
 }
 
 HRESULT PeekProvider::GetCredentialAt(DWORD dwIndex, ICredentialProviderCredential** ppcpc)
 {
-    std::string logMsg = "PeekProvider::GetCredentialAt: dwIndex=" + std::to_string(dwIndex);
-    Logger::LogInfo(logMsg.c_str());
-
-    if (!ppcpc) return E_POINTER;
+    if (!ppcpc)
+    {
+        Logger::LogError("PeekProvider::GetCredentialAt: ppcpc is null -> E_POINTER");
+        return E_POINTER;
+    }
     *ppcpc = nullptr;
 
     if (dwIndex != 0 || !m_pCredential)
     {
+        wchar_t szBuf[256] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf),
+            L"PeekProvider::GetCredentialAt: dwIndex=%u, m_pCredential=%p -> E_INVALIDARG",
+            dwIndex, m_pCredential);
+        Logger::LogError(szBuf);
         return E_INVALIDARG;
     }
 
-    return m_pCredential->QueryInterface(IID_ICredentialProviderCredential, reinterpret_cast<void**>(ppcpc));
+    HRESULT hr = m_pCredential->QueryInterface(IID_ICredentialProviderCredential, reinterpret_cast<void**>(ppcpc));
+    wchar_t szBuf[256] = {};
+    swprintf_s(szBuf, ARRAYSIZE(szBuf),
+        L"PeekProvider::GetCredentialAt: dwIndex=%u, ppcpc=%p -> hr=0x%08X",
+        dwIndex, *ppcpc, hr);
+    Logger::LogInfo(szBuf);
+    return hr;
 }

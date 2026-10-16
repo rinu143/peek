@@ -677,6 +677,46 @@ int main()
         }
     }
 
+    // -------------------------------------------------------------
+    // Test 14: Persistent Logger file creation and formatting verification
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 14] Testing persistent logger (%ProgramData%\\Peek\\logs\\credential_provider.log)...\n";
+    {
+        Logger::LogInfo("Test 14: explicit verification log line");
+        std::wstring logFilePath = PeekLoggerInternal::GetLogFilePath();
+        HANDLE hFile = CreateFileW(logFilePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE)
+        {
+            DWORD dwSize = GetFileSize(hFile, NULL);
+            std::vector<char> buffer(dwSize + 1, 0);
+            DWORD bytesRead = 0;
+            ReadFile(hFile, buffer.data(), dwSize, &bytesRead, NULL);
+            CloseHandle(hFile);
+
+            std::string content(buffer.data(), bytesRead);
+            bool hasTestLine = (content.find("Test 14: explicit verification log line") != std::string::npos);
+            bool hasExeName = (content.find("test_autoselect.exe") != std::string::npos);
+            bool hasPidTid = (content.find("PID:") != std::string::npos && content.find("TID:") != std::string::npos);
+            bool hasInfoLevel = (content.find("[INFO]") != std::string::npos);
+
+            if (hasTestLine && hasExeName && hasPidTid && hasInfoLevel)
+            {
+                std::wcout << L"  PASS: Log file exists, formatted with timestamp, PID, test_autoselect.exe, TID, level, and message\n";
+            }
+            else
+            {
+                std::wcout << L"  FAIL: Log file content missing expected headers: hasTestLine=" << hasTestLine
+                           << L", hasExeName=" << hasExeName << L", hasPidTid=" << hasPidTid << L"\n";
+                failed++;
+            }
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Could not open log file at " << logFilePath << L" (GetLastError=" << GetLastError() << L")\n";
+            failed++;
+        }
+    }
+
     // Cleanup
     DeleteTempTestDirectory(tempDir);
     SetEnvironmentVariableW(L"PEEK_PROFILES_DIR", NULL);

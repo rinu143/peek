@@ -114,10 +114,22 @@ Get-Process -Name "PeekSetup" -ErrorAction SilentlyContinue | ForEach-Object {
 Start-Sleep -Milliseconds 500
 
 # 4. Create destination directory and copy files
-Write-Host "[2/5] Copying binaries to $InstallDir..." -ForegroundColor Cyan
+Write-Host "[2/5] Setting up directories and copying binaries to $InstallDir..." -ForegroundColor Cyan
 if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
+
+$LogDir = Join-Path $env:ProgramData "Peek\logs"
+if (-not (Test-Path $LogDir)) {
+    New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+}
+try {
+    $acl = Get-Acl $LogDir
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule("Users", "Modify", "ContainerInherit,ObjectInherit", "None", "Allow")
+    $acl.AddAccessRule($rule)
+    Set-Acl $LogDir $acl
+} catch { }
+Write-Host "      [OK] Log directory created/verified: $LogDir" -ForegroundColor Green
 
 foreach ($file in $sourceMap.Keys) {
     $src = $sourceMap[$file]
@@ -231,6 +243,11 @@ Write-Host ""
 Write-Host "NOTE ON FAIL-OPEN SECURITY:" -ForegroundColor Yellow
 Write-Host "  If the camera is disconnected or face is not recognized, you can always" -ForegroundColor Yellow
 Write-Host "  click your regular password/PIN tile to sign in normally." -ForegroundColor Yellow
+Write-Host ""
+Write-Host "DIAGNOSTICS & LOGGING:" -ForegroundColor Cyan
+Write-Host "  Log Directory : $LogDir" -ForegroundColor White
+Write-Host "  Log File      : $(Join-Path $LogDir 'credential_provider.log')" -ForegroundColor White
+Write-Host "  To view logs  : Get-Content -Wait `"$(Join-Path $LogDir 'credential_provider.log')`"" -ForegroundColor Gray
 Write-Host ""
 Write-Host "HOW TO UNINSTALL:" -ForegroundColor White
 Write-Host "  Run 'uninstall.bat' (as Administrator) to fully remove Peek." -ForegroundColor White
