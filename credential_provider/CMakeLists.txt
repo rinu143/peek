@@ -48,9 +48,58 @@ target_link_libraries(PeekCredentialProvider PRIVATE
     User32
     Gdi32
     Gdiplus
+    Userenv
+    Propsys
 )
 
 set_target_properties(PeekCredentialProvider PROPERTIES
     OUTPUT_NAME "PeekCredentialProvider"
     LINK_FLAGS "/DEF:\"${CMAKE_CURRENT_SOURCE_DIR}/credential_provider.def\""
+)
+
+add_executable(test_autoselect
+    ../test/test_autoselect.cpp
+    PeekProvider.cpp
+    PeekCredential.cpp
+    PeekPipeClient.cpp
+    Serialization.cpp
+    SecretVault.cpp
+    TileAnimator.cpp
+    resources.rc
+)
+
+target_include_directories(test_autoselect PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(test_autoselect PRIVATE
+    Secur32
+    Shlwapi
+    Advapi32
+    Wtsapi32
+    Crypt32
+    Ole32
+    User32
+    Gdi32
+    Gdiplus
+    Userenv
+    Propsys
+)
+
+add_executable(test_secret_vault
+    ../test/test_secret_vault.cpp
+    SecretVault.cpp
+)
+
+target_include_directories(test_secret_vault PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(test_secret_vault PRIVATE
+    Secur32
+    Shlwapi
+    Advapi32
+    Wtsapi32
+    Crypt32
+    Ole32
 )

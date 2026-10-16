@@ -24,6 +24,12 @@ public:
         PCWSTR pszSid = nullptr
     );
 
+    void SetUserContext(
+        PCWSTR pszUsername,
+        PCWSTR pszDomain,
+        PCWSTR pszSid
+    );
+
     // Provider linkage for logon notifications
     void SetProvider(PeekProvider* pProvider);
     bool IsAuthenticated() const;

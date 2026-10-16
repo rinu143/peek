@@ -1,11 +1,17 @@
 // Peek Face Engine - Credential Provider Main Class
-// Implements ICredentialProvider COM Interface
+// Implements ICredentialProvider and ICredentialProviderSetUserArray COM Interfaces
 #pragma once
 
 #include "common.h"
 #include "PeekCredential.h"
+#include <propkey.h>
+#include <propsys.h>
 
-class PeekProvider : public ICredentialProvider
+#ifndef PKEY_Identity_DomainName
+DEFINE_PROPERTYKEY(PKEY_Identity_DomainName, 0xC4322503, 0x78CA, 0x49C6, 0x9A, 0xCC, 0xA6, 0x8E, 0x2A, 0xFD, 0x7B, 0x6B, 101);
+#endif
+
+class PeekProvider : public ICredentialProvider, public ICredentialProviderSetUserArray
 {
 public:
     PeekProvider();
@@ -26,11 +32,15 @@ public:
     IFACEMETHODIMP GetCredentialCount(DWORD* pdwCount, DWORD* pdwDefault, BOOL* pbAutoLogonWithDefault);
     IFACEMETHODIMP GetCredentialAt(DWORD dwIndex, ICredentialProviderCredential** ppcpc);
 
+    // ICredentialProviderSetUserArray
+    IFACEMETHODIMP SetUserArray(ICredentialProviderUserArray* users);
+
     // Notify LogonUI that credentials have changed
     void NotifyCredentialsChanged();
 
 private:
     void ReleaseCredential();
+    void ReleaseUserArray();
 
     long m_cRef;
     CREDENTIAL_PROVIDER_USAGE_SCENARIO m_cpus;
@@ -38,4 +48,9 @@ private:
     ICredentialProviderEvents* m_pcpe;
     UINT_PTR m_upAdviseContext;
     PeekCredential* m_pCredential;
+    ICredentialProviderUserArray* m_pUserArray;
+
+    std::wstring m_userSid;
+    std::wstring m_userName;
+    std::wstring m_userDomain;
 };

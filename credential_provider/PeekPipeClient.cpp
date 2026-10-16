@@ -67,8 +67,19 @@ static bool ExtractJsonBool(const std::string& json, const std::string& key, boo
     return false;
 }
 
+static std::wstring GetConfiguredPipeName(const std::wstring& defaultName = PEEK_PIPE_NAME)
+{
+    wchar_t szEnv[256] = {};
+    DWORD dwLen = GetEnvironmentVariableW(L"PEEK_PIPE_NAME_OVERRIDE", szEnv, ARRAYSIZE(szEnv));
+    if (dwLen > 0 && dwLen < ARRAYSIZE(szEnv))
+    {
+        return szEnv;
+    }
+    return defaultName;
+}
+
 PeekPipeClient::PeekPipeClient(const std::wstring& pipeName)
-    : m_pipeName(pipeName)
+    : m_pipeName(GetConfiguredPipeName(pipeName))
     , m_hPipe(INVALID_HANDLE_VALUE)
     , m_hThread(nullptr)
     , m_hCancelEvent(nullptr)
@@ -91,6 +102,21 @@ PeekPipeClient::~PeekPipeClient()
 bool PeekPipeClient::IsRunning() const
 {
     return m_isRunning.load();
+}
+
+bool PeekPipeClient::IsPipeReachable(const std::wstring& pipeName)
+{
+    std::wstring effectivePipe = GetConfiguredPipeName(pipeName);
+    if (WaitNamedPipeW(effectivePipe.c_str(), 0))
+    {
+        return true;
+    }
+    DWORD err = GetLastError();
+    if (err == ERROR_SEM_TIMEOUT || err == ERROR_PIPE_BUSY || err == ERROR_ACCESS_DENIED)
+    {
+        return true;
+    }
+    return false;
 }
 
 bool PeekPipeClient::StartAuthAsync(PeekStateCallback callback, float timeoutSeconds)
@@ -201,7 +227,10 @@ bool PeekPipeClient::ConnectToPipe(DWORD timeoutMs)
         }
         else
         {
-            Sleep(80);
+            // First connect attempt failed and pipe is not busy (e.g. offline / not found).
+            // Do not loop or hang; fall back immediately.
+            Logger::LogError("ConnectToPipe: Engine pipe unreachable or not found on first attempt");
+            return false;
         }
     }
 

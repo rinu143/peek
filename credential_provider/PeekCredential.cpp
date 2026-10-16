@@ -95,6 +95,32 @@ HRESULT PeekCredential::Initialize(
     return S_OK;
 }
 
+void PeekCredential::SetUserContext(
+    PCWSTR pszUsername,
+    PCWSTR pszDomain,
+    PCWSTR pszSid
+)
+{
+    EnterCriticalSection(&m_cs);
+    if (pszUsername && *pszUsername)
+    {
+        m_username = pszUsername;
+        if (m_displayName == L"Peek Facial Recognition" || m_displayName.empty())
+        {
+            m_displayName = pszUsername;
+        }
+    }
+    if (pszDomain && *pszDomain)
+    {
+        m_domain = pszDomain;
+    }
+    if (pszSid && *pszSid)
+    {
+        m_sid = pszSid;
+    }
+    LeaveCriticalSection(&m_cs);
+}
+
 // --- IUnknown ---
 
 HRESULT PeekCredential::QueryInterface(REFIID riid, void** ppv)
@@ -229,12 +255,27 @@ HRESULT PeekCredential::GetFieldState(
 {
     if (!pcpfs || !pcpfis) return E_POINTER;
 
-    *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
-    *pcpfis = CPFIS_NONE;
-
     if (dwFieldID >= PFI_COUNT)
     {
+        return E_INVALIDARG;
+    }
+
+    *pcpfis = CPFIS_NONE;
+
+    switch (dwFieldID)
+    {
+    case PFI_LOGO:
+    case PFI_DISPLAY_NAME:
+        *pcpfs = CPFS_DISPLAY_IN_BOTH;
+        break;
+
+    case PFI_STATUS_TEXT:
+        *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+        break;
+
+    default:
         *pcpfs = CPFS_HIDDEN;
+        break;
     }
 
     return S_OK;
@@ -465,11 +506,19 @@ HRESULT PeekCredential::GetUserSid(PWSTR* ppszSid)
     if (!ppszSid) return E_POINTER;
     *ppszSid = nullptr;
 
-    if (!m_sid.empty())
+    EnterCriticalSection(&m_cs);
+    std::wstring sid = m_sid;
+    LeaveCriticalSection(&m_cs);
+
+    if (!sid.empty())
     {
-        return CoTaskMemAllocString(m_sid.c_str(), ppszSid);
+        std::wstring logMsg = L"PeekCredential::GetUserSid: SID = " + sid;
+        Logger::LogInfo(logMsg);
+        return CoTaskMemAllocString(sid.c_str(), ppszSid);
     }
-    return E_NOTIMPL;
+
+    Logger::LogInfo("PeekCredential::GetUserSid: SID is empty, returning S_FALSE");
+    return S_FALSE;
 }
 
 void PeekCredential::UpdateStatusText(const std::wstring& newText)

@@ -58,6 +58,9 @@ public:
     // Check if background worker is currently active
     bool IsRunning() const;
 
+    // Check if the engine pipe is reachable and listening
+    static bool IsPipeReachable(const std::wstring& pipeName = PEEK_PIPE_NAME);
+
 private:
     static DWORD WINAPI WorkerThreadProc(LPVOID lpParam);
     void RunWorker();
