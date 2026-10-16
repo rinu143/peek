@@ -95,7 +95,6 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID /*lpvReserved*/)
     {
         g_hinst = hinstDLL;
         DisableThreadLibraryCalls(hinstDLL);
-        Logger::LogInfo("DllMain: DLL_PROCESS_ATTACH");
     }
     return TRUE;
 }
@@ -109,6 +108,8 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void** ppv)
 {
     if (!ppv) return E_POINTER;
     *ppv = nullptr;
+
+    Logger::LogInfo("PeekCredentialProvider: module loaded (DllGetClassObject)");
 
     std::wstring clsidStr = GuidToString(rclsid);
     std::wstring iidStr = GuidToString(riid);

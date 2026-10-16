@@ -124,12 +124,42 @@ if (-not (Test-Path $LogDir)) {
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 }
 try {
-    $acl = Get-Acl $LogDir
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule("Users", "Modify", "ContainerInherit,ObjectInherit", "None", "Allow")
-    $acl.AddAccessRule($rule)
-    Set-Acl $LogDir $acl
-} catch { }
-Write-Host "      [OK] Log directory created/verified: $LogDir" -ForegroundColor Green
+    $systemSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
+    $adminSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+    $usersSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinUsersSid, $null)
+
+    # 1. Folder ACL: inheritance removed, explicit ACEs (SYSTEM FullControl, Admins FullControl, Users ReadAndExecute)
+    $dirAcl = New-Object System.Security.AccessControl.DirectorySecurity
+    $dirAcl.SetAccessRuleProtection($true, $false)
+    $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    Set-Acl -Path $LogDir -AclObject $dirAcl
+
+    # 2. File ACL: apply the same explicit ACL to the log file(s) if already existing
+    $logFilePath = Join-Path $LogDir "credential_provider.log"
+    if (Test-Path $logFilePath) {
+        $fileAcl = New-Object System.Security.AccessControl.FileSecurity
+        $fileAcl.SetAccessRuleProtection($true, $false)
+        $fileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "Allow")))
+        $fileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "Allow")))
+        $fileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "Allow")))
+        Set-Acl -Path $logFilePath -AclObject $fileAcl
+    }
+
+    $oldLogFilePath = Join-Path $LogDir "credential_provider.log.old"
+    if (Test-Path $oldLogFilePath) {
+        $oldFileAcl = New-Object System.Security.AccessControl.FileSecurity
+        $oldFileAcl.SetAccessRuleProtection($true, $false)
+        $oldFileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "Allow")))
+        $oldFileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "Allow")))
+        $oldFileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "Allow")))
+        Set-Acl -Path $oldLogFilePath -AclObject $oldFileAcl
+    }
+} catch {
+    Write-Warning "Failed to set explicit ACL on log directory: $_"
+}
+Write-Host "      [OK] Log directory secured (SYSTEM/Admin FullControl, Users ReadAndExecute): $LogDir" -ForegroundColor Green
 
 foreach ($file in $sourceMap.Keys) {
     $src = $sourceMap[$file]
