@@ -51,6 +51,7 @@ target_link_libraries(PeekCredentialProvider PRIVATE
     Userenv
     Propsys
     Shell32
+    Credui
 )
 
 set_target_properties(PeekCredentialProvider PROPERTIES
@@ -91,6 +92,7 @@ target_link_libraries(test_autoselect PRIVATE
     Userenv
     Propsys
     Shell32
+    Credui
 )
 
 add_executable(test_secret_vault

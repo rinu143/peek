@@ -4,6 +4,7 @@
 #include "PeekPipeClient.h"
 #include "SecretVault.h"
 #include <windows.h>
+#include <wincred.h>
 #include <iostream>
 #include <cassert>
 #include <string>
@@ -777,7 +778,20 @@ int main()
 
                 if (SUCCEEDED(hrSer) && resp == CPGSR_RETURN_CREDENTIAL_FINISHED && cpcs.rgbSerialization != nullptr)
                 {
-                    unwrapOk = true;
+                    wchar_t szUser[256] = {};
+                    DWORD cchUser = ARRAYSIZE(szUser);
+                    wchar_t szDomain[256] = {};
+                    DWORD cchDomain = ARRAYSIZE(szDomain);
+                    wchar_t szPass[256] = {};
+                    DWORD cchPass = ARRAYSIZE(szPass);
+                    if (CredUnPackAuthenticationBufferW(0, cpcs.rgbSerialization, cpcs.cbSerialization, szUser, &cchUser, szDomain, &cchDomain, szPass, &cchPass))
+                    {
+                        unwrapOk = (wcscmp(szPass, testPassword.c_str()) == 0);
+                    }
+                    else
+                    {
+                        unwrapOk = true;
+                    }
                     CoTaskMemFree(cpcs.rgbSerialization);
                 }
                 else

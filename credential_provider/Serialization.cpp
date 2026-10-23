@@ -1,16 +1,14 @@
 // Peek Face Engine - Credential Serialization Implementation
 #include "Serialization.h"
 #include <ntsecapi.h>
+#include <wincred.h>
 
 #pragma comment(lib, "Secur32.lib")
+#pragma comment(lib, "Credui.lib")
 
 // Define missing constants for authentication package names
 #ifndef NEGOSSP_NAME_A
 #define NEGOSSP_NAME_A   "Negotiate"
-#endif
-
-#ifndef MICROSOFT_KERBEROS_NAME_A
-#define MICROSOFT_KERBEROS_NAME_A   "Kerberos"
 #endif
 
 namespace PeekSerialization
@@ -28,27 +26,13 @@ namespace PeekSerialization
         }
 
         LSA_STRING packageName;
-        packageName.Buffer = const_cast<PCHAR>(MICROSOFT_KERBEROS_NAME_A);
-        packageName.Length = static_cast<USHORT>(strlen(MICROSOFT_KERBEROS_NAME_A));
+        packageName.Buffer = const_cast<PCHAR>(NEGOSSP_NAME_A);
+        packageName.Length = static_cast<USHORT>(strlen(NEGOSSP_NAME_A));
         packageName.MaximumLength = packageName.Length + 1;
 
         ULONG packageId = 0;
         status = LsaLookupAuthenticationPackage(hLsa, &packageName, &packageId);
         LsaDeregisterLogonProcess(hLsa);
-
-        if (status != 0)
-        {
-            // Fall back to Negotiate package
-            status = LsaConnectUntrusted(&hLsa);
-            if (status == 0)
-            {
-                packageName.Buffer = const_cast<PCHAR>(NEGOSSP_NAME_A);
-                packageName.Length = static_cast<USHORT>(strlen(NEGOSSP_NAME_A));
-                packageName.MaximumLength = packageName.Length + 1;
-                status = LsaLookupAuthenticationPackage(hLsa, &packageName, &packageId);
-                LsaDeregisterLogonProcess(hLsa);
-            }
-        }
 
         if (status != 0)
         {
@@ -69,64 +53,76 @@ namespace PeekSerialization
         if (!pcpcs) return E_POINTER;
         ZeroMemory(pcpcs, sizeof(*pcpcs));
 
-        if (!pszUsername) return E_INVALIDARG;
+        if (!pszUsername || pszUsername[0] == L'\0') return E_INVALIDARG;
 
-        PCWSTR domain = pszDomain ? pszDomain : L"";
+        std::wstring qualifiedUser;
+        if (pszDomain && pszDomain[0] != L'\0' && wcscmp(pszDomain, L".") != 0)
+        {
+            // If domain is specified, check if username already contains a backslash
+            const wchar_t* pSlash = wcschr(pszUsername, L'\\');
+            if (!pSlash)
+            {
+                qualifiedUser = pszDomain;
+                qualifiedUser += L"\\";
+                qualifiedUser += pszUsername;
+            }
+            else
+            {
+                qualifiedUser = pszUsername;
+            }
+        }
+        else
+        {
+            qualifiedUser = pszUsername;
+        }
+
         PCWSTR password = pszPassword ? pszPassword : L"";
 
-        size_t cchDomain = wcslen(domain);
-        size_t cchUser = wcslen(pszUsername);
-        size_t cchPass = wcslen(password);
+        DWORD cbPacked = 0;
+        CredPackAuthenticationBufferW(
+            0,
+            const_cast<PWSTR>(qualifiedUser.c_str()),
+            const_cast<PWSTR>(password),
+            NULL,
+            &cbPacked
+        );
 
-        size_t cbDomain = (cchDomain + 1) * sizeof(WCHAR);
-        size_t cbUser = (cchUser + 1) * sizeof(WCHAR);
-        size_t cbPass = (cchPass + 1) * sizeof(WCHAR);
+        if (cbPacked == 0)
+        {
+            DWORD dwErr = GetLastError();
+            return HRESULT_FROM_WIN32(dwErr);
+        }
 
-        ULONG cbTotal = static_cast<ULONG>(sizeof(KERB_INTERACTIVE_LOGON) + cbDomain + cbUser + cbPass);
-
-        BYTE* pBuffer = static_cast<BYTE*>(CoTaskMemAlloc(cbTotal));
+        BYTE* pBuffer = static_cast<BYTE*>(CoTaskMemAlloc(cbPacked));
         if (!pBuffer) return E_OUTOFMEMORY;
-        ZeroMemory(pBuffer, cbTotal);
+        ZeroMemory(pBuffer, cbPacked);
 
-        PKERB_INTERACTIVE_LOGON pLogon = reinterpret_cast<PKERB_INTERACTIVE_LOGON>(pBuffer);
-        pLogon->MessageType = KerbInteractiveLogon;
+        if (!CredPackAuthenticationBufferW(
+            0,
+            const_cast<PWSTR>(qualifiedUser.c_str()),
+            const_cast<PWSTR>(password),
+            pBuffer,
+            &cbPacked))
+        {
+            DWORD dwErr = GetLastError();
+            SecureZeroMemory(pBuffer, cbPacked);
+            CoTaskMemFree(pBuffer);
+            return HRESULT_FROM_WIN32(dwErr);
+        }
 
-        // Current offset within buffer after header
-        BYTE* pStringCursor = pBuffer + sizeof(KERB_INTERACTIVE_LOGON);
-
-        // 1. Domain
-        CopyMemory(pStringCursor, domain, cbDomain);
-        pLogon->LogonDomainName.Length = static_cast<USHORT>(cchDomain * sizeof(WCHAR));
-        pLogon->LogonDomainName.MaximumLength = static_cast<USHORT>(cbDomain);
-        pLogon->LogonDomainName.Buffer = reinterpret_cast<PWSTR>(pStringCursor);
-        pStringCursor += cbDomain;
-
-        // 2. User
-        CopyMemory(pStringCursor, pszUsername, cbUser);
-        pLogon->UserName.Length = static_cast<USHORT>(cchUser * sizeof(WCHAR));
-        pLogon->UserName.MaximumLength = static_cast<USHORT>(cbUser);
-        pLogon->UserName.Buffer = reinterpret_cast<PWSTR>(pStringCursor);
-        pStringCursor += cbUser;
-
-        // 3. Password
-        CopyMemory(pStringCursor, password, cbPass);
-        pLogon->Password.Length = static_cast<USHORT>(cchPass * sizeof(WCHAR));
-        pLogon->Password.MaximumLength = static_cast<USHORT>(cbPass);
-        pLogon->Password.Buffer = reinterpret_cast<PWSTR>(pStringCursor);
-
-        // Resolve package ID
         ULONG authPackage = 0;
         HRESULT hr = GetNegotiateAuthPackage(&authPackage);
         if (FAILED(hr))
         {
-            SecureZeroMemory(pBuffer, cbTotal);
+            SecureZeroMemory(pBuffer, cbPacked);
             CoTaskMemFree(pBuffer);
             return hr;
         }
 
         pcpcs->ulAuthenticationPackage = authPackage;
-        pcpcs->cbSerialization = cbTotal;
+        pcpcs->cbSerialization = cbPacked;
         pcpcs->rgbSerialization = pBuffer;
+        pcpcs->clsidCredentialProvider = CLSID_PeekCredentialProvider;
 
         return S_OK;
     }
