@@ -184,10 +184,10 @@ HRESULT PeekProvider::SetUsageScenario(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, 
     switch (cpus)
     {
     case CPUS_UNLOCK_WORKSTATION:
+    case CPUS_LOGON:
         hr = S_OK;
         break;
 
-    case CPUS_LOGON:
     case CPUS_CREDUI:
         // Before first interactive sign-in the user's profile/DPAPI master key
         // is not reliably available. Do not advertise a credential tile here.
@@ -338,6 +338,269 @@ HRESULT PeekProvider::SetUserArray(ICredentialProviderUserArray* users)
     return S_OK;
 }
 
+bool PeekProvider::GetConsoleUserSid(std::wstring& outSid)
+{
+    outSid.clear();
+
+    DWORD sessionId = WTSGetActiveConsoleSessionId();
+
+#ifdef PEEK_TEST_BUILD
+    if (s_hasTestSessionId)
+    {
+        sessionId = s_testSessionId;
+        wchar_t szBuf[128] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: [TEST] Overriding sessionId=0x%08X", sessionId);
+        Logger::LogInfo(szBuf);
+    }
+    else
+    {
+        wchar_t szEnvSession[32] = {};
+        if (GetEnvironmentVariableW(L"PEEK_TEST_CONSOLE_SESSION_ID", szEnvSession, ARRAYSIZE(szEnvSession)) > 0)
+        {
+            if (wcscmp(szEnvSession, L"NONE") == 0 || wcscmp(szEnvSession, L"0xFFFFFFFF") == 0)
+            {
+                sessionId = 0xFFFFFFFF;
+            }
+            else
+            {
+                sessionId = static_cast<DWORD>(wcstoul(szEnvSession, nullptr, 0));
+            }
+            wchar_t szBuf[128] = {};
+            swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: [TEST] Overriding sessionId=0x%08X", sessionId);
+            Logger::LogInfo(szBuf);
+        }
+    }
+
+    if (s_hasTestConsoleUserSid)
+    {
+        if (s_testConsoleUserSid == L"FAIL" || s_testConsoleUserSid == L"NONE")
+        {
+            Logger::LogInfo(L"PeekProvider::GetConsoleUserSid: [TEST] Forced token query failure (s_testConsoleUserSid)");
+            return false;
+        }
+        outSid = s_testConsoleUserSid;
+        wchar_t szBuf[256] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: [TEST] Overriding console SID='%s'", outSid.c_str());
+        Logger::LogInfo(szBuf);
+        return true;
+    }
+    else
+    {
+        wchar_t szEnvSid[256] = {};
+        if (GetEnvironmentVariableW(L"PEEK_TEST_CONSOLE_USER_SID", szEnvSid, ARRAYSIZE(szEnvSid)) > 0)
+        {
+            if (wcscmp(szEnvSid, L"FAIL") == 0 || wcscmp(szEnvSid, L"NONE") == 0)
+            {
+                Logger::LogInfo(L"PeekProvider::GetConsoleUserSid: [TEST] Forced token query failure (PEEK_TEST_CONSOLE_USER_SID)");
+                return false;
+            }
+            outSid = szEnvSid;
+            wchar_t szBuf[256] = {};
+            swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: [TEST] Overriding console SID='%s'", outSid.c_str());
+            Logger::LogInfo(szBuf);
+            return true;
+        }
+    }
+#endif
+
+    if (sessionId == 0xFFFFFFFF)
+    {
+        Logger::LogInfo(L"PeekProvider::GetConsoleUserSid: WTSGetActiveConsoleSessionId returned 0xFFFFFFFF (no active console session)");
+        return false;
+    }
+
+    wchar_t szBufSession[128] = {};
+    swprintf_s(szBufSession, ARRAYSIZE(szBufSession), L"PeekProvider::GetConsoleUserSid: active console sessionId=%u", sessionId);
+    Logger::LogInfo(szBufSession);
+
+    HANDLE hToken = NULL;
+    if (!WTSQueryUserToken(sessionId, &hToken))
+    {
+        DWORD dwErr = GetLastError();
+        wchar_t szBuf[256] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf),
+            L"PeekProvider::GetConsoleUserSid: WTSQueryUserToken failed for sessionId=%u, error=%u (cold boot / sign-in screen / no user token)",
+            sessionId, dwErr);
+        Logger::LogInfo(szBuf);
+        return false;
+    }
+
+    bool bSuccess = false;
+    DWORD dwLength = 0;
+    GetTokenInformation(hToken, TokenUser, NULL, 0, &dwLength);
+    DWORD dwErrToken = GetLastError();
+    if (dwErrToken == ERROR_INSUFFICIENT_BUFFER && dwLength > 0)
+    {
+        std::vector<BYTE> buffer(dwLength);
+        if (GetTokenInformation(hToken, TokenUser, buffer.data(), dwLength, &dwLength))
+        {
+            TOKEN_USER* pTokenUser = reinterpret_cast<TOKEN_USER*>(buffer.data());
+            LPWSTR pszSid = NULL;
+            if (ConvertSidToStringSidW(pTokenUser->User.Sid, &pszSid) && pszSid)
+            {
+                outSid = pszSid;
+                LocalFree(pszSid);
+                bSuccess = true;
+                wchar_t szBuf[256] = {};
+                swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: TokenUser SID='%s'", outSid.c_str());
+                Logger::LogInfo(szBuf);
+            }
+            else
+            {
+                DWORD dwErrConv = GetLastError();
+                wchar_t szBuf[128] = {};
+                swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: ConvertSidToStringSidW failed, error=%u", dwErrConv);
+                Logger::LogError(szBuf);
+            }
+        }
+        else
+        {
+            DWORD dwErrInfo = GetLastError();
+            wchar_t szBuf[128] = {};
+            swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: GetTokenInformation failed, error=%u", dwErrInfo);
+            Logger::LogError(szBuf);
+        }
+    }
+    else
+    {
+        wchar_t szBuf[128] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: Initial GetTokenInformation failed, error=%u, len=%u", dwErrToken, dwLength);
+        Logger::LogError(szBuf);
+    }
+
+    // Close token on every path
+    CloseHandle(hToken);
+
+    return bSuccess;
+}
+
+HRESULT PeekProvider::ResolveLockedUser(DWORD* pdwUserIndex, bool* pbLockedSession)
+{
+    if (!pdwUserIndex || !pbLockedSession)
+    {
+        return E_POINTER;
+    }
+    *pdwUserIndex = 0;
+    *pbLockedSession = false;
+
+    if (!m_pUserArray)
+    {
+        Logger::LogInfo(L"PeekProvider::ResolveLockedUser: m_pUserArray is null -> S_FALSE");
+        return S_FALSE;
+    }
+
+    DWORD dwUserCount = 0;
+    HRESULT hr = m_pUserArray->GetCount(&dwUserCount);
+    if (FAILED(hr) || dwUserCount == 0)
+    {
+        wchar_t szBuf[128] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::ResolveLockedUser: dwUserCount=0 or GetCount failed (hr=0x%08X) -> S_FALSE", hr);
+        Logger::LogInfo(szBuf);
+        return S_FALSE;
+    }
+
+    if (m_cpus == CPUS_UNLOCK_WORKSTATION)
+    {
+        DWORD chosenIndex = 0;
+        if (dwUserCount > 1)
+        {
+            std::wstring consoleSid;
+            if (GetConsoleUserSid(consoleSid) && !consoleSid.empty())
+            {
+                for (DWORD i = 0; i < dwUserCount; i++)
+                {
+                    ICredentialProviderUser* pUser = nullptr;
+                    if (SUCCEEDED(m_pUserArray->GetAt(i, &pUser)) && pUser)
+                    {
+                        LPWSTR pszSid = nullptr;
+                        if (SUCCEEDED(pUser->GetSid(&pszSid)) && pszSid)
+                        {
+                            bool match = (_wcsicmp(pszSid, consoleSid.c_str()) == 0);
+                            wchar_t szBuf[256] = {};
+                            swprintf_s(szBuf, ARRAYSIZE(szBuf),
+                                L"PeekProvider::ResolveLockedUser (UNLOCK): array user %u SID='%s' vs console SID='%s' -> match=%d",
+                                i, pszSid, consoleSid.c_str(), match);
+                            Logger::LogInfo(szBuf);
+                            CoTaskMemFree(pszSid);
+                            if (match)
+                            {
+                                chosenIndex = i;
+                                pUser->Release();
+                                break;
+                            }
+                        }
+                        pUser->Release();
+                    }
+                }
+            }
+        }
+
+        *pdwUserIndex = chosenIndex;
+        *pbLockedSession = true;
+        wchar_t szBuf[128] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::ResolveLockedUser (UNLOCK): selected user index %u, lockedSession=true -> S_OK", chosenIndex);
+        Logger::LogInfo(szBuf);
+        return S_OK;
+    }
+    else if (m_cpus == CPUS_LOGON)
+    {
+        std::wstring consoleSid;
+        if (!GetConsoleUserSid(consoleSid) || consoleSid.empty())
+        {
+            Logger::LogInfo(L"PeekProvider::ResolveLockedUser (LOGON): no console user session found -> S_FALSE (tile will not be offered)");
+            return S_FALSE;
+        }
+
+        DWORD matchedIndex = (DWORD)-1;
+        for (DWORD i = 0; i < dwUserCount; i++)
+        {
+            ICredentialProviderUser* pUser = nullptr;
+            if (SUCCEEDED(m_pUserArray->GetAt(i, &pUser)) && pUser)
+            {
+                LPWSTR pszSid = nullptr;
+                if (SUCCEEDED(pUser->GetSid(&pszSid)) && pszSid)
+                {
+                    bool match = (_wcsicmp(pszSid, consoleSid.c_str()) == 0);
+                    wchar_t szBuf[256] = {};
+                    swprintf_s(szBuf, ARRAYSIZE(szBuf),
+                        L"PeekProvider::ResolveLockedUser (LOGON): array user %u SID='%s' vs console SID='%s' -> match=%d",
+                        i, pszSid, consoleSid.c_str(), match);
+                    Logger::LogInfo(szBuf);
+                    CoTaskMemFree(pszSid);
+                    if (match)
+                    {
+                        matchedIndex = i;
+                        pUser->Release();
+                        break;
+                    }
+                }
+                pUser->Release();
+            }
+        }
+
+        if (matchedIndex == (DWORD)-1)
+        {
+            wchar_t szBuf[256] = {};
+            swprintf_s(szBuf, ARRAYSIZE(szBuf),
+                L"PeekProvider::ResolveLockedUser (LOGON): no array user matches console SID='%s' -> S_FALSE (tile will not be offered)",
+                consoleSid.c_str());
+            Logger::LogInfo(szBuf);
+            return S_FALSE;
+        }
+
+        *pdwUserIndex = matchedIndex;
+        *pbLockedSession = true;
+        wchar_t szBuf[256] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf),
+            L"PeekProvider::ResolveLockedUser (LOGON): matched user index %u for console SID='%s', lockedSession=true -> S_OK",
+            matchedIndex, consoleSid.c_str());
+        Logger::LogInfo(szBuf);
+        return S_OK;
+    }
+
+    return E_NOTIMPL;
+}
+
 HRESULT PeekProvider::GetCredentialCount(
     DWORD* pdwCount,
     DWORD* pdwDefault,
@@ -354,11 +617,11 @@ HRESULT PeekProvider::GetCredentialCount(
     *pdwDefault = CREDENTIAL_PROVIDER_NO_DEFAULT;
     *pbAutoLogonWithDefault = FALSE;
 
-    if (m_cpus != CPUS_UNLOCK_WORKSTATION)
+    if (m_cpus != CPUS_UNLOCK_WORKSTATION && m_cpus != CPUS_LOGON)
     {
         wchar_t szBuf[256] = {};
         swprintf_s(szBuf, ARRAYSIZE(szBuf),
-            L"PeekProvider::GetCredentialCount: early return count=0, default=%u, autoLogon=%d (reason: non-unlock scenario %u) -> S_OK",
+            L"PeekProvider::GetCredentialCount: early return count=0, default=%u, autoLogon=%d (reason: unsupported scenario %u) -> S_OK",
             *pdwDefault, *pbAutoLogonWithDefault, m_cpus);
         Logger::LogInfo(szBuf);
         return S_OK;
@@ -374,26 +637,27 @@ HRESULT PeekProvider::GetCredentialCount(
         return S_OK;
     }
 
-    DWORD dwUserCount = 0;
-    HRESULT hr = m_pUserArray->GetCount(&dwUserCount);
-    if (FAILED(hr) || dwUserCount == 0)
+    DWORD userIndex = 0;
+    bool bLockedSession = false;
+    HRESULT hr = ResolveLockedUser(&userIndex, &bLockedSession);
+    if (hr != S_OK || !bLockedSession)
     {
         wchar_t szBuf[256] = {};
         swprintf_s(szBuf, ARRAYSIZE(szBuf),
-            L"PeekProvider::GetCredentialCount: early return count=0, default=%u, autoLogon=%d (reason: user count is 0 or GetCount failed hr=0x%08X) -> S_OK",
-            *pdwDefault, *pbAutoLogonWithDefault, hr);
+            L"PeekProvider::GetCredentialCount: early return count=0, default=%u, autoLogon=%d (reason: ResolveLockedUser returned hr=0x%08X, lockedSession=%d) -> S_OK",
+            *pdwDefault, *pbAutoLogonWithDefault, hr, bLockedSession);
         Logger::LogInfo(szBuf);
         return S_OK;
     }
 
     ICredentialProviderUser* pUser = nullptr;
-    hr = m_pUserArray->GetAt(0, &pUser);
+    hr = m_pUserArray->GetAt(userIndex, &pUser);
     if (FAILED(hr) || !pUser)
     {
         wchar_t szBuf[256] = {};
         swprintf_s(szBuf, ARRAYSIZE(szBuf),
-            L"PeekProvider::GetCredentialCount: early return count=0, default=%u, autoLogon=%d (reason: failed to get user 0 hr=0x%08X) -> S_OK",
-            *pdwDefault, *pbAutoLogonWithDefault, hr);
+            L"PeekProvider::GetCredentialCount: early return count=0, default=%u, autoLogon=%d (reason: failed to get user %u hr=0x%08X) -> S_OK",
+            *pdwDefault, *pbAutoLogonWithDefault, userIndex, hr);
         Logger::LogInfo(szBuf);
         return S_OK;
     }
@@ -507,7 +771,8 @@ HRESULT PeekProvider::GetCredentialCount(
             PFI_COUNT,
             m_userName.empty() ? nullptr : m_userName.c_str(),
             m_userDomain.empty() ? nullptr : m_userDomain.c_str(),
-            m_userSid.empty() ? nullptr : m_userSid.c_str()
+            m_userSid.empty() ? nullptr : m_userSid.c_str(),
+            bLockedSession
         );
         if (FAILED(hr))
         {
@@ -522,6 +787,7 @@ HRESULT PeekProvider::GetCredentialCount(
     else
     {
         m_pCredential->SetProvider(this);
+        m_pCredential->SetLockedSession(bLockedSession);
         m_pCredential->SetUserContext(
             m_userName.empty() ? nullptr : m_userName.c_str(),
             m_userDomain.empty() ? nullptr : m_userDomain.c_str(),

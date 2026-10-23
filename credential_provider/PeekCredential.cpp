@@ -8,6 +8,7 @@
 PeekCredential::PeekCredential()
     : m_cRef(1)
     , m_cpus(CPUS_LOGON)
+    , m_lockedSession(false)
     , m_pcpce(nullptr)
     , m_pProvider(nullptr)
     , m_isAuthenticated(false)
@@ -79,10 +80,12 @@ HRESULT PeekCredential::Initialize(
     DWORD /*dwFieldCount*/,
     PCWSTR pszUsername,
     PCWSTR pszDomain,
-    PCWSTR pszSid
+    PCWSTR pszSid,
+    bool bLockedSession
 )
 {
     m_cpus = cpus;
+    m_lockedSession = bLockedSession;
     if (pszUsername) m_username = pszUsername;
     if (pszDomain) m_domain = pszDomain;
     if (pszSid) m_sid = pszSid;
@@ -93,6 +96,21 @@ HRESULT PeekCredential::Initialize(
     }
 
     return S_OK;
+}
+
+void PeekCredential::SetLockedSession(bool bLockedSession)
+{
+    EnterCriticalSection(&m_cs);
+    m_lockedSession = bLockedSession;
+    LeaveCriticalSection(&m_cs);
+}
+
+bool PeekCredential::IsLockedSession() const
+{
+    EnterCriticalSection(&const_cast<CRITICAL_SECTION&>(m_cs));
+    bool locked = m_lockedSession;
+    LeaveCriticalSection(&const_cast<CRITICAL_SECTION&>(m_cs));
+    return locked;
 }
 
 void PeekCredential::SetUserContext(
@@ -461,6 +479,7 @@ HRESULT PeekCredential::GetSerialization(
 
     EnterCriticalSection(&m_cs);
     bool isAuth = m_isAuthenticated;
+    bool isLocked = m_lockedSession;
     std::wstring user = m_username;
     std::wstring domain = m_domain;
     std::wstring profileId = m_profileId;
@@ -474,15 +493,29 @@ HRESULT PeekCredential::GetSerialization(
         return S_OK;
     }
 
-    // For unlock scenarios, try to retrieve password from secret vault
-    if (m_cpus == CPUS_UNLOCK_WORKSTATION)
+    // For locked session scenarios, try to retrieve password from secret vault
+    if (isLocked)
     {
-        Logger::LogInfo(L"GetSerialization for unlock scenario - attempting to retrieve password from secret vault");
+        Logger::LogInfo(L"GetSerialization for locked session scenario - attempting to retrieve password from secret vault");
 
         // Try to decrypt a wrapped secret file that should contain the password
         BYTE buffer[1024] = {};
         DWORD cbActual = 0;
         DWORD sessionId = WTSGetActiveConsoleSessionId();
+#ifdef PEEK_TEST_BUILD
+        wchar_t szTestSession[32] = {};
+        if (GetEnvironmentVariableW(L"PEEK_TEST_SESSION_ID", szTestSession, ARRAYSIZE(szTestSession)) > 0)
+        {
+            if (wcscmp(szTestSession, L"CURRENT_USER_SESSION") == 0)
+            {
+                sessionId = PeekSecretVault::CURRENT_USER_SESSION;
+            }
+            else
+            {
+                sessionId = static_cast<DWORD>(wcstoul(szTestSession, nullptr, 0));
+            }
+        }
+#endif
         
         if (!profileId.empty() && PeekSecretVault::DecryptWrappedSecret(profileId.c_str(), sessionId, buffer, sizeof(buffer), &cbActual))
         {
@@ -549,7 +582,7 @@ HRESULT PeekCredential::ReportResult(
 {
     EnterCriticalSection(&m_cs);
     std::wstring profileId = m_profileId;
-    CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus = m_cpus;
+    bool isLocked = m_lockedSession;
     LeaveCriticalSection(&m_cs);
 
     // If Winlogon reports bad credentials (STATUS_LOGON_FAILURE, STATUS_WRONG_PASSWORD,
@@ -562,10 +595,24 @@ HRESULT PeekCredential::ReportResult(
         ntsSubstatus == STATUS_LOGON_FAILURE ||
         ntsSubstatus == STATUS_PASSWORD_EXPIRED)
     {
-        if (!profileId.empty() && cpus == CPUS_UNLOCK_WORKSTATION)
+        if (!profileId.empty() && isLocked)
         {
             Logger::LogInfo(L"ReportResult received authentication failure from Winlogon; deleting stale secret");
             DWORD sessionId = WTSGetActiveConsoleSessionId();
+#ifdef PEEK_TEST_BUILD
+            wchar_t szTestSession[32] = {};
+            if (GetEnvironmentVariableW(L"PEEK_TEST_SESSION_ID", szTestSession, ARRAYSIZE(szTestSession)) > 0)
+            {
+                if (wcscmp(szTestSession, L"CURRENT_USER_SESSION") == 0)
+                {
+                    sessionId = PeekSecretVault::CURRENT_USER_SESSION;
+                }
+                else
+                {
+                    sessionId = static_cast<DWORD>(wcstoul(szTestSession, nullptr, 0));
+                }
+            }
+#endif
             PeekSecretVault::DeleteWrappedSecret(profileId.c_str(), sessionId);
         }
     }

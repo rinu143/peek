@@ -2,6 +2,7 @@
 #include "PeekProvider.h"
 #include "PeekCredential.h"
 #include "PeekPipeClient.h"
+#include "SecretVault.h"
 #include <windows.h>
 #include <iostream>
 #include <cassert>
@@ -187,13 +188,15 @@ int main()
         HRESULT hrChangePw = provider.SetUsageScenario(CPUS_CHANGE_PASSWORD, 0);
         HRESULT hrUnlock = provider.SetUsageScenario(CPUS_UNLOCK_WORKSTATION, 0);
 
-        if (hrLogon == E_NOTIMPL && hrCredUi == E_NOTIMPL && hrChangePw == E_NOTIMPL && hrUnlock == S_OK)
+        if (hrLogon == S_OK && hrUnlock == S_OK && hrCredUi == E_NOTIMPL && hrChangePw == E_NOTIMPL)
         {
-            std::wcout << L"  PASS: CPUS_LOGON/CREDUI/CHANGE_PASSWORD return E_NOTIMPL, UNLOCK returns S_OK\n";
+            std::wcout << L"  PASS: CPUS_UNLOCK/CPUS_LOGON return S_OK; CPUS_CREDUI/CHANGE_PASSWORD return E_NOTIMPL\n";
         }
         else
         {
-            std::wcout << L"  FAIL: Unexpected HRESULT in SetUsageScenario\n";
+            std::wcout << L"  FAIL: Unexpected HRESULT in SetUsageScenario: hrLogon=" << hrLogon
+                       << L", hrUnlock=" << hrUnlock << L", hrCredUi=" << hrCredUi
+                       << L", hrChangePw=" << hrChangePw << L"\n";
             failed++;
         }
     }
@@ -713,6 +716,264 @@ int main()
         else
         {
             std::wcout << L"  FAIL: Could not open log file at " << logFilePath << L" (GetLastError=" << GetLastError() << L")\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 15: LOGON with a live session and matching SID (offered, GetSerialization unwraps)
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 15] Testing LOGON with live session and matching SID (offered, GetSerialization unwraps)...\n";
+    {
+        PeekProvider provider;
+        provider.SetUsageScenario(CPUS_LOGON, 0);
+
+        const std::wstring testSid = L"S-1-5-21-MATCH-1001";
+        const std::wstring testProfileId = L"test_logon_match_profile";
+        const std::wstring testPassword = L"TestPassword123!";
+
+        PeekProvider::SetTestSessionId(1);
+        PeekProvider::SetTestConsoleUserSid(testSid);
+        SetEnvironmentVariableW(L"PEEK_TEST_SESSION_ID", L"CURRENT_USER_SESSION");
+
+        // Write a wrapped secret into secret vault under CURRENT_USER_SESSION
+        std::vector<BYTE> rawSecret(sizeof(DWORD) + testPassword.size() * sizeof(wchar_t));
+        DWORD pwByteLen = static_cast<DWORD>(testPassword.size() * sizeof(wchar_t));
+        memcpy(rawSecret.data(), &pwByteLen, sizeof(DWORD));
+        memcpy(rawSecret.data() + sizeof(DWORD), testPassword.data(), pwByteLen);
+
+        // Ensure %LOCALAPPDATA%\Peek\Profiles exists
+        wchar_t szLocal[MAX_PATH];
+        if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, szLocal)))
+        {
+            std::wstring p = szLocal;
+            p += L"\\Peek";
+            CreateDirectoryW(p.c_str(), NULL);
+            p += L"\\Profiles";
+            CreateDirectoryW(p.c_str(), NULL);
+        }
+
+        BOOL bWritten = PeekSecretVault::WriteWrappedSecret(
+            testProfileId.c_str(),
+            PeekSecretVault::CURRENT_USER_SESSION,
+            rawSecret.data(),
+            static_cast<DWORD>(rawSecret.size())
+        );
+        if (!bWritten)
+        {
+            std::wcout << L"  [DEBUG] WriteWrappedSecret returned FALSE, GetLastError=" << GetLastError() << L"\n";
+        }
+
+        MockCredentialProviderUserArray* pArray = new MockCredentialProviderUserArray();
+        MockCredentialProviderUser* pUser = new MockCredentialProviderUser(testSid, L"MatchUser", L"MatchDomain");
+        pArray->AddUser(pUser);
+        pUser->Release();
+
+        provider.SetUserArray(pArray);
+
+        DWORD count = 0;
+        DWORD defaultIndex = 999;
+        BOOL autoLogon = TRUE;
+
+        HRESULT hr = provider.GetCredentialCount(&count, &defaultIndex, &autoLogon);
+        bool countOk = (SUCCEEDED(hr) && count == 1 && defaultIndex == CREDENTIAL_PROVIDER_NO_DEFAULT && autoLogon == FALSE);
+
+        bool unwrapOk = false;
+        if (countOk)
+        {
+            ICredentialProviderCredential* pCred = nullptr;
+            HRESULT hrGet = provider.GetCredentialAt(0, &pCred);
+            if (SUCCEEDED(hrGet) && pCred)
+            {
+                PeekCredential* pPeekCred = static_cast<PeekCredential*>(pCred);
+                pPeekCred->TestSetAuthenticated(true, testProfileId);
+
+                CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE resp = CPGSR_NO_CREDENTIAL_FINISHED;
+                CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION cpcs = {};
+                HRESULT hrSer = pPeekCred->GetSerialization(&resp, &cpcs, nullptr, nullptr);
+
+                if (SUCCEEDED(hrSer) && resp == CPGSR_RETURN_CREDENTIAL_FINISHED && cpcs.rgbSerialization != nullptr)
+                {
+                    unwrapOk = true;
+                    CoTaskMemFree(cpcs.rgbSerialization);
+                }
+                else
+                {
+                    std::wcout << L"  FAIL: GetSerialization failed or did not return credential (resp=" << resp << L", hr=" << hrSer << L")\n";
+                }
+                pCred->Release();
+            }
+        }
+
+        PeekSecretVault::DeleteWrappedSecret(testProfileId.c_str(), PeekSecretVault::CURRENT_USER_SESSION);
+        PeekProvider::ClearTestOverrides();
+        SetEnvironmentVariableW(L"PEEK_TEST_SESSION_ID", NULL);
+        pArray->Release();
+
+        if (countOk && unwrapOk)
+        {
+            std::wcout << L"  PASS: LOGON with live session offered tile (count=1) and GetSerialization successfully unwrapped password\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: LOGON with live session: countOk=" << countOk << L", unwrapOk=" << unwrapOk << L"\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 16: LOGON with no session (count 0, no unwrap)
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 16] Testing LOGON with no console session (count 0, no unwrap)...\n";
+    {
+        PeekProvider provider;
+        provider.SetUsageScenario(CPUS_LOGON, 0);
+
+        PeekProvider::SetTestSessionId(0xFFFFFFFF);
+        PeekProvider::SetTestConsoleUserSid(L"NONE");
+
+        MockCredentialProviderUserArray* pArray = new MockCredentialProviderUserArray();
+        MockCredentialProviderUser* pUser = new MockCredentialProviderUser(L"S-1-5-21-USER-1", L"User1", L"Domain1");
+        pArray->AddUser(pUser);
+        pUser->Release();
+
+        provider.SetUserArray(pArray);
+
+        DWORD count = 999;
+        DWORD defaultIndex = 999;
+        BOOL autoLogon = TRUE;
+
+        HRESULT hr = provider.GetCredentialCount(&count, &defaultIndex, &autoLogon);
+        bool countZero = (SUCCEEDED(hr) && count == 0);
+
+        // Verify that a credential with m_lockedSession == false never unwraps
+        PeekCredential cred;
+        CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR rgcpfd[PFI_COUNT] = {
+            { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
+            { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Peek - Face Unlock"), CPFG_CREDENTIAL_PROVIDER_LABEL },
+            { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User"),   GUID_NULL },
+            { PFI_STATUS_TEXT,  CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status"), GUID_NULL },
+        };
+        cred.Initialize(CPUS_LOGON, rgcpfd, PFI_COUNT, L"User1", L"Domain1", L"S-1-5-21-USER-1", false);
+        cred.TestSetAuthenticated(true, L"some_profile");
+
+        CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE resp = CPGSR_RETURN_CREDENTIAL_FINISHED;
+        CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION cpcs = {};
+        (void)cred.GetSerialization(&resp, &cpcs, nullptr, nullptr);
+        bool noUnwrap = (resp == CPGSR_NO_CREDENTIAL_FINISHED);
+
+        PeekProvider::ClearTestOverrides();
+        pArray->Release();
+
+        if (countZero && noUnwrap)
+        {
+            std::wcout << L"  PASS: LOGON with no session returned count=0 and GetSerialization did not unwrap\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: LOGON with no session: countZero=" << countZero << L" (count=" << count << L"), noUnwrap=" << noUnwrap << L"\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 17: LOGON with non-matching SID (count 0)
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 17] Testing LOGON with non-matching SID (count 0)...\n";
+    {
+        PeekProvider provider;
+        provider.SetUsageScenario(CPUS_LOGON, 0);
+
+        PeekProvider::SetTestSessionId(1);
+        PeekProvider::SetTestConsoleUserSid(L"S-1-5-21-CONSOLE-SESSION-USER");
+
+        MockCredentialProviderUserArray* pArray = new MockCredentialProviderUserArray();
+        MockCredentialProviderUser* pUser = new MockCredentialProviderUser(L"S-1-5-21-DIFFERENT-USER", L"DiffUser", L"Domain");
+        pArray->AddUser(pUser);
+        pUser->Release();
+
+        provider.SetUserArray(pArray);
+
+        DWORD count = 999;
+        DWORD defaultIndex = 999;
+        BOOL autoLogon = TRUE;
+
+        HRESULT hr = provider.GetCredentialCount(&count, &defaultIndex, &autoLogon);
+
+        PeekProvider::ClearTestOverrides();
+        pArray->Release();
+
+        if (SUCCEEDED(hr) && count == 0)
+        {
+            std::wcout << L"  PASS: LOGON with non-matching SID correctly declined tile (count=0)\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: LOGON with non-matching SID expected count=0, got count=" << count << L", hr=" << hr << L"\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 18: UNLOCK with multiple users prefers matching console user SID
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 18] Testing UNLOCK with multiple array users prefers matching console user SID...\n";
+    {
+        PeekProvider provider;
+        provider.SetUsageScenario(CPUS_UNLOCK_WORKSTATION, 0);
+
+        const std::wstring consoleSid = L"S-1-5-21-USER-TWO-1002";
+        PeekProvider::SetTestSessionId(1);
+        PeekProvider::SetTestConsoleUserSid(consoleSid);
+
+        MockCredentialProviderUserArray* pArray = new MockCredentialProviderUserArray();
+        MockCredentialProviderUser* pUser1 = new MockCredentialProviderUser(L"S-1-5-21-USER-ONE-1001", L"UserOne", L"Domain");
+        MockCredentialProviderUser* pUser2 = new MockCredentialProviderUser(consoleSid, L"UserTwo", L"Domain");
+        pArray->AddUser(pUser1);
+        pArray->AddUser(pUser2);
+        pUser1->Release();
+        pUser2->Release();
+
+        provider.SetUserArray(pArray);
+
+        DWORD count = 0;
+        DWORD defaultIndex = 999;
+        BOOL autoLogon = TRUE;
+
+        HRESULT hr = provider.GetCredentialCount(&count, &defaultIndex, &autoLogon);
+        bool countOk = (SUCCEEDED(hr) && count == 1);
+
+        bool userMatch = false;
+        if (countOk)
+        {
+            ICredentialProviderCredential* pCred = nullptr;
+            if (SUCCEEDED(provider.GetCredentialAt(0, &pCred)) && pCred)
+            {
+                ICredentialProviderCredential2* pCred2 = nullptr;
+                if (SUCCEEDED(pCred->QueryInterface(IID_ICredentialProviderCredential2, reinterpret_cast<void**>(&pCred2))) && pCred2)
+                {
+                    PWSTR pszSid = nullptr;
+                    if (SUCCEEDED(pCred2->GetUserSid(&pszSid)) && pszSid)
+                    {
+                        userMatch = (std::wstring(pszSid) == consoleSid);
+                        CoTaskMemFree(pszSid);
+                    }
+                    pCred2->Release();
+                }
+                pCred->Release();
+            }
+        }
+
+        PeekProvider::ClearTestOverrides();
+        pArray->Release();
+
+        if (countOk && userMatch)
+        {
+            std::wcout << L"  PASS: UNLOCK with multiple users correctly matched and preferred console session user: " << consoleSid << L"\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: UNLOCK multiple users preference failed: countOk=" << countOk << L", userMatch=" << userMatch << L"\n";
             failed++;
         }
     }

@@ -21,7 +21,8 @@ public:
         DWORD dwFieldCount,
         PCWSTR pszUsername = nullptr,
         PCWSTR pszDomain = nullptr,
-        PCWSTR pszSid = nullptr
+        PCWSTR pszSid = nullptr,
+        bool bLockedSession = false
     );
 
     void SetUserContext(
@@ -29,6 +30,19 @@ public:
         PCWSTR pszDomain,
         PCWSTR pszSid
     );
+
+    void SetLockedSession(bool bLockedSession);
+    bool IsLockedSession() const;
+
+#ifdef PEEK_TEST_BUILD
+    void TestSetAuthenticated(bool isAuth, const std::wstring& profileId)
+    {
+        EnterCriticalSection(&m_cs);
+        m_isAuthenticated = isAuth;
+        m_profileId = profileId;
+        LeaveCriticalSection(&m_cs);
+    }
+#endif
 
     // Provider linkage for logon notifications
     void SetProvider(PeekProvider* pProvider);
@@ -80,6 +94,7 @@ private:
 
     long m_cRef;
     CREDENTIAL_PROVIDER_USAGE_SCENARIO m_cpus;
+    bool m_lockedSession;
     ICredentialProviderCredentialEvents* m_pcpce;
     PeekProvider* m_pProvider;
     std::wstring m_username;
