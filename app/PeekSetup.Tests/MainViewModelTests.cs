@@ -120,11 +120,16 @@ namespace PeekSetup.Tests
         public string? LastProfileId { get; private set; }
         public int CallCount { get; private set; }
 
-        public bool LinkPassword(string profileId, SecureString password, string? username = null, string? targetDirectory = null)
+        public bool LinkPassword(string profileId, SecureString password, string? username = null, string? sid = null)
         {
             CallCount++;
             LastProfileId = profileId;
             return ShouldLinkSucceed;
+        }
+
+        public bool UnlinkPassword(string sid)
+        {
+            return true;
         }
     }
 

@@ -482,79 +482,78 @@ HRESULT PeekCredential::GetSerialization(
     bool isLocked = m_lockedSession;
     std::wstring user = m_username;
     std::wstring domain = m_domain;
+    std::wstring sid = m_sid;
     std::wstring profileId = m_profileId;
     LeaveCriticalSection(&m_cs);
 
     // NON-NEGOTIABLE SECURITY INVARIANT:
-    // Only return credentials if authentication strictly succeeded via the engine.
-    if (!isAuth)
+    // Only return credentials if authentication strictly succeeded via the engine
+    // AND it is a locked session scenario with valid SID and profile ID.
+    if (!isAuth || !isLocked || sid.empty() || profileId.empty())
     {
         *pcpgsr = CPGSR_NO_CREDENTIAL_FINISHED;
         return S_OK;
     }
 
-    // For locked session scenarios, try to retrieve password from secret vault
-    if (isLocked)
-    {
-        Logger::LogInfo(L"GetSerialization for locked session scenario - attempting to retrieve password from secret vault");
+    Logger::LogInfo(L"GetSerialization for locked session scenario - attempting to retrieve password from LSA secret store");
 
-        // Try to decrypt a wrapped secret file that should contain the password
-        BYTE buffer[1024] = {};
-        DWORD cbActual = 0;
-        DWORD sessionId = WTSGetActiveConsoleSessionId();
-#ifdef PEEK_TEST_BUILD
-        wchar_t szTestSession[32] = {};
-        if (GetEnvironmentVariableW(L"PEEK_TEST_SESSION_ID", szTestSession, ARRAYSIZE(szTestSession)) > 0)
+    std::wstring password;
+    if (PeekSecretVault::ReadPasswordSecret(sid, profileId, password))
+    {
+        Logger::LogInfo(L"Successfully retrieved and validated secret from LSA store for bound profile");
+
+        // Stale-secret handling: still validate with LogonUserW before submitting.
+        DWORD dwLogonErr = ERROR_SUCCESS;
+        auto validator = PeekSecretVault::GetPasswordValidator();
+        bool bValid = validator ? validator(user.c_str(), domain.c_str(), password.c_str(), &dwLogonErr) : false;
+
+        if (bValid)
         {
-            if (wcscmp(szTestSession, L"CURRENT_USER_SESSION") == 0)
+            HRESULT hr = PeekSerialization::PackageKerbLogon(
+                domain.c_str(),
+                user.c_str(),
+                password.c_str(),
+                pcpcs
+            );
+
+            if (!password.empty())
             {
-                sessionId = PeekSecretVault::CURRENT_USER_SESSION;
+                SecureZeroMemory(&password[0], password.size() * sizeof(wchar_t));
+            }
+
+            if (SUCCEEDED(hr))
+            {
+                Logger::LogInfo(L"Successfully packaged Kerberos logon serialization");
+                *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED;
+                return S_OK;
+            }
+        }
+        else
+        {
+            // Delete the LSA secret ONLY when the failure is ERROR_LOGON_FAILURE (wrong password).
+            // Do NOT delete for lockout, disabled account, expired/must-change password, restricted hours,
+            // or any other error; fail open instead. Never submit the same failed credential twice.
+            if (dwLogonErr == ERROR_LOGON_FAILURE)
+            {
+                Logger::LogInfo(L"LogonUserW rejected stored password with ERROR_LOGON_FAILURE; deleting stale LSA secret");
+                PeekSecretVault::DeletePasswordSecret(sid);
             }
             else
             {
-                sessionId = static_cast<DWORD>(wcstoul(szTestSession, nullptr, 0));
+                wchar_t szErrBuf[128] = {};
+                swprintf_s(szErrBuf, ARRAYSIZE(szErrBuf), L"LogonUserW failed with error %u (not ERROR_LOGON_FAILURE); preserving LSA secret and failing open", dwLogonErr);
+                Logger::LogInfo(szErrBuf);
             }
-        }
-#endif
-        
-        if (!profileId.empty() && PeekSecretVault::DecryptWrappedSecret(profileId.c_str(), sessionId, buffer, sizeof(buffer), &cbActual))
-        {
-            Logger::LogInfo(L"Successfully decrypted secret from vault");
-            
-            // Secret plaintext is [DWORD UTF-16LE byte length][UTF-16LE bytes], never a C string.
-            if (cbActual >= sizeof(DWORD))
+
+            if (!password.empty())
             {
-                DWORD passwordBytes = 0;
-                memcpy(&passwordBytes, buffer, sizeof(passwordBytes));
-                if (passwordBytes <= cbActual - sizeof(DWORD) &&
-                    passwordBytes % sizeof(wchar_t) == 0)
-                {
-                    std::wstring password(reinterpret_cast<LPCWSTR>(buffer + sizeof(DWORD)), passwordBytes / sizeof(wchar_t));
-                    
-                    // Directly package standard Kerberos/Negotiate interactive logon with the retrieved password.
-                    // The redundant LogonUserW pre-check is removed so Winlogon is the single authority on password validity.
-                    HRESULT hr = PeekSerialization::PackageKerbLogon(
-                        domain.c_str(),
-                        user.c_str(),
-                        password.c_str(),
-                        pcpcs
-                    );
-                    if (!password.empty())
-                    {
-                        SecureZeroMemory(&password[0], password.size() * sizeof(wchar_t));
-                    }
-                    SecureZeroMemory(buffer, sizeof(buffer));
-                    if (SUCCEEDED(hr))
-                    {
-                        *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED;
-                        return S_OK;
-                    }
-                }
+                SecureZeroMemory(&password[0], password.size() * sizeof(wchar_t));
             }
         }
-        SecureZeroMemory(buffer, sizeof(buffer));
-        
-        Logger::LogInfo(L"Failed to get valid password from secret vault - falling back to standard authentication");
+    }
+    else
+    {
+        Logger::LogInfo(L"No valid LSA secret found or profile binding mismatch - failing open to standard authentication");
     }
 
     // Never serialize an empty password. Standard providers remain available
@@ -569,9 +568,6 @@ HRESULT PeekCredential::GetSerialization(
 #ifndef STATUS_WRONG_PASSWORD
 #define STATUS_WRONG_PASSWORD ((NTSTATUS)0xC000006AL)
 #endif
-#ifndef STATUS_PASSWORD_EXPIRED
-#define STATUS_PASSWORD_EXPIRED ((NTSTATUS)0xC0000071L)
-#endif
 
 HRESULT PeekCredential::ReportResult(
     NTSTATUS ntsStatus,
@@ -581,39 +577,21 @@ HRESULT PeekCredential::ReportResult(
 )
 {
     EnterCriticalSection(&m_cs);
-    std::wstring profileId = m_profileId;
+    std::wstring sid = m_sid;
     bool isLocked = m_lockedSession;
     LeaveCriticalSection(&m_cs);
 
-    // If Winlogon reports bad credentials (STATUS_LOGON_FAILURE, STATUS_WRONG_PASSWORD,
-    // or STATUS_PASSWORD_EXPIRED), delete the stale stored secret for this profile/session
-    // so a stale linked password doesn't keep silently failing on subsequent unlock attempts.
+    // If Winlogon reports wrong password, delete the stale stored LSA secret for this SID.
+    // Do NOT delete for lockout, disabled account, expired/must-change password, or any other error.
     if (ntsStatus == STATUS_LOGON_FAILURE ||
         ntsStatus == STATUS_WRONG_PASSWORD ||
-        ntsStatus == STATUS_PASSWORD_EXPIRED ||
         ntsSubstatus == STATUS_WRONG_PASSWORD ||
-        ntsSubstatus == STATUS_LOGON_FAILURE ||
-        ntsSubstatus == STATUS_PASSWORD_EXPIRED)
+        ntsSubstatus == STATUS_LOGON_FAILURE)
     {
-        if (!profileId.empty() && isLocked)
+        if (!sid.empty() && isLocked)
         {
-            Logger::LogInfo(L"ReportResult received authentication failure from Winlogon; deleting stale secret");
-            DWORD sessionId = WTSGetActiveConsoleSessionId();
-#ifdef PEEK_TEST_BUILD
-            wchar_t szTestSession[32] = {};
-            if (GetEnvironmentVariableW(L"PEEK_TEST_SESSION_ID", szTestSession, ARRAYSIZE(szTestSession)) > 0)
-            {
-                if (wcscmp(szTestSession, L"CURRENT_USER_SESSION") == 0)
-                {
-                    sessionId = PeekSecretVault::CURRENT_USER_SESSION;
-                }
-                else
-                {
-                    sessionId = static_cast<DWORD>(wcstoul(szTestSession, nullptr, 0));
-                }
-            }
-#endif
-            PeekSecretVault::DeleteWrappedSecret(profileId.c_str(), sessionId);
+            Logger::LogInfo(L"ReportResult received authentication failure from Winlogon; deleting stale LSA secret");
+            PeekSecretVault::DeletePasswordSecret(sid);
         }
     }
 

@@ -1,181 +1,423 @@
 // Peek Face Engine - Secret Vault Implementation
-// Manages DPAPI-wrapped Windows password secrets for credential provider
+// Manages LSA private data secrets for credential provider
 
 #include "SecretVault.h"
 #include "common.h"
 #include <windows.h>
-#include <winbase.h>
 #include <ntsecapi.h>
 #include <vector>
-#include <shlwapi.h>
-#include <shlobj.h>
 #include <string>
-#include <direct.h>
-#include <wtsapi32.h>
+#include <memory>
+#include <map>
 
 #pragma comment(lib, "Advapi32.lib")
-#pragma comment(lib, "Shlwapi.lib")
-#pragma comment(lib, "Wtsapi32.lib")
-#pragma comment(lib, "Crypt32.lib")
-#pragma comment(lib, "Shell32.lib")
-#pragma comment(lib, "Ole32.lib")
+
+#ifndef STATUS_SUCCESS
+#define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
+#endif
+#ifndef STATUS_OBJECT_NAME_NOT_FOUND
+#define STATUS_OBJECT_NAME_NOT_FOUND ((NTSTATUS)0xC0000034L)
+#endif
 
 namespace PeekSecretVault
 {
-    HANDLE GetUserTokenFromSessionId(DWORD dwSessionId);
-    // RAII wrapper for impersonation to ensure revert happens even on exceptions
-    class ImpersonationGuard
+    static std::shared_ptr<ILsaSecretStore> s_activeStore = nullptr;
+    static PasswordValidatorFn s_activeValidator = nullptr;
+
+    static void InitLsaString(PLSA_UNICODE_STRING pLsaStr, PCWSTR pszStr)
     {
-    public:
-        ImpersonationGuard(HANDLE hToken) : m_hToken(hToken), m_bImpersonated(false)
+        if (pszStr)
         {
-            if (hToken != NULL)
+            size_t cch = wcslen(pszStr);
+            pLsaStr->Buffer = const_cast<PWSTR>(pszStr);
+            pLsaStr->Length = static_cast<USHORT>(cch * sizeof(WCHAR));
+            pLsaStr->MaximumLength = static_cast<USHORT>((cch + 1) * sizeof(WCHAR));
+        }
+        else
+        {
+            pLsaStr->Buffer = nullptr;
+            pLsaStr->Length = 0;
+            pLsaStr->MaximumLength = 0;
+        }
+    }
+
+    NTSTATUS RealLsaSecretStore::RetrieveSecret(const std::wstring& secretName, std::vector<BYTE>& outData)
+    {
+        outData.clear();
+        LSA_OBJECT_ATTRIBUTES objAttr = {};
+        LSA_HANDLE hPolicy = NULL;
+
+        NTSTATUS status = LsaOpenPolicy(NULL, &objAttr, POLICY_GET_PRIVATE_INFORMATION, &hPolicy);
+        if (status != STATUS_SUCCESS)
+        {
+            return status;
+        }
+
+        LSA_UNICODE_STRING lusKey = {};
+        InitLsaString(&lusKey, secretName.c_str());
+
+        PLSA_UNICODE_STRING pPrivateData = NULL;
+        status = LsaRetrievePrivateData(hPolicy, &lusKey, &pPrivateData);
+        if (status == STATUS_SUCCESS && pPrivateData != NULL)
+        {
+            if (pPrivateData->Buffer != NULL && pPrivateData->Length > 0)
             {
-                m_bImpersonated = ImpersonateLoggedOnUser(hToken);
+                outData.resize(pPrivateData->Length);
+                memcpy(outData.data(), pPrivateData->Buffer, pPrivateData->Length);
+                SecureZeroMemory(pPrivateData->Buffer, pPrivateData->Length);
+            }
+            LsaFreeMemory(pPrivateData);
+        }
+
+        LsaClose(hPolicy);
+        return status;
+    }
+
+    NTSTATUS RealLsaSecretStore::StoreSecret(const std::wstring& secretName, const BYTE* pbData, DWORD cbData)
+    {
+        LSA_OBJECT_ATTRIBUTES objAttr = {};
+        LSA_HANDLE hPolicy = NULL;
+
+        NTSTATUS status = LsaOpenPolicy(NULL, &objAttr, POLICY_CREATE_SECRET, &hPolicy);
+        if (status != STATUS_SUCCESS)
+        {
+            return status;
+        }
+
+        LSA_UNICODE_STRING lusKey = {};
+        InitLsaString(&lusKey, secretName.c_str());
+
+        LSA_UNICODE_STRING lusData = {};
+        lusData.Buffer = const_cast<PWSTR>(reinterpret_cast<PCWSTR>(pbData));
+        lusData.Length = static_cast<USHORT>(cbData);
+        lusData.MaximumLength = static_cast<USHORT>(cbData);
+
+        status = LsaStorePrivateData(hPolicy, &lusKey, &lusData);
+        LsaClose(hPolicy);
+        return status;
+    }
+
+    NTSTATUS RealLsaSecretStore::DeleteSecret(const std::wstring& secretName)
+    {
+        LSA_OBJECT_ATTRIBUTES objAttr = {};
+        LSA_HANDLE hPolicy = NULL;
+
+        NTSTATUS status = LsaOpenPolicy(NULL, &objAttr, POLICY_CREATE_SECRET, &hPolicy);
+        if (status != STATUS_SUCCESS)
+        {
+            return status;
+        }
+
+        LSA_UNICODE_STRING lusKey = {};
+        InitLsaString(&lusKey, secretName.c_str());
+
+        // Storing NULL deletes the secret
+        status = LsaStorePrivateData(hPolicy, &lusKey, NULL);
+        LsaClose(hPolicy);
+        return status;
+    }
+
+    NTSTATUS InMemoryLsaSecretStore::RetrieveSecret(const std::wstring& secretName, std::vector<BYTE>& outData)
+    {
+        outData.clear();
+        auto it = m_secrets.find(secretName);
+        if (it == m_secrets.end())
+        {
+            return STATUS_OBJECT_NAME_NOT_FOUND;
+        }
+        outData = it->second;
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS InMemoryLsaSecretStore::StoreSecret(const std::wstring& secretName, const BYTE* pbData, DWORD cbData)
+    {
+        if (pbData && cbData > 0)
+        {
+            m_secrets[secretName] = std::vector<BYTE>(pbData, pbData + cbData);
+        }
+        else
+        {
+            m_secrets.erase(secretName);
+        }
+        return STATUS_SUCCESS;
+    }
+
+    NTSTATUS InMemoryLsaSecretStore::DeleteSecret(const std::wstring& secretName)
+    {
+        m_secrets.erase(secretName);
+        return STATUS_SUCCESS;
+    }
+
+    void InMemoryLsaSecretStore::Clear()
+    {
+        for (auto& pair : m_secrets)
+        {
+            if (!pair.second.empty())
+            {
+                SecureZeroMemory(pair.second.data(), pair.second.size());
             }
         }
-
-        ~ImpersonationGuard()
-        {
-            if (m_bImpersonated)
-            {
-                RevertToSelf();
-            }
-        }
-
-        bool IsImpersonated() const { return m_bImpersonated; }
-
-    private:
-        HANDLE m_hToken;
-        bool m_bImpersonated;
-    };
-    // Helper function to get the secret file path for a profile
-    std::wstring GetSecretFilePath(_In_ PCWSTR pszProfileId)
-    {
-        // Get the local app data directory
-        wchar_t szLocalAppData[MAX_PATH];
-        if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, szLocalAppData)))
-        {
-            std::wstring secretPath = szLocalAppData;
-            secretPath += L"\\Peek\\Profiles\\";
-            
-            secretPath += pszProfileId;
-            secretPath += L".secret";
-            
-            return secretPath;
-        }
-        
-        return L"";
+        m_secrets.clear();
     }
 
-    // Internal helper to read the wrapped secret file under the active impersonation context
-    static BOOL ReadWrappedSecretFileInternal(
-        _In_ PCWSTR pszProfileId,
-        _Out_writes_bytes_to_(cbBuffer, *pcbActual) PBYTE pbBuffer,
-        _In_ DWORD cbBuffer,
-        _Out_ PDWORD pcbActual
-    )
+    bool InMemoryLsaSecretStore::HasSecret(const std::wstring& secretName) const
     {
-        if (!pszProfileId || !pbBuffer || !pcbActual)
-        {
-            return FALSE;
-        }
-
-        *pcbActual = 0;
-
-        std::wstring secretPath = GetSecretFilePath(pszProfileId);
-        if (secretPath.empty())
-        {
-            return FALSE;
-        }
-
-        // Check if file exists
-        DWORD dwAttrib = GetFileAttributesW(secretPath.c_str());
-        if (dwAttrib == INVALID_FILE_ATTRIBUTES)
-        {
-            return FALSE;
-        }
-
-        // Read the entire file
-        HANDLE hFile = CreateFileW(
-            secretPath.c_str(),
-            GENERIC_READ,
-            FILE_SHARE_READ,
-            NULL,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            NULL
-        );
-
-        if (hFile == INVALID_HANDLE_VALUE)
-        {
-            return FALSE;
-        }
-
-        DWORD cbFileSize = GetFileSize(hFile, NULL);
-        if (cbFileSize == 0 || cbFileSize > cbBuffer)
-        {
-            CloseHandle(hFile);
-            return FALSE;
-        }
-
-        DWORD cbRead = 0;
-        BOOL bResult = ReadFile(hFile, pbBuffer, cbFileSize, &cbRead, NULL);
-        CloseHandle(hFile);
-
-        if (!bResult)
-        {
-            return FALSE;
-        }
-
-        *pcbActual = cbRead;
-        return TRUE;
+        return m_secrets.find(secretName) != m_secrets.end();
     }
 
-    BOOL ReadWrappedSecret(
-        _In_ PCWSTR pszProfileId,
-        _In_ DWORD dwSessionId,
-        _Out_writes_bytes_to_(cbBuffer, *pcbActual) PBYTE pbBuffer,
-        _In_ DWORD cbBuffer,
-        _Out_ PDWORD pcbActual
-    )
+    void SetLsaSecretStore(std::shared_ptr<ILsaSecretStore> store)
     {
-        if (!pszProfileId || !pbBuffer || !pcbActual)
-        {
-            return FALSE;
-        }
-
-        *pcbActual = 0;
-
-        HANDLE hUserToken = GetUserTokenFromSessionId(dwSessionId);
-        if (!hUserToken)
-        {
-            return FALSE;
-        }
-        ImpersonationGuard impersonation(hUserToken);
-        if (!impersonation.IsImpersonated())
-        {
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        BOOL bResult = ReadWrappedSecretFileInternal(pszProfileId, pbBuffer, cbBuffer, pcbActual);
-        CloseHandle(hUserToken);
-        return bResult;
+        s_activeStore = store;
     }
 
-    BOOL ValidateWindowsPassword(
-        _In_ PCWSTR pszUsername,
-        _In_ PCWSTR pszDomain,
-        _In_ PCWSTR pszPassword
+    std::shared_ptr<ILsaSecretStore> GetLsaSecretStore()
+    {
+        if (!s_activeStore)
+        {
+            s_activeStore = std::make_shared<RealLsaSecretStore>();
+        }
+        return s_activeStore;
+    }
+
+    void SetPasswordValidator(PasswordValidatorFn fn)
+    {
+        s_activeValidator = fn;
+    }
+
+    PasswordValidatorFn GetPasswordValidator()
+    {
+        if (!s_activeValidator)
+        {
+            s_activeValidator = ValidatePassword;
+        }
+        return s_activeValidator;
+    }
+
+    bool BuildSecretPayload(
+        const std::wstring& profileId,
+        const std::wstring& password,
+        std::vector<BYTE>& outPayload
     )
     {
+        outPayload.clear();
+        if (profileId.empty() || password.empty())
+        {
+            return false;
+        }
+
+        DWORD version = CURRENT_PAYLOAD_VERSION; // 1
+        DWORD profileIdBytes = static_cast<DWORD>(profileId.size() * sizeof(wchar_t));
+        DWORD passwordBytes = static_cast<DWORD>(password.size() * sizeof(wchar_t));
+
+        DWORD totalSize = sizeof(DWORD) * 3 + profileIdBytes + passwordBytes;
+        if (totalSize > LSA_SECRET_MAX_SIZE)
+        {
+            return false;
+        }
+
+        outPayload.resize(totalSize);
+        BYTE* ptr = outPayload.data();
+
+        memcpy(ptr, &version, sizeof(DWORD));
+        ptr += sizeof(DWORD);
+
+        memcpy(ptr, &profileIdBytes, sizeof(DWORD));
+        ptr += sizeof(DWORD);
+
+        memcpy(ptr, profileId.data(), profileIdBytes);
+        ptr += profileIdBytes;
+
+        memcpy(ptr, &passwordBytes, sizeof(DWORD));
+        ptr += sizeof(DWORD);
+
+        memcpy(ptr, password.data(), passwordBytes);
+
+        return true;
+    }
+
+    bool ParseSecretPayload(
+        const BYTE* pbData,
+        DWORD cbData,
+        const std::wstring& expectedProfileId,
+        std::wstring& outPassword
+    )
+    {
+        outPassword.clear();
+        if (!pbData || cbData < sizeof(DWORD) * 3 || cbData > LSA_SECRET_MAX_SIZE)
+        {
+            return false;
+        }
+
+        const BYTE* ptr = pbData;
+        DWORD version = 0;
+        memcpy(&version, ptr, sizeof(DWORD));
+        ptr += sizeof(DWORD);
+
+        if (version != CURRENT_PAYLOAD_VERSION)
+        {
+            return false;
+        }
+
+        DWORD profileIdBytes = 0;
+        memcpy(&profileIdBytes, ptr, sizeof(DWORD));
+        ptr += sizeof(DWORD);
+
+        if (profileIdBytes == 0 || (profileIdBytes % sizeof(wchar_t)) != 0)
+        {
+            return false;
+        }
+
+        DWORD remainingAfterProfLen = cbData - (sizeof(DWORD) * 2);
+        if (profileIdBytes > remainingAfterProfLen - sizeof(DWORD))
+        {
+            return false;
+        }
+
+        std::wstring storedProfileId(reinterpret_cast<const wchar_t*>(ptr), profileIdBytes / sizeof(wchar_t));
+        ptr += profileIdBytes;
+
+        DWORD passwordBytes = 0;
+        memcpy(&passwordBytes, ptr, sizeof(DWORD));
+        ptr += sizeof(DWORD);
+
+        if (passwordBytes == 0 || (passwordBytes % sizeof(wchar_t)) != 0)
+        {
+            return false;
+        }
+
+        DWORD expectedRemaining = cbData - (sizeof(DWORD) * 3 + profileIdBytes);
+        if (passwordBytes != expectedRemaining)
+        {
+            return false;
+        }
+
+        // Profile ID binding: stored profile_id must strictly match expected profile_id
+        if (storedProfileId != expectedProfileId)
+        {
+            return false;
+        }
+
+        outPassword.assign(reinterpret_cast<const wchar_t*>(ptr), passwordBytes / sizeof(wchar_t));
+        return true;
+    }
+
+    std::wstring GetSecretKeyName(const std::wstring& userSid)
+    {
+        return L"L$PeekCred_" + userSid;
+    }
+
+    bool ReadPasswordSecret(
+        const std::wstring& userSid,
+        const std::wstring& expectedProfileId,
+        std::wstring& outPassword,
+        ILsaSecretStore* pStore
+    )
+    {
+        outPassword.clear();
+        if (userSid.empty() || expectedProfileId.empty())
+        {
+            return false;
+        }
+
+        std::shared_ptr<ILsaSecretStore> spStore;
+        if (!pStore)
+        {
+            spStore = GetLsaSecretStore();
+            pStore = spStore.get();
+        }
+        if (!pStore)
+        {
+            return false;
+        }
+
+        std::wstring keyName = GetSecretKeyName(userSid);
+        std::vector<BYTE> secretData;
+        NTSTATUS status = pStore->RetrieveSecret(keyName, secretData);
+        if (status != STATUS_SUCCESS || secretData.empty())
+        {
+            return false;
+        }
+
+        bool parsed = ParseSecretPayload(secretData.data(), static_cast<DWORD>(secretData.size()), expectedProfileId, outPassword);
+        SecureZeroMemory(secretData.data(), secretData.size());
+        return parsed;
+    }
+
+    bool DeletePasswordSecret(
+        const std::wstring& userSid,
+        ILsaSecretStore* pStore
+    )
+    {
+        if (userSid.empty())
+        {
+            return false;
+        }
+
+        std::shared_ptr<ILsaSecretStore> spStore;
+        if (!pStore)
+        {
+            spStore = GetLsaSecretStore();
+            pStore = spStore.get();
+        }
+        if (!pStore)
+        {
+            return false;
+        }
+
+        std::wstring keyName = GetSecretKeyName(userSid);
+        NTSTATUS status = pStore->DeleteSecret(keyName);
+        return (status == STATUS_SUCCESS || status == STATUS_OBJECT_NAME_NOT_FOUND);
+    }
+
+    bool StorePasswordSecret(
+        const std::wstring& userSid,
+        const std::wstring& profileId,
+        const std::wstring& password,
+        ILsaSecretStore* pStore
+    )
+    {
+        if (userSid.empty() || profileId.empty() || password.empty())
+        {
+            return false;
+        }
+
+        std::shared_ptr<ILsaSecretStore> spStore;
+        if (!pStore)
+        {
+            spStore = GetLsaSecretStore();
+            pStore = spStore.get();
+        }
+        if (!pStore)
+        {
+            return false;
+        }
+
+        std::vector<BYTE> payload;
+        if (!BuildSecretPayload(profileId, password, payload))
+        {
+            return false;
+        }
+
+        std::wstring keyName = GetSecretKeyName(userSid);
+        NTSTATUS status = pStore->StoreSecret(keyName, payload.data(), static_cast<DWORD>(payload.size()));
+        SecureZeroMemory(payload.data(), payload.size());
+        return (status == STATUS_SUCCESS);
+    }
+
+    bool ValidatePassword(
+        PCWSTR pszUsername,
+        PCWSTR pszDomain,
+        PCWSTR pszPassword,
+        DWORD* pdwErrorCode
+    )
+    {
+        if (pdwErrorCode) *pdwErrorCode = ERROR_SUCCESS;
         if (!pszUsername || !pszPassword)
         {
-            return FALSE;
+            if (pdwErrorCode) *pdwErrorCode = ERROR_INVALID_PARAMETER;
+            return false;
         }
 
-        // Use LogonUser to validate the password
         HANDLE hToken = NULL;
         BOOL bResult = LogonUserW(
             pszUsername,
@@ -189,442 +431,11 @@ namespace PeekSecretVault
         if (bResult && hToken)
         {
             CloseHandle(hToken);
+            return true;
         }
 
-        return bResult;
-    }
-
-    // Helper to get user token from session ID - for impersonation.
-    HANDLE GetUserTokenFromSessionId(DWORD dwSessionId)
-    {
-        // Support CURRENT_USER_SESSION for test harness / in-process execution without Session 0 WTSQueryUserToken
-        if (dwSessionId == CURRENT_USER_SESSION)
-        {
-            HANDLE hProcessToken = NULL;
-            if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_IMPERSONATE, &hProcessToken))
-            {
-                HANDLE hUserToken = NULL;
-                if (DuplicateToken(hProcessToken, SecurityImpersonation, &hUserToken))
-                {
-                    CloseHandle(hProcessToken);
-                    return hUserToken;
-                }
-                CloseHandle(hProcessToken);
-            }
-            return NULL;
-        }
-
-        // Diagnostics run immediately before SecretVault tries WTSQueryUserToken
-        PeekDiagnostics::RunProcessTokenDiagnostics(L"SecretVault::GetUserTokenFromSessionId", dwSessionId);
-
-        HANDLE hToken = NULL;
-
-        // Get the user token for the specified session
-        if (!WTSQueryUserToken(dwSessionId, &hToken))
-        {
-            return NULL;
-        }
-
-        return hToken;
-    }
-
-    // Helper to obtain the per-install machine-bound entropy value.
-    //
-    // SECURITY RESIDUAL-RISK NOTE:
-    // Adding machine-bound entropy is defense-in-depth against casual or scripted
-    // decryption (e.g. offline decryption if <profile_id>.secret is exfiltrated).
-    // It is NOT a fix for the fundamental architectural risk that any process executing
-    // under the enrolled user's logon session can discover this entropy and call
-    // CryptUnprotectData to recover the plaintext password. This does not make the
-    // stored password inherently "safe" or comparable to Windows Hello Face's TPM keys.
-    BOOL GetMachineEntropy(_Out_ std::vector<BYTE>& entropy)
-    {
-        entropy.clear();
-
-        // 1. Environment variable override (useful for isolated unit testing)
-        wchar_t szEnv[256] = {};
-        DWORD dwEnvLen = GetEnvironmentVariableW(L"PEEK_MACHINE_ENTROPY", szEnv, ARRAYSIZE(szEnv));
-        if (dwEnvLen > 0 && dwEnvLen < ARRAYSIZE(szEnv))
-        {
-            int cbNeeded = WideCharToMultiByte(CP_UTF8, 0, szEnv, dwEnvLen, NULL, 0, NULL, NULL);
-            if (cbNeeded > 0)
-            {
-                entropy.resize(cbNeeded);
-                WideCharToMultiByte(CP_UTF8, 0, szEnv, dwEnvLen, reinterpret_cast<char*>(entropy.data()), cbNeeded, NULL, NULL);
-                return TRUE;
-            }
-        }
-
-        // 2. Check %ProgramData%\Peek\machine_entropy.bin
-        wchar_t szProgramData[MAX_PATH] = {};
-        if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_COMMON_APPDATA, NULL, 0, szProgramData)))
-        {
-            std::wstring entropyDir = szProgramData;
-            entropyDir += L"\\Peek";
-            std::wstring entropyPath = entropyDir + L"\\machine_entropy.bin";
-
-            HANDLE hFile = CreateFileW(
-                entropyPath.c_str(),
-                GENERIC_READ,
-                FILE_SHARE_READ,
-                NULL,
-                OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
-                NULL
-            );
-
-            if (hFile != INVALID_HANDLE_VALUE)
-            {
-                DWORD dwSize = GetFileSize(hFile, NULL);
-                if (dwSize > 0 && dwSize < 4096)
-                {
-                    entropy.resize(dwSize);
-                    DWORD dwRead = 0;
-                    if (ReadFile(hFile, entropy.data(), dwSize, &dwRead, NULL) && dwRead > 0)
-                    {
-                        entropy.resize(dwRead);
-                        while (!entropy.empty() && (entropy.back() == '\r' || entropy.back() == '\n' || entropy.back() == ' '))
-                        {
-                            entropy.pop_back();
-                        }
-                        CloseHandle(hFile);
-                        if (!entropy.empty())
-                        {
-                            return TRUE;
-                        }
-                    }
-                }
-                CloseHandle(hFile);
-            }
-
-            // 3. Attempt to generate and store machine entropy file if it doesn't exist
-            CreateDirectoryW(entropyDir.c_str(), NULL);
-            GUID guid = {};
-            if (SUCCEEDED(CoCreateGuid(&guid)))
-            {
-                wchar_t szGuid[64] = {};
-                if (StringFromGUID2(guid, szGuid, ARRAYSIZE(szGuid)) > 0)
-                {
-                    std::wstring guidStr = szGuid;
-                    if (!guidStr.empty() && guidStr.front() == L'{' && guidStr.back() == L'}')
-                    {
-                        guidStr = guidStr.substr(1, guidStr.length() - 2);
-                    }
-                    for (auto& c : guidStr) c = towlower(c);
-
-                    int cb = WideCharToMultiByte(CP_UTF8, 0, guidStr.c_str(), static_cast<int>(guidStr.length()), NULL, 0, NULL, NULL);
-                    if (cb > 0)
-                    {
-                        std::vector<BYTE> newEntropy(cb);
-                        WideCharToMultiByte(CP_UTF8, 0, guidStr.c_str(), static_cast<int>(guidStr.length()), reinterpret_cast<char*>(newEntropy.data()), cb, NULL, NULL);
-
-                        HANDLE hNewFile = CreateFileW(
-                            entropyPath.c_str(),
-                            GENERIC_WRITE,
-                            FILE_SHARE_READ,
-                            NULL,
-                            CREATE_NEW,
-                            FILE_ATTRIBUTE_NORMAL,
-                            NULL
-                        );
-
-                        if (hNewFile != INVALID_HANDLE_VALUE)
-                        {
-                            DWORD dwWritten = 0;
-                            WriteFile(hNewFile, newEntropy.data(), static_cast<DWORD>(newEntropy.size()), &dwWritten, NULL);
-                            CloseHandle(hNewFile);
-                            entropy = newEntropy;
-                            return TRUE;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 4. Fallback to Windows MachineGuid in registry
-        HKEY hKey = NULL;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Cryptography", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
-        {
-            wchar_t szMachineGuid[128] = {};
-            DWORD cbData = sizeof(szMachineGuid);
-            if (RegQueryValueExW(hKey, L"MachineGuid", NULL, NULL, reinterpret_cast<LPBYTE>(szMachineGuid), &cbData) == ERROR_SUCCESS)
-            {
-                std::wstring guidStr = szMachineGuid;
-                while (!guidStr.empty() && (guidStr.back() == L'\r' || guidStr.back() == L'\n' || guidStr.back() == L' '))
-                {
-                    guidStr.pop_back();
-                }
-
-                int cb = WideCharToMultiByte(CP_UTF8, 0, guidStr.c_str(), static_cast<int>(guidStr.length()), NULL, 0, NULL, NULL);
-                if (cb > 0)
-                {
-                    entropy.resize(cb);
-                    WideCharToMultiByte(CP_UTF8, 0, guidStr.c_str(), static_cast<int>(guidStr.length()), reinterpret_cast<char*>(entropy.data()), cb, NULL, NULL);
-                    RegCloseKey(hKey);
-                    return TRUE;
-                }
-            }
-            RegCloseKey(hKey);
-        }
-
-        return FALSE;
-    }
-
-    // Encrypts and writes a wrapped secret file using DPAPI with machine-bound entropy.
-    BOOL WriteWrappedSecret(
-        _In_ PCWSTR pszProfileId,
-        _In_ DWORD dwSessionId,
-        _In_reads_bytes_(cbData) const BYTE* pbData,
-        _In_ DWORD cbData
-    )
-    {
-        if (!pszProfileId || !pbData || cbData == 0)
-        {
-            return FALSE;
-        }
-
-        HANDLE hUserToken = GetUserTokenFromSessionId(dwSessionId);
-        if (!hUserToken)
-        {
-            return FALSE;
-        }
-
-        ImpersonationGuard impersonation(hUserToken);
-        if (!impersonation.IsImpersonated())
-        {
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        std::wstring secretPath = GetSecretFilePath(pszProfileId);
-        if (secretPath.empty())
-        {
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        std::vector<BYTE> entropy;
-        GetMachineEntropy(entropy);
-        DATA_BLOB entropyBlob = { static_cast<DWORD>(entropy.size()), entropy.data() };
-        DATA_BLOB* pEntropy = entropy.empty() ? NULL : &entropyBlob;
-
-        DATA_BLOB inBlob = { cbData, const_cast<PBYTE>(pbData) };
-        DATA_BLOB outBlob = { 0, NULL };
-
-        BOOL bResult = CryptProtectData(
-            &inBlob,
-            L"PeekCredentialSecret",
-            pEntropy,
-            NULL,
-            NULL,
-            0,
-            &outBlob
-        );
-
-        if (!bResult)
-        {
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        HANDLE hFile = CreateFileW(
-            secretPath.c_str(),
-            GENERIC_WRITE,
-            FILE_SHARE_READ,
-            NULL,
-            CREATE_ALWAYS,
-            FILE_ATTRIBUTE_NORMAL,
-            NULL
-        );
-
-        if (hFile == INVALID_HANDLE_VALUE)
-        {
-            SecureZeroMemory(outBlob.pbData, outBlob.cbData);
-            LocalFree(outBlob.pbData);
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        DWORD cbWritten = 0;
-        BOOL bWritten = WriteFile(hFile, outBlob.pbData, outBlob.cbData, &cbWritten, NULL);
-        CloseHandle(hFile);
-
-        SecureZeroMemory(outBlob.pbData, outBlob.cbData);
-        LocalFree(outBlob.pbData);
-        CloseHandle(hUserToken);
-
-        return bWritten;
-    }
-
-    // Decrypt a DPAPI-encrypted password using CryptUnprotectData with machine-bound entropy.
-    // Includes backward-compatible migration path for secrets written with legacy NULL entropy.
-    BOOL DecryptWrappedSecret(
-        _In_ PCWSTR pszProfileId,
-        _In_ DWORD dwSessionId,
-        _Out_writes_bytes_to_(cbBuffer, *pcbActual) PBYTE pbBuffer,
-        _In_ DWORD cbBuffer,
-        _Out_ PDWORD pcbActual
-    )
-    {
-        if (!pszProfileId || !pbBuffer || !pcbActual)
-        {
-            return FALSE;
-        }
-
-        *pcbActual = 0;
-
-        // Read the wrapped secret file
-        BYTE wrappedData[4096];
-        DWORD cbWrappedData = 0;
-        
-        HANDLE hUserToken = GetUserTokenFromSessionId(dwSessionId);
-        if (!hUserToken)
-        {
-            return FALSE;
-        }
-
-        ImpersonationGuard impersonation(hUserToken);
-        if (!impersonation.IsImpersonated())
-        {
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        if (!ReadWrappedSecretFileInternal(pszProfileId, wrappedData, sizeof(wrappedData), &cbWrappedData))
-        {
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        // Get machine-bound entropy
-        std::vector<BYTE> entropy;
-        GetMachineEntropy(entropy);
-        DATA_BLOB entropyBlob = { static_cast<DWORD>(entropy.size()), entropy.data() };
-        DATA_BLOB* pEntropy = entropy.empty() ? NULL : &entropyBlob;
-
-        // Use CryptUnprotectData to decrypt the password
-        DATA_BLOB inBlob = { cbWrappedData, wrappedData };
-        DATA_BLOB outBlob = { 0, NULL };
-
-        BOOL bResult = FALSE;
-        if (pEntropy != NULL)
-        {
-            bResult = CryptUnprotectData(
-                &inBlob,
-                NULL,
-                pEntropy,
-                NULL,
-                NULL,
-                0,
-                &outBlob
-            );
-        }
-
-        // Backward-compatibility migration path:
-        // On decrypt failure with entropy, attempt legacy decrypt with NULL entropy.
-        // If that succeeds, re-encrypt and rewrite the file with entropy going forward,
-        // then proceed with the now-decrypted password for this unlock.
-        // Log (without logging the password) that a legacy secret was migrated.
-        if (!bResult)
-        {
-            bResult = CryptUnprotectData(
-                &inBlob,
-                NULL,
-                NULL, // legacy: NULL entropy
-                NULL,
-                NULL,
-                0,
-                &outBlob
-            );
-
-            if (bResult)
-            {
-                Logger::LogInfo("Legacy secret decrypted with NULL entropy; migrating to machine-bound entropy");
-                
-                if (pEntropy != NULL)
-                {
-                    DATA_BLOB plainBlob = { outBlob.cbData, outBlob.pbData };
-                    DATA_BLOB migratedBlob = { 0, NULL };
-                    if (CryptProtectData(&plainBlob, L"PeekCredentialSecret", pEntropy, NULL, NULL, 0, &migratedBlob))
-                    {
-                        std::wstring secretPath = GetSecretFilePath(pszProfileId);
-                        HANDLE hFile = CreateFileW(
-                            secretPath.c_str(),
-                            GENERIC_WRITE,
-                            FILE_SHARE_READ,
-                            NULL,
-                            CREATE_ALWAYS,
-                            FILE_ATTRIBUTE_NORMAL,
-                            NULL
-                        );
-                        if (hFile != INVALID_HANDLE_VALUE)
-                        {
-                            DWORD cbWritten = 0;
-                            WriteFile(hFile, migratedBlob.pbData, migratedBlob.cbData, &cbWritten, NULL);
-                            CloseHandle(hFile);
-                            Logger::LogInfo("Successfully migrated and re-encrypted secret file with machine-bound entropy");
-                        }
-                        SecureZeroMemory(migratedBlob.pbData, migratedBlob.cbData);
-                        LocalFree(migratedBlob.pbData);
-                    }
-                }
-            }
-        }
-
-        if (!bResult)
-        {
-            SecureZeroMemory(wrappedData, sizeof(wrappedData));
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        // Copy the decrypted data to output buffer
-        if (outBlob.cbData > cbBuffer)
-        {
-            SecureZeroMemory(outBlob.pbData, outBlob.cbData);
-            LocalFree(outBlob.pbData);
-            SecureZeroMemory(wrappedData, sizeof(wrappedData));
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        memcpy(pbBuffer, outBlob.pbData, outBlob.cbData);
-        *pcbActual = outBlob.cbData;
-
-        // Securely zero out the plaintext password before freeing memory
-        SecureZeroMemory(outBlob.pbData, outBlob.cbData);
-        LocalFree(outBlob.pbData);
-        SecureZeroMemory(wrappedData, sizeof(wrappedData));
-        CloseHandle(hUserToken);
-        return TRUE;
-    }
-
-    // Delete a wrapped secret file (for stale secret handling)
-    BOOL DeleteWrappedSecret(_In_ PCWSTR pszProfileId, _In_ DWORD dwSessionId)
-    {
-        if (!pszProfileId)
-        {
-            return FALSE;
-        }
-
-        HANDLE hUserToken = GetUserTokenFromSessionId(dwSessionId);
-        if (!hUserToken) return FALSE;
-        ImpersonationGuard impersonation(hUserToken);
-        if (!impersonation.IsImpersonated())
-        {
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-        std::wstring secretPath = GetSecretFilePath(pszProfileId);
-        if (secretPath.empty())
-        {
-            CloseHandle(hUserToken);
-            return FALSE;
-        }
-
-        // Attempt to delete the file
-        BOOL deleted = DeleteFileW(secretPath.c_str());
-        CloseHandle(hUserToken);
-        return deleted;
+        DWORD dwErr = GetLastError();
+        if (pdwErrorCode) *pdwErrorCode = dwErr;
+        return false;
     }
 }

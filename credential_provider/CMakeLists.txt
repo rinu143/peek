@@ -71,6 +71,7 @@ add_executable(test_autoselect
 
 target_compile_definitions(test_autoselect PRIVATE
     PEEK_TEST_BUILD
+    PEEK_DIAG
 )
 
 target_include_directories(test_autoselect PRIVATE

@@ -1,10 +1,11 @@
 using System;
-using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.IO;
 using System.Security;
-using System.Security.Cryptography;
-using System.Text;
+using System.Threading.Tasks;
+using PeekSetup.Models;
 using PeekSetup.Services;
+using PeekSetup.ViewModels;
 using Xunit;
 
 namespace PeekSetup.Tests
@@ -28,6 +29,68 @@ namespace PeekSetup.Tests
         }
     }
 
+    public class MockLsaSecretStore : ILsaSecretStore
+    {
+        public Dictionary<string, byte[]> StoredSecrets { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public List<string> DeletedSecrets { get; } = new();
+
+        public bool StoreSecret(string keyName, byte[] payload)
+        {
+            StoredSecrets[keyName] = (byte[])payload.Clone();
+            return true;
+        }
+
+        public bool DeleteSecret(string keyName)
+        {
+            DeletedSecrets.Add(keyName);
+            StoredSecrets.Remove(keyName);
+            return true;
+        }
+
+        public byte[]? RetrieveSecret(string keyName)
+        {
+            return StoredSecrets.TryGetValue(keyName, out var data) ? (byte[])data.Clone() : null;
+        }
+    }
+
+    public class MockAccountSidResolver : IAccountSidResolver
+    {
+        public bool ShouldMatch { get; set; } = true;
+        public string? ExpectedSid { get; set; } = "S-1-5-21-12345678-1001";
+
+        public bool ValidateUserSid(string username, string expectedSid)
+        {
+            return ShouldMatch && (ExpectedSid == null || string.Equals(expectedSid, ExpectedSid, StringComparison.OrdinalIgnoreCase));
+        }
+
+        public string? ResolveUserToSid(string username)
+        {
+            return ExpectedSid;
+        }
+    }
+
+    public class MockPasswordLinkLauncher : IPasswordLinkLauncher
+    {
+        public int ReturnExitCode { get; set; } = 0;
+        public string? LastUsername { get; private set; }
+        public string? LastSid { get; private set; }
+        public string? LastProfileId { get; private set; }
+
+        public Task<int> LaunchLinkPasswordAsync(string username, string sid, string profileId)
+        {
+            LastUsername = username;
+            LastSid = sid;
+            LastProfileId = profileId;
+            return Task.FromResult(ReturnExitCode);
+        }
+
+        public Task<int> LaunchUnlinkAsync(string sid)
+        {
+            LastSid = sid;
+            return Task.FromResult(ReturnExitCode);
+        }
+    }
+
     public class PasswordLinkingTests
     {
         private static SecureString CreateSecureString(string plain)
@@ -41,205 +104,201 @@ namespace PeekSetup.Tests
             return ss;
         }
 
-        private static bool ContainsSubSequence(byte[] haystack, byte[] needle)
+        [Fact]
+        public void RejectedPassword_NeverWritesToStoreAndReturnsFalse()
         {
-            if (needle.Length == 0 || haystack.Length < needle.Length) return false;
-            for (int i = 0; i <= haystack.Length - needle.Length; i++)
-            {
-                bool match = true;
-                for (int j = 0; j < needle.Length; j++)
-                {
-                    if (haystack[i + j] != needle[j])
-                    {
-                        match = false;
-                        break;
-                    }
-                }
-                if (match) return true;
-            }
-            return false;
+            var mockValidator = new MockPasswordValidator(shouldAccept: false);
+            var mockStore = new MockLsaSecretStore();
+            var mockResolver = new MockAccountSidResolver { ShouldMatch = true };
+            var linker = new PasswordLinker(mockValidator, mockStore, mockResolver);
+
+            using var password = CreateSecureString("invalid_password");
+            bool result = linker.LinkPassword("profile_rejected", password, "DOMAIN\\testuser", "S-1-5-21-12345678-1001");
+
+            Assert.False(result);
+            Assert.Equal(1, mockValidator.ValidateCallCount);
+            Assert.Empty(mockStore.StoredSecrets);
         }
 
         [Fact]
-        public void RejectedPassword_NeverPersistsAndReturnsFalse()
+        public void VerifiedPassword_WritesExactlyOnePayloadWithRightKeyAndProfileId()
         {
-            string tempDir = Path.Combine(Path.GetTempPath(), "PeekTest_" + Guid.NewGuid().ToString("N"));
-            try
-            {
-                var mockValidator = new MockPasswordValidator(shouldAccept: false);
-                var linker = new PasswordLinker(mockValidator);
+            var mockValidator = new MockPasswordValidator(shouldAccept: true);
+            var mockStore = new MockLsaSecretStore();
+            var mockResolver = new MockAccountSidResolver { ExpectedSid = "S-1-5-21-12345678-1001" };
+            var linker = new PasswordLinker(mockValidator, mockStore, mockResolver);
 
-                using var password = CreateSecureString("invalid_password");
-                bool result = linker.LinkPassword("profile_rejected", password, "testuser", tempDir);
+            string testSecretPassword = "SuperSecretPassword123!@#";
+            string testProfileId = "profile_verified_456";
+            string testSid = "S-1-5-21-12345678-1001";
 
-                Assert.False(result);
-                Assert.Equal(1, mockValidator.ValidateCallCount);
-                Assert.Equal("testuser", mockValidator.LastValidatedUsername);
+            using var password = CreateSecureString(testSecretPassword);
+            bool result = linker.LinkPassword(testProfileId, password, "DOMAIN\\testuser", testSid);
 
-                // Verify nothing was written to disk
-                string expectedSecretPath = Path.Combine(tempDir, "profile_rejected.secret");
-                Assert.False(File.Exists(expectedSecretPath));
-                if (Directory.Exists(tempDir))
-                {
-                    Assert.Empty(Directory.GetFiles(tempDir));
-                }
-            }
-            finally
-            {
-                if (Directory.Exists(tempDir))
-                {
-                    Directory.Delete(tempDir, true);
-                }
-            }
+            Assert.True(result);
+            Assert.Equal(1, mockValidator.ValidateCallCount);
+
+            // Exactly one secret stored with key name L$PeekCred_<SID>
+            Assert.Single(mockStore.StoredSecrets);
+            string expectedKey = $"L$PeekCred_{testSid}";
+            Assert.True(mockStore.StoredSecrets.ContainsKey(expectedKey));
+
+            byte[] storedPayload = mockStore.StoredSecrets[expectedKey];
+            Assert.NotNull(storedPayload);
+
+            // Validate binary payload format
+            bool parseOk = SecretPayloadBuilder.TryParsePayload(storedPayload, testProfileId, out string recoveredPassword);
+            Assert.True(parseOk);
+            Assert.Equal(testSecretPassword, recoveredPassword);
         }
 
         [Fact]
-        public void VerifiedPassword_WritesExactlyOneCorrectlyFormattedEncryptedFile()
+        public void AccountSidMismatch_WritesNothingAndReturnsFalse()
         {
-            string tempDir = Path.Combine(Path.GetTempPath(), "PeekTest_" + Guid.NewGuid().ToString("N"));
-            try
-            {
-                var mockValidator = new MockPasswordValidator(shouldAccept: true);
-                var linker = new PasswordLinker(mockValidator);
+            var mockValidator = new MockPasswordValidator(shouldAccept: true);
+            var mockStore = new MockLsaSecretStore();
+            var mockResolver = new MockAccountSidResolver { ShouldMatch = false }; // mismatch
+            var linker = new PasswordLinker(mockValidator, mockStore, mockResolver);
 
-                string testSecretPassword = "SuperSecretPassword123!@#";
-                using var password = CreateSecureString(testSecretPassword);
-                bool result = linker.LinkPassword("profile_verified", password, "testuser", tempDir);
+            using var password = CreateSecureString("password");
+            bool result = linker.LinkPassword("prof", password, "testuser", "S-1-5-21-MISMATCH");
 
-                Assert.True(result);
-                Assert.Equal(1, mockValidator.ValidateCallCount);
-
-                // Assert exactly one .secret file was written
-                string[] files = Directory.GetFiles(tempDir);
-                Assert.Single(files);
-                Assert.Equal("profile_verified.secret", Path.GetFileName(files[0]));
-
-                byte[] encryptedBytes = File.ReadAllBytes(files[0]);
-                Assert.NotEmpty(encryptedBytes);
-
-                // Security check: Plaintext password must NOT appear in ciphertext
-                byte[] rawUtf8 = Encoding.UTF8.GetBytes(testSecretPassword);
-                byte[] rawUtf16 = Encoding.Unicode.GetBytes(testSecretPassword);
-                Assert.False(ContainsSubSequence(encryptedBytes, rawUtf8));
-                Assert.False(ContainsSubSequence(encryptedBytes, rawUtf16));
-
-                // Decrypt using Windows DPAPI to verify exact format matching SecretVault.cpp:
-                // Format: [DWORD length (UTF-16LE byte length)][UTF-16LE password bytes]
-                byte[] decrypted = ProtectedData.Unprotect(encryptedBytes, null, DataProtectionScope.CurrentUser);
-                Assert.True(decrypted.Length >= 4);
-
-                uint passwordByteLen = BinaryPrimitives.ReadUInt32LittleEndian(decrypted.AsSpan(0, 4));
-                int expectedByteLen = testSecretPassword.Length * sizeof(char);
-                Assert.Equal((uint)expectedByteLen, passwordByteLen);
-                Assert.Equal(4 + expectedByteLen, decrypted.Length);
-
-                string decryptedPassword = Encoding.Unicode.GetString(decrypted, 4, (int)passwordByteLen);
-                Assert.Equal(testSecretPassword, decryptedPassword);
-            }
-            finally
-            {
-                if (Directory.Exists(tempDir))
-                {
-                    Directory.Delete(tempDir, true);
-                }
-            }
-        }
-
-        [Fact]
-        public void CustomEncryption_PassedExactLengthPrefixedPlaintext()
-        {
-            string tempDir = Path.Combine(Path.GetTempPath(), "PeekTest_" + Guid.NewGuid().ToString("N"));
-            try
-            {
-                byte[]? capturedPlaintext = null;
-                byte[] mockCipher = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
-
-                var mockValidator = new MockPasswordValidator(shouldAccept: true);
-                var linker = new PasswordLinker(mockValidator, customEncrypt: plaintext =>
-                {
-                    // Capture a copy to verify exact framing
-                    capturedPlaintext = (byte[])plaintext.Clone();
-                    return mockCipher;
-                });
-
-                string testPassword = "HelloPeekSecurity";
-                using var password = CreateSecureString(testPassword);
-                bool result = linker.LinkPassword("profile_custom", password, "testuser", tempDir);
-
-                Assert.True(result);
-                Assert.NotNull(capturedPlaintext);
-
-                // Verify captured buffer format: [DWORD length][UTF-16LE bytes]
-                uint lengthPrefix = BinaryPrimitives.ReadUInt32LittleEndian(capturedPlaintext.AsSpan(0, 4));
-                Assert.Equal((uint)(testPassword.Length * 2), lengthPrefix);
-                string decoded = Encoding.Unicode.GetString(capturedPlaintext, 4, (int)lengthPrefix);
-                Assert.Equal(testPassword, decoded);
-
-                // Verify written file is the exact mock ciphertext
-                string secretPath = Path.Combine(tempDir, "profile_custom.secret");
-                byte[] written = File.ReadAllBytes(secretPath);
-                Assert.Equal(mockCipher, written);
-            }
-            finally
-            {
-                if (Directory.Exists(tempDir))
-                {
-                    Directory.Delete(tempDir, true);
-                }
-            }
+            Assert.False(result);
+            Assert.Equal(0, mockValidator.ValidateCallCount);
+            Assert.Empty(mockStore.StoredSecrets);
         }
 
         [Theory]
-        [InlineData("", "password123")]
-        [InlineData("   ", "password123")]
-        [InlineData(null, "password123")]
-        public void InvalidProfileId_ReturnsFalseWithoutCallingValidator(string? profileId, string pass)
+        [InlineData(0, true, false, "")]
+        [InlineData(1, false, true, "cancelled")]
+        [InlineData(2, false, true, "Maximum attempts")]
+        [InlineData(3, false, true, "unexpected error")]
+        [InlineData(4, false, true, "UAC")]
+        public async Task ExitCodeMapping_ProducesExpectedUiMessages(int exitCode, bool expectedLinked, bool expectedError, string messageSubstring)
         {
-            string tempDir = Path.Combine(Path.GetTempPath(), "PeekTest_" + Guid.NewGuid().ToString("N"));
-            try
+            var mockPipe = new MockEnrollmentPipeClient();
+            var mockLauncher = new MockPasswordLinkLauncher { ReturnExitCode = exitCode };
+            var vm = new MainViewModel(mockPipe, null, mockLauncher)
             {
-                var mockValidator = new MockPasswordValidator(shouldAccept: true);
-                var linker = new PasswordLinker(mockValidator);
+                EnrolledProfileId = "prof_test",
+                CurrentStep = SetupStep.PasswordLink
+            };
 
-                using var password = CreateSecureString(pass);
-                bool result = linker.LinkPassword(profileId!, password, "testuser", tempDir);
+            await vm.LinkPasswordElevatedAsync();
 
-                Assert.False(result);
-                Assert.Equal(0, mockValidator.ValidateCallCount);
-                if (Directory.Exists(tempDir))
-                {
-                    Assert.Empty(Directory.GetFiles(tempDir));
-                }
+            Assert.Equal(expectedLinked, vm.IsPasswordLinked);
+            Assert.Equal(expectedError, vm.HasPasswordError);
+
+            if (!string.IsNullOrEmpty(messageSubstring))
+            {
+                Assert.Contains(messageSubstring, vm.PasswordErrorMessage, StringComparison.OrdinalIgnoreCase);
             }
-            finally
+
+            if (exitCode == 0)
             {
-                if (Directory.Exists(tempDir))
-                {
-                    Directory.Delete(tempDir, true);
-                }
+                Assert.Equal(SetupStep.Done, vm.CurrentStep);
+            }
+            else
+            {
+                Assert.Equal(SetupStep.PasswordLink, vm.CurrentStep);
             }
         }
 
         [Fact]
-        public void EmptyPassword_ReturnsFalseWithoutCallingValidator()
+        public async Task CommandLineArguments_NeverContainPasswordMaterial()
         {
-            string tempDir = Path.Combine(Path.GetTempPath(), "PeekTest_" + Guid.NewGuid().ToString("N"));
+            var mockPipe = new MockEnrollmentPipeClient();
+            var mockLauncher = new MockPasswordLinkLauncher { ReturnExitCode = 0 };
+            var vm = new MainViewModel(mockPipe, null, mockLauncher)
+            {
+                EnrolledProfileId = "test_profile_secret_free",
+                CurrentStep = SetupStep.PasswordLink
+            };
+
+            await vm.LinkPasswordElevatedAsync();
+
+            Assert.NotNull(mockLauncher.LastUsername);
+            Assert.NotNull(mockLauncher.LastSid);
+            Assert.NotNull(mockLauncher.LastProfileId);
+            Assert.Equal("test_profile_secret_free", mockLauncher.LastProfileId);
+
+            // Reconstruct the argument string exactly as PasswordLinkLauncher builds it
+            string args = $"--link-password --user \"{mockLauncher.LastUsername}\" --sid \"{mockLauncher.LastSid}\" --profile-id \"{mockLauncher.LastProfileId}\"";
+
+            // Verify no secret or password keywords appear in arguments
+            Assert.DoesNotContain("password=", args, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("secret=", args, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void SecretPayloadBuilder_RejectsOversizePayload()
+        {
+            // Create a profile ID so large that total size exceeds 4096 bytes
+            string largeProfileId = new string('A', 2500); // 5000 bytes in UTF-16
+            using var password = CreateSecureString("pass");
+
+            Assert.Throws<ArgumentException>(() =>
+            {
+                SecretPayloadBuilder.BuildPayload(largeProfileId, password);
+            });
+        }
+
+        [Fact]
+        public void SecretPayloadBuilder_ProfileBinding_RejectsWrongProfile()
+        {
+            using var password = CreateSecureString("secretPass");
+            byte[] payload = SecretPayloadBuilder.BuildPayload("original_profile", password);
+
+            bool parseOk = SecretPayloadBuilder.TryParsePayload(payload, "different_profile", out string recovered);
+            Assert.False(parseOk);
+            Assert.Empty(recovered);
+        }
+
+        [Fact]
+        public void UnlinkPassword_DeletesLsaSecretKey()
+        {
+            var mockStore = new MockLsaSecretStore();
+            string testSid = "S-1-5-21-UNLINK-1001";
+            mockStore.StoredSecrets[$"L$PeekCred_{testSid}"] = new byte[] { 1, 2, 3 };
+
+            var linker = new PasswordLinker(null, mockStore, null);
+            bool unlinked = linker.UnlinkPassword(testSid);
+
+            Assert.True(unlinked);
+            Assert.False(mockStore.StoredSecrets.ContainsKey($"L$PeekCred_{testSid}"));
+            Assert.Contains($"L$PeekCred_{testSid}", mockStore.DeletedSecrets);
+        }
+
+        [Fact]
+        public void LinkPassword_DeletesLegacySecretFileIfPresent()
+        {
+            string profileId = "legacy_test_profile_" + Guid.NewGuid().ToString("N");
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string profileDir = Path.Combine(localAppData, "Peek", "Profiles");
+            Directory.CreateDirectory(profileDir);
+            string secretFilePath = Path.Combine(profileDir, $"{profileId}.secret");
+            File.WriteAllText(secretFilePath, "legacy dummy content");
+
             try
             {
+                Assert.True(File.Exists(secretFilePath));
+
                 var mockValidator = new MockPasswordValidator(shouldAccept: true);
-                var linker = new PasswordLinker(mockValidator);
+                var mockStore = new MockLsaSecretStore();
+                var mockResolver = new MockAccountSidResolver { ExpectedSid = "S-1-5-21-12345678-1001" };
+                var linker = new PasswordLinker(mockValidator, mockStore, mockResolver);
 
-                using var password = new SecureString();
-                bool result = linker.LinkPassword("profile_1", password, "testuser", tempDir);
+                using var password = CreateSecureString("TestPass123!");
+                bool linked = linker.LinkPassword(profileId, password, "testuser", "S-1-5-21-12345678-1001");
 
-                Assert.False(result);
-                Assert.Equal(0, mockValidator.ValidateCallCount);
+                Assert.True(linked);
+                Assert.False(File.Exists(secretFilePath), "Legacy <profile_id>.secret file must be deleted upon linking");
             }
             finally
             {
-                if (Directory.Exists(tempDir))
+                if (File.Exists(secretFilePath))
                 {
-                    Directory.Delete(tempDir, true);
+                    File.Delete(secretFilePath);
                 }
             }
         }

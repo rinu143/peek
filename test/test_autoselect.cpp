@@ -177,6 +177,9 @@ int main()
     std::wstring testPipeName = L"\\\\.\\pipe\\PeekTestPipe_" + std::to_wstring(GetCurrentProcessId());
     SetEnvironmentVariableW(L"PEEK_PIPE_NAME_OVERRIDE", testPipeName.c_str());
 
+    std::wstring testLogPath = tempDir + L"\\credential_provider.log";
+    SetEnvironmentVariableW(L"PEEK_LOG_FILE_PATH", testLogPath.c_str());
+
     // -------------------------------------------------------------
     // Test 1: Usage scenario handling (CPUS_LOGON & CPUS_CREDUI -> E_NOTIMPL)
     // -------------------------------------------------------------
@@ -734,35 +737,15 @@ int main()
 
         PeekProvider::SetTestSessionId(1);
         PeekProvider::SetTestConsoleUserSid(testSid);
-        SetEnvironmentVariableW(L"PEEK_TEST_SESSION_ID", L"CURRENT_USER_SESSION");
 
-        // Write a wrapped secret into secret vault under CURRENT_USER_SESSION
-        std::vector<BYTE> rawSecret(sizeof(DWORD) + testPassword.size() * sizeof(wchar_t));
-        DWORD pwByteLen = static_cast<DWORD>(testPassword.size() * sizeof(wchar_t));
-        memcpy(rawSecret.data(), &pwByteLen, sizeof(DWORD));
-        memcpy(rawSecret.data() + sizeof(DWORD), testPassword.data(), pwByteLen);
-
-        // Ensure %LOCALAPPDATA%\Peek\Profiles exists
-        wchar_t szLocal[MAX_PATH];
-        if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, szLocal)))
-        {
-            std::wstring p = szLocal;
-            p += L"\\Peek";
-            CreateDirectoryW(p.c_str(), NULL);
-            p += L"\\Profiles";
-            CreateDirectoryW(p.c_str(), NULL);
-        }
-
-        BOOL bWritten = PeekSecretVault::WriteWrappedSecret(
-            testProfileId.c_str(),
-            PeekSecretVault::CURRENT_USER_SESSION,
-            rawSecret.data(),
-            static_cast<DWORD>(rawSecret.size())
-        );
-        if (!bWritten)
-        {
-            std::wcout << L"  [DEBUG] WriteWrappedSecret returned FALSE, GetLastError=" << GetLastError() << L"\n";
-        }
+        // Configure fake in-memory LSA store and validator for test
+        auto fakeStore = std::make_shared<PeekSecretVault::InMemoryLsaSecretStore>();
+        PeekSecretVault::SetLsaSecretStore(fakeStore);
+        PeekSecretVault::StorePasswordSecret(testSid, testProfileId, testPassword, fakeStore.get());
+        PeekSecretVault::SetPasswordValidator([](PCWSTR, PCWSTR, PCWSTR, DWORD* pdwErr) -> bool {
+            if (pdwErr) *pdwErr = ERROR_SUCCESS;
+            return true;
+        });
 
         MockCredentialProviderUserArray* pArray = new MockCredentialProviderUserArray();
         MockCredentialProviderUser* pUser = new MockCredentialProviderUser(testSid, L"MatchUser", L"MatchDomain");
@@ -805,9 +788,9 @@ int main()
             }
         }
 
-        PeekSecretVault::DeleteWrappedSecret(testProfileId.c_str(), PeekSecretVault::CURRENT_USER_SESSION);
+        PeekSecretVault::SetPasswordValidator(nullptr);
+        PeekSecretVault::SetLsaSecretStore(nullptr);
         PeekProvider::ClearTestOverrides();
-        SetEnvironmentVariableW(L"PEEK_TEST_SESSION_ID", NULL);
         pArray->Release();
 
         if (countOk && unwrapOk)
@@ -1194,6 +1177,7 @@ int main()
     DeleteTempTestDirectory(tempDir);
     SetEnvironmentVariableW(L"PEEK_PROFILES_DIR", NULL);
     SetEnvironmentVariableW(L"PEEK_PIPE_NAME_OVERRIDE", NULL);
+    SetEnvironmentVariableW(L"PEEK_LOG_FILE_PATH", NULL);
 
     std::wcout << L"==========================================================\n";
     if (failed == 0)

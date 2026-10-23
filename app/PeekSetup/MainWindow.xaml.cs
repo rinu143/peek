@@ -22,26 +22,6 @@ namespace PeekSetup
             };
         }
 
-        private async void OnLinkPasswordClicked(object sender, RoutedEventArgs e)
-        {
-            if (DataContext is MainViewModel vm)
-            {
-                // CRITICAL SECURITY REQUIREMENT:
-                // Use SecurePassword directly from PasswordBox without ever converting to a managed String
-                var securePass = PasswordInput.SecurePassword;
-                await vm.LinkPasswordAsync(securePass);
-                PasswordInput.Clear();
-            }
-        }
-
-        private void PasswordInput_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.Key == Key.Enter)
-            {
-                OnLinkPasswordClicked(sender, e);
-            }
-        }
-
         protected override async void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
             if (DataContext is MainViewModel vm && vm.IsEnrolling)

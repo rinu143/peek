@@ -245,8 +245,8 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="🛡️" FontSize="18" VerticalAlignment="Top" />
                                 <StackPanel Grid.Column="1">
-                                    <TextBlock Text="Hardware-Backed DPAPI Encryption" FontWeight="SemiBold" FontSize="14" />
-                                    <TextBlock Text="Biometric templates and credentials are encrypted locally with Windows DPAPI and never leave your machine." FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+                                    <TextBlock Text="Protected Local Storage" FontWeight="SemiBold" FontSize="14" />
+                                    <TextBlock Text="Face templates are encrypted with Windows DPAPI and never leave this PC." FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
                                 </StackPanel>
                             </Grid>
 
@@ -487,43 +487,42 @@
 
                     <!-- Plain Language Explanation Card -->
                     <Border Background="{StaticResource CardBgBrush}" BorderBrush="{StaticResource CardBorderBrush}"
-                            BorderThickness="1" CornerRadius="10" Padding="18" Margin="0,0,0,24">
+                            BorderThickness="1" CornerRadius="10" Padding="18" Margin="0,0,0,20">
                         <StackPanel>
                             <TextBlock Text="Why link your password?" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,6" />
                             <TextBlock Text="When your face is recognized, Windows requires a credential to complete login. Linking your password allows Peek to supply it automatically, unlocking your desktop the instant you look at the camera."
                                        FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" LineHeight="18" Margin="0,0,0,12" />
 
-                            <Border Background="#141418" BorderBrush="#25252C" BorderThickness="1" CornerRadius="6" Padding="12,8">
+                            <Border Background="#141418" BorderBrush="#25252C" BorderThickness="1" CornerRadius="6" Padding="12,10" Margin="0,0,0,10">
                                 <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="🛡️" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center" />
-                                    <TextBlock Text="Optional &amp; Secure: Stored exclusively DPAPI-wrapped on this PC."
-                                               FontSize="12" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" />
+                                    <TextBlock Text="🛡️" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Top" />
+                                    <TextBlock Text="Saved password is protected by Windows LSA and readable only by SYSTEM and administrators."
+                                               FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="#1A1829" BorderBrush="{StaticResource AccentBrush}" BorderThickness="1" CornerRadius="6" Padding="12,10">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="🔐" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Top" />
+                                    <TextBlock Text="A Windows security (UAC) prompt will appear to verify administrator permissions for LSA credential storage."
+                                               FontSize="12" Foreground="{StaticResource TextPrimaryBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
                                 </StackPanel>
                             </Border>
                         </StackPanel>
                     </Border>
 
-                    <!-- Password Input Form -->
-                    <StackPanel Margin="0,0,0,20">
-                        <TextBlock Text="Current Windows Password" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8" />
-                        <PasswordBox x:Name="PasswordInput"
-                                     Style="{StaticResource ModernPasswordBoxStyle}"
-                                     FontSize="16" Height="42"
-                                     KeyDown="PasswordInput_KeyDown" />
-
-                        <!-- Error Message if verification failed -->
-                        <Border Background="#311313" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1"
-                                CornerRadius="6" Padding="12,8" Margin="0,10,0,0"
-                                Visibility="{Binding HasPasswordError, Converter={StaticResource BoolToVis}}">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="⚠️" Margin="0,0,8,0" VerticalAlignment="Center" />
-                                <TextBlock Text="{Binding PasswordErrorMessage}" FontSize="12" Foreground="#FFAAAA" TextWrapping="Wrap" VerticalAlignment="Center" />
-                            </StackPanel>
-                        </Border>
-                    </StackPanel>
+                    <!-- Error Message if verification / UAC failed -->
+                    <Border Background="#311313" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1"
+                            CornerRadius="6" Padding="12,8" Margin="0,0,0,16"
+                            Visibility="{Binding HasPasswordError, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="⚠️" Margin="0,0,8,0" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding PasswordErrorMessage}" FontSize="12" Foreground="#FFAAAA" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Border>
 
                     <!-- Action Buttons -->
-                    <Grid Margin="0,8,0,0">
+                    <Grid Margin="0,4,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="12" />
@@ -537,9 +536,9 @@
 
                         <!-- Link Option -->
                         <Button Grid.Column="2" Style="{StaticResource PrimaryButtonStyle}"
-                                Click="OnLinkPasswordClicked"
+                                Command="{Binding LinkPasswordElevatedCommand}"
                                 IsEnabled="{Binding CanLinkPassword}"
-                                Content="Link Password &amp; Finish" Height="44" />
+                                Content="Link Windows Password" Height="44" />
                     </Grid>
 
                     <TextBlock Text="Skipping leaves your face profile active. Windows will simply prompt for your PIN or password after recognizing you."

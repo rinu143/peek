@@ -6,9 +6,14 @@ namespace PeekSetup.Services
     {
         /// <summary>
         /// Validates the provided Windows password via IPasswordValidator and, if accepted,
-        /// writes an encrypted DPAPI wrapped secret file to %LOCALAPPDATA%\Peek\Profiles\&lt;profile_id&gt;.secret.
-        /// Returns true if successful, false if password was rejected or arguments were invalid.
+        /// builds a binary payload and stores it securely in Windows LSA under L$PeekCred_&lt;sid&gt;.
+        /// Returns true if successful, false if rejected or invalid.
         /// </summary>
-        bool LinkPassword(string profileId, SecureString password, string? username = null, string? targetDirectory = null);
+        bool LinkPassword(string profileId, SecureString password, string? username = null, string? sid = null);
+
+        /// <summary>
+        /// Deletes the Windows LSA secret for the given SID. Idempotent.
+        /// </summary>
+        bool UnlinkPassword(string sid);
     }
 }

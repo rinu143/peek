@@ -21,12 +21,48 @@ Follow this step-by-step checklist to validate the native C++ Credential Provide
 
 ## Test Cases
 
-### Password linking and stale-secret checks
+### LSA Secret Password Linking & Stale-Secret Verification
 
-- [ ] During enrollment, choose to link the current Windows password; a `<profile_id>.secret` file appears under `%LOCALAPPDATA%\Peek\Profiles`.
-- [ ] Skip linking on another enrollment and confirm Peek fails open to password/PIN after face verification.
-- [ ] Enter a wrong password while linking; confirm it is rejected and no `.secret` file is written.
-- [ ] Change the real Windows password, lock the workstation, and authenticate with Peek; confirm the stale `.secret` is deleted and Windows falls open to password/PIN.
+- [ ] **Link via UAC**:
+  1. Open PeekSetup (`app/PeekSetup/bin/Release/net8.0-windows/win-x64/publish/PeekSetup.exe`).
+  2. Complete face enrollment (Step 2) or choose "Link or Replace Windows Password" from the already-set-up screen.
+  3. On Step 3 ("Link Windows Password"), click "Link Windows Password".
+  4. Confirm a standard Windows UAC prompt appears asking for Administrator permission.
+  5. Accept UAC; confirm the elevated dialog displays the target account (`DOMAIN\user`).
+  6. Enter the correct Windows password and click "Link Password".
+  7. Confirm the window closes with exit code 0 and Step 4 shows "Password Linked" in green.
+  8. Confirm any old `<profile_id>.secret` file in `%LOCALAPPDATA%\Peek\Profiles` was automatically deleted.
+
+- [ ] **Win+L -> Face -> Unlock**:
+  1. Start the engine service (`python scripts/run_engine_service.py`).
+  2. Lock workstation with `Win + L`.
+  3. Look at camera; tile displays "Looking for face..." -> "Face detected — verifying..." -> "Hello, [Name]!".
+  4. Session unlocks directly to the Windows desktop with no password typed.
+
+- [ ] **Change Windows Password -> Stale Secret Removal**:
+  1. Change the real Windows account password (`Ctrl + Alt + Del` -> "Change a password").
+  2. Lock workstation with `Win + L`.
+  3. Look at camera; Peek verifies face and attempts unlock with the previously saved LSA secret.
+  4. Winlogon rejects with wrong password; Peek immediately deletes the stale LSA secret (`L$PeekCred_<SID>`).
+  5. The tile calmly fails open to password/PIN input without crashing.
+  6. Subsequent face unlock attempts fail open immediately to password/PIN (never submits stale password twice).
+
+- [ ] **Profile ID Binding Verification**:
+  1. Re-enroll face under a new profile_id without relinking the password.
+  2. Lock workstation with `Win + L`.
+  3. Authenticate with face; face verification succeeds, but profile_id binding mismatch prevents reading the secret.
+  4. Tile calmly fails open to password/PIN input (no desktop unlock with unbound secret).
+
+- [ ] **Engine Offline -> Fail-Open**:
+  1. Stop or terminate `PeekEngine.exe` or `run_engine_service.py`.
+  2. Lock workstation with `Win + L`.
+  3. Peek tile displays: `"Peek engine offline. Sign in with password or PIN."`.
+  4. Standard Windows Password and PIN sign-in remain fully functional with zero delay.
+
+- [ ] **Uninstaller Removes LSA Secrets**:
+  1. Run `scripts/packaging/uninstall.ps1` elevated as Administrator.
+  2. Verify uninstaller executes `PeekSetup.exe --unlink --sid <SID>` for each local account.
+  3. Verify `L$PeekCred_<SID>` secrets are cleanly removed from Windows LSA.
 
 ### Test 1: DLL Registration & Registry Verification
 

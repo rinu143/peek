@@ -120,8 +120,35 @@ if (Test-Path $startupShortcut) {
     Write-Host "      [OK] Removed startup shortcut: $startupShortcut" -ForegroundColor Green
 }
 
-# 5. Remove Start Menu folder and installed files
-Write-Host "[4/5] Removing installed binaries and shortcuts..." -ForegroundColor Cyan
+# 5. Remove LSA secrets, Start Menu folder and installed files
+Write-Host "[4/5] Removing LSA secrets, installed binaries and shortcuts..." -ForegroundColor Cyan
+
+# Unlink LSA secrets for each local user
+try {
+    $peekSetupCandidates = @(
+        (Join-Path $InstallDir "PeekSetup.exe"),
+        (Join-Path $PSScriptRoot "PeekSetup.exe"),
+        (Join-Path $PSScriptRoot "..\..\app\PeekSetup\bin\Release\net8.0-windows\win-x64\publish\PeekSetup.exe"),
+        (Join-Path $PSScriptRoot "..\..\app\PeekSetup\bin\Debug\net8.0-windows\PeekSetup.exe")
+    )
+    $peekSetupExe = $peekSetupCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+    if ($peekSetupExe) {
+        $localUsers = Get-LocalUser -ErrorAction SilentlyContinue
+        if ($localUsers) {
+            foreach ($u in $localUsers) {
+                if ($u.SID) {
+                    $sidStr = $u.SID.Value
+                    Start-Process -FilePath $peekSetupExe -ArgumentList "--unlink --sid `"$sidStr`"" -Wait -NoNewWindow -ErrorAction SilentlyContinue
+                }
+            }
+            Write-Host "      [OK] Cleaned up LSA secrets for local users." -ForegroundColor Green
+        }
+    }
+} catch {
+    # Skip silently when none
+}
+
 $startMenuPeekDir = Join-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" "Peek"
 if (Test-Path $startMenuPeekDir) {
     Remove-Item -Path $startMenuPeekDir -Recurse -Force

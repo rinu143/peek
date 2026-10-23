@@ -48,6 +48,14 @@ namespace PeekLoggerInternal
 
     inline std::wstring GetLogFilePath()
     {
+#ifdef PEEK_TEST_BUILD
+        wchar_t szTestLog[MAX_PATH] = {};
+        DWORD dwTestLog = GetEnvironmentVariableW(L"PEEK_LOG_FILE_PATH", szTestLog, ARRAYSIZE(szTestLog));
+        if (dwTestLog > 0 && dwTestLog < ARRAYSIZE(szTestLog))
+        {
+            return std::wstring(szTestLog);
+        }
+#endif
         wchar_t szPath[MAX_PATH] = {};
         if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_COMMON_APPDATA, NULL, 0, szPath)) && szPath[0] != L'\0')
         {
@@ -260,6 +268,7 @@ public:
     }
 };
 
+#ifdef PEEK_DIAG
 namespace PeekDiagnostics
 {
     // RAII guard ensuring privilege adjustment is restored on every exit path
@@ -548,6 +557,12 @@ namespace PeekDiagnostics
         }
     }
 }
+#else
+namespace PeekDiagnostics
+{
+    inline void RunProcessTokenDiagnostics(PCWSTR, DWORD = 0xFFFFFFFF) {}
+}
+#endif
 
 #define PEEK_PIPE_NAME L"\\\\.\\pipe\\PeekEngine"
 

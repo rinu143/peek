@@ -33,6 +33,7 @@ namespace PeekSetup.ViewModels
     {
         private readonly IEnrollmentPipeClient _pipeClient;
         private readonly IPasswordLinker _passwordLinker;
+        private readonly IPasswordLinkLauncher _linkLauncher;
 
         private SetupStep _currentStep = SetupStep.Welcome;
         private string _displayName = Environment.UserName;
@@ -379,17 +380,22 @@ namespace PeekSetup.ViewModels
         public ICommand FinishCommand { get; }
         public ICommand ReEnrollCommand { get; }
         public ICommand GoToPasswordLinkCommand { get; }
+        public ICommand LinkPasswordElevatedCommand { get; }
         public ICommand ExitCommand { get; }
 
         public MainViewModel()
-            : this(null, null)
+            : this(null, null, null)
         {
         }
 
-        public MainViewModel(IEnrollmentPipeClient? pipeClient = null, IPasswordLinker? passwordLinker = null)
+        public MainViewModel(
+            IEnrollmentPipeClient? pipeClient = null,
+            IPasswordLinker? passwordLinker = null,
+            IPasswordLinkLauncher? linkLauncher = null)
         {
             _pipeClient = pipeClient ?? new EnrollmentPipeClient();
             _passwordLinker = passwordLinker ?? new PasswordLinker();
+            _linkLauncher = linkLauncher ?? new PasswordLinkLauncher();
 
             InitializePoses();
 
@@ -409,6 +415,7 @@ namespace PeekSetup.ViewModels
             FinishCommand = new RelayCommand(FinishSetup);
             ReEnrollCommand = new AsyncRelayCommand(StartEnrollmentFlowAsync);
             GoToPasswordLinkCommand = new RelayCommand(GoToPasswordLink);
+            LinkPasswordElevatedCommand = new AsyncRelayCommand(LinkPasswordElevatedAsync, () => CanLinkPassword);
             ExitCommand = new RelayCommand(FinishSetup);
         }
 
@@ -525,6 +532,86 @@ namespace PeekSetup.ViewModels
             finally
             {
                 IsVerifyingPassword = false;
+            }
+        }
+
+        public async Task LinkPasswordElevatedAsync()
+        {
+            IsVerifyingPassword = true;
+            HasPasswordError = false;
+            PasswordErrorMessage = string.Empty;
+
+            try
+            {
+                string username = Environment.UserDomainName + "\\" + Environment.UserName;
+                string? sid = System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value;
+                if (string.IsNullOrEmpty(sid))
+                {
+                    HasPasswordError = true;
+                    PasswordErrorMessage = "Could not resolve current Windows user account SID.";
+                    return;
+                }
+
+                string profileId = !string.IsNullOrEmpty(EnrolledProfileId) ? EnrolledProfileId : ExistingProfileId;
+                if (string.IsNullOrEmpty(profileId))
+                {
+                    HasPasswordError = true;
+                    PasswordErrorMessage = "No enrolled face profile is active.";
+                    return;
+                }
+
+                int exitCode = await _linkLauncher.LaunchLinkPasswordAsync(username, sid, profileId);
+                HandleLinkExitCode(exitCode);
+            }
+            catch (Exception ex)
+            {
+                HasPasswordError = true;
+                PasswordErrorMessage = $"Failed to launch elevated linking: {ex.Message}";
+            }
+            finally
+            {
+                IsVerifyingPassword = false;
+            }
+        }
+
+        public void HandleLinkExitCode(int exitCode)
+        {
+            switch (exitCode)
+            {
+                case 0:
+                    IsPasswordLinked = true;
+                    HasPasswordError = false;
+                    PasswordErrorMessage = string.Empty;
+                    if (CurrentStep == SetupStep.PasswordLink)
+                    {
+                        CurrentStep = SetupStep.Done;
+                    }
+                    break;
+
+                case 1:
+                    HasPasswordError = true;
+                    PasswordErrorMessage = "Password linking was cancelled.";
+                    break;
+
+                case 2:
+                    HasPasswordError = true;
+                    PasswordErrorMessage = "Incorrect Windows password. Maximum attempts reached.";
+                    break;
+
+                case 3:
+                    HasPasswordError = true;
+                    PasswordErrorMessage = "An unexpected error occurred while securing the credential in Windows LSA.";
+                    break;
+
+                case 4:
+                    HasPasswordError = true;
+                    PasswordErrorMessage = "Administrator permission (UAC) was declined. Windows LSA requires elevation.";
+                    break;
+
+                default:
+                    HasPasswordError = true;
+                    PasswordErrorMessage = $"Password linking exited with code {exitCode}.";
+                    break;
             }
         }
 

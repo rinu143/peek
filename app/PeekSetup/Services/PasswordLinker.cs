@@ -1,30 +1,28 @@
 using System;
-using System.Buffers.Binary;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Security;
 using System.Security.Cryptography;
+using System.Security.Principal;
 
 namespace PeekSetup.Services
 {
     public class PasswordLinker : IPasswordLinker
     {
         private readonly IPasswordValidator _validator;
-        private readonly Func<byte[], byte[]>? _customEncrypt;
+        private readonly ILsaSecretStore _secretStore;
+        private readonly IAccountSidResolver _sidResolver;
 
-        public PasswordLinker(IPasswordValidator? validator = null, Func<byte[], byte[]>? customEncrypt = null)
+        public PasswordLinker(
+            IPasswordValidator? validator = null,
+            ILsaSecretStore? secretStore = null,
+            IAccountSidResolver? sidResolver = null)
         {
             _validator = validator ?? new WindowsPasswordValidator();
-            _customEncrypt = customEncrypt;
+            _secretStore = secretStore ?? new LsaSecretStore();
+            _sidResolver = sidResolver ?? new AccountSidResolver();
         }
 
-        public static string GetDefaultProfilesDirectory()
-        {
-            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            return Path.Combine(localAppData, "Peek", "Profiles");
-        }
-
-        public bool LinkPassword(string profileId, SecureString password, string? username = null, string? targetDirectory = null)
+        public bool LinkPassword(string profileId, SecureString password, string? username = null, string? sid = null)
         {
             if (string.IsNullOrWhiteSpace(profileId) || password == null || password.Length == 0)
             {
@@ -32,53 +30,78 @@ namespace PeekSetup.Services
             }
 
             string user = string.IsNullOrWhiteSpace(username) ? Environment.UserName : username;
+            string targetSid = sid ?? WindowsIdentity.GetCurrent().User?.Value ?? string.Empty;
 
-            // 1. Verify password via IPasswordValidator before accepting
+            if (string.IsNullOrEmpty(targetSid))
+            {
+                return false;
+            }
+
+            // 1. Resolve and validate that username maps to targetSid
+            if (!_sidResolver.ValidateUserSid(user, targetSid))
+            {
+                return false;
+            }
+
+            // 2. Verify password for TARGET user with LogonUserW before accepting
             if (!_validator.Validate(user, password))
             {
                 return false;
             }
 
-            string directory = string.IsNullOrWhiteSpace(targetDirectory)
-                ? GetDefaultProfilesDirectory()
-                : targetDirectory;
+            // 3. Build binary payload:
+            // [DWORD version (=1)]
+            // [DWORD profileIdBytes] + [UTF-16LE profile_id]
+            // [DWORD passwordBytes] + [UTF-16LE password]
+            byte[] payload = SecretPayloadBuilder.BuildPayload(profileId, password);
 
-            Directory.CreateDirectory(directory);
-            string secretFilePath = Path.Combine(directory, $"{profileId}.secret");
-
-            // 2. Build length-prefixed UTF-16LE plaintext buffer:
-            // Format: [DWORD byte length (little-endian)][UTF-16LE password bytes]
-            int charCount = password.Length;
-            int passwordByteLen = charCount * sizeof(char);
-            byte[] plaintext = new byte[sizeof(uint) + passwordByteLen];
-
-            BinaryPrimitives.WriteUInt32LittleEndian(plaintext.AsSpan(0, sizeof(uint)), (uint)passwordByteLen);
-
-            IntPtr pPassword = IntPtr.Zero;
             try
             {
-                pPassword = Marshal.SecureStringToGlobalAllocUnicode(password);
-                Marshal.Copy(pPassword, plaintext, sizeof(uint), passwordByteLen);
+                // 4. Store in Windows LSA under L$PeekCred_<targetSid>
+                string keyName = SecretPayloadBuilder.GetSecretKeyName(targetSid);
+                bool success = _secretStore.StoreSecret(keyName, payload);
 
-                // 3. Encrypt with DPAPI ProtectedData (CurrentUser scope, null entropy)
-                byte[] encrypted = _customEncrypt != null
-                    ? _customEncrypt(plaintext)
-                    : ProtectedData.Protect(plaintext, null, DataProtectionScope.CurrentUser);
+                if (success)
+                {
+                    // Clean up obsolete legacy DPAPI .secret file if present
+                    DeleteLegacySecretFile(profileId);
+                }
 
-                // 4. Write to %LOCALAPPDATA%\Peek\Profiles\<profile_id>.secret
-                File.WriteAllBytes(secretFilePath, encrypted);
-                return true;
+                return success;
             }
             finally
             {
                 // CRITICAL SECURITY REQUIREMENT:
-                // Zero plaintext memory immediately after use and free unmanaged buffer
-                CryptographicOperations.ZeroMemory(plaintext);
-                if (pPassword != IntPtr.Zero)
+                // Zero plaintext payload memory immediately after use
+                CryptographicOperations.ZeroMemory(payload);
+            }
+        }
+
+        public bool UnlinkPassword(string sid)
+        {
+            if (string.IsNullOrWhiteSpace(sid))
+            {
+                return false;
+            }
+
+            string keyName = SecretPayloadBuilder.GetSecretKeyName(sid);
+            return _secretStore.DeleteSecret(keyName);
+        }
+
+        public static void DeleteLegacySecretFile(string profileId)
+        {
+            try
+            {
+                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string secretFilePath = Path.Combine(localAppData, "Peek", "Profiles", $"{profileId}.secret");
+                if (File.Exists(secretFilePath))
                 {
-                    Marshal.ZeroFreeGlobalAllocUnicode(pPassword);
-                    pPassword = IntPtr.Zero;
+                    File.Delete(secretFilePath);
                 }
+            }
+            catch
+            {
+                // Non-fatal cleanup
             }
         }
     }
