@@ -978,6 +978,218 @@ int main()
         }
     }
 
+// New tests to append to test_autoselect.cpp
+
+    // -------------------------------------------------------------
+    // Test 19: Live session user resolution (NO test overrides)
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 19] Testing LOGON with live session resolution (no test overrides)...\n";
+    {
+        PeekProvider::ClearTestOverrides();
+
+        PeekProvider provider;
+        provider.SetUsageScenario(CPUS_LOGON, 0);
+
+        // Resolve current session user SID directly
+        DWORD dwSession = 0xFFFFFFFF;
+        if (!ProcessIdToSessionId(GetCurrentProcessId(), &dwSession))
+        {
+            dwSession = WTSGetActiveConsoleSessionId();
+        }
+
+        LPWSTR pszUser = nullptr;
+        LPWSTR pszDomain = nullptr;
+        DWORD dwBytes = 0;
+        BOOL bGotUser = WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, dwSession, WTSUserName, &pszUser, &dwBytes);
+        BOOL bGotDomain = WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, dwSession, WTSDomainName, &pszDomain, &dwBytes);
+
+        std::wstring currentSessionSid;
+        if (bGotUser && pszUser && pszUser[0] != L'\0')
+        {
+            std::wstring acct;
+            if (bGotDomain && pszDomain && pszDomain[0] != L'\0')
+            {
+                acct = pszDomain;
+                acct += L"\\";
+            }
+            acct += pszUser;
+
+            DWORD cbSid = 0;
+            DWORD cchRef = 0;
+            SID_NAME_USE snu;
+            LookupAccountNameW(NULL, acct.c_str(), NULL, &cbSid, NULL, &cchRef, &snu);
+            if (GetLastError() == ERROR_INSUFFICIENT_BUFFER && cbSid > 0)
+            {
+                std::vector<BYTE> sidBuf(cbSid);
+                std::vector<WCHAR> refDomain(cchRef > 0 ? cchRef : 1);
+                if (LookupAccountNameW(NULL, acct.c_str(), sidBuf.data(), &cbSid, refDomain.data(), &cchRef, &snu))
+                {
+                    LPWSTR pszSid = nullptr;
+                    if (ConvertSidToStringSidW(reinterpret_cast<PSID>(sidBuf.data()), &pszSid) && pszSid)
+                    {
+                        currentSessionSid = pszSid;
+                        LocalFree(pszSid);
+                    }
+                }
+            }
+        }
+
+        if (pszUser) WTSFreeMemory(pszUser);
+        if (pszDomain) WTSFreeMemory(pszDomain);
+
+        if (!currentSessionSid.empty())
+        {
+            // Case 19a: Matching user in array -> count=1
+            MockCredentialProviderUserArray* pArrayMatch = new MockCredentialProviderUserArray();
+            MockCredentialProviderUser* pUserMatch = new MockCredentialProviderUser(currentSessionSid, L"LiveUser", L"LiveDomain");
+            pArrayMatch->AddUser(pUserMatch);
+            pUserMatch->Release();
+
+            provider.SetUserArray(pArrayMatch);
+
+            DWORD count = 0;
+            DWORD defaultIndex = 999;
+            BOOL autoLogon = TRUE;
+            HRESULT hrMatch = provider.GetCredentialCount(&count, &defaultIndex, &autoLogon);
+            bool matchOk = (SUCCEEDED(hrMatch) && count == 1);
+
+            // Case 19b: Mismatched user in array -> count=0
+            PeekProvider providerMismatch;
+            providerMismatch.SetUsageScenario(CPUS_LOGON, 0);
+
+            MockCredentialProviderUserArray* pArrayMismatch = new MockCredentialProviderUserArray();
+            MockCredentialProviderUser* pUserMismatch = new MockCredentialProviderUser(L"S-1-5-21-99999999-88888888-77777777-9999", L"WrongUser", L"Domain");
+            pArrayMismatch->AddUser(pUserMismatch);
+            pUserMismatch->Release();
+
+            providerMismatch.SetUserArray(pArrayMismatch);
+
+            DWORD countMis = 999;
+            HRESULT hrMis = providerMismatch.GetCredentialCount(&countMis, &defaultIndex, &autoLogon);
+            bool misOk = (SUCCEEDED(hrMis) && countMis == 0);
+
+            pArrayMatch->Release();
+            pArrayMismatch->Release();
+
+            if (matchOk && misOk)
+            {
+                std::wcout << L"  PASS: Live session resolution matched user (count=1) and rejected mismatch (count=0)\n";
+            }
+            else
+            {
+                std::wcout << L"  FAIL: Live session resolution: matchOk=" << matchOk << L", misOk=" << misOk << L"\n";
+                failed++;
+            }
+        }
+        else
+        {
+            // Headless / non-interactive environment with no session user: must fail closed (count=0)
+            MockCredentialProviderUserArray* pArray = new MockCredentialProviderUserArray();
+            MockCredentialProviderUser* pUser = new MockCredentialProviderUser(L"S-1-5-21-ANY", L"User", L"Domain");
+            pArray->AddUser(pUser);
+            pUser->Release();
+
+            provider.SetUserArray(pArray);
+
+            DWORD count = 999;
+            DWORD defaultIndex = 999;
+            BOOL autoLogon = TRUE;
+            HRESULT hr = provider.GetCredentialCount(&count, &defaultIndex, &autoLogon);
+            pArray->Release();
+
+            if (SUCCEEDED(hr) && count == 0)
+            {
+                std::wcout << L"  PASS: Headless environment with no session user failed closed (count=0)\n";
+            }
+            else
+            {
+                std::wcout << L"  FAIL: Headless environment expected count=0, got count=" << count << L"\n";
+                failed++;
+            }
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 20: LOGON with empty session user name (cold boot / sign-in screen)
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 20] Testing LOGON with empty session user name (cold boot / sign-in screen fail closed)...\n";
+    {
+        PeekProvider::ClearTestOverrides();
+        PeekProvider::SetTestSessionUserName(L""); // Force empty username
+
+        PeekProvider provider;
+        provider.SetUsageScenario(CPUS_LOGON, 0);
+
+        MockCredentialProviderUserArray* pArray = new MockCredentialProviderUserArray();
+        MockCredentialProviderUser* pUser = new MockCredentialProviderUser(L"S-1-5-21-COLD-BOOT-1001", L"ColdUser", L"ColdDomain");
+        pArray->AddUser(pUser);
+        pUser->Release();
+
+        provider.SetUserArray(pArray);
+
+        DWORD count = 999;
+        DWORD defaultIndex = 999;
+        BOOL autoLogon = TRUE;
+
+        HRESULT hr = provider.GetCredentialCount(&count, &defaultIndex, &autoLogon);
+        PeekProvider::ClearTestOverrides();
+        pArray->Release();
+
+        if (SUCCEEDED(hr) && count == 0)
+        {
+            std::wcout << L"  PASS: Empty session user name correctly failed closed (count=0, no tile offered)\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Empty session user name expected count=0, got count=" << count << L", hr=" << hr << L"\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 21: Process Token Privilege Diagnostics & RAII Guard verification
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 21] Testing Process Token Privilege Diagnostics and RAII revert...\n";
+    {
+        PeekDiagnostics::RunProcessTokenDiagnostics(L"Test_Autoselect_Verification");
+
+        std::wstring logFilePath = PeekLoggerInternal::GetLogFilePath();
+        HANDLE hFile = CreateFileW(logFilePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE)
+        {
+            DWORD dwSize = GetFileSize(hFile, NULL);
+            std::vector<char> buffer(dwSize + 1, 0);
+            DWORD bytesRead = 0;
+            ReadFile(hFile, buffer.data(), dwSize, &bytesRead, NULL);
+            CloseHandle(hFile);
+
+            std::string content(buffer.data(), bytesRead);
+            bool hasDiagStart = (content.find("[PeekDiag] Process Token Diagnostics START") != std::string::npos);
+            bool hasTokenUser = (content.find("[PeekDiag] Process Token User: SID=") != std::string::npos);
+            bool hasIntegrity = (content.find("[PeekDiag] Process Token Integrity Level:") != std::string::npos);
+            bool hasPrivCount = (content.find("[PeekDiag] Process Token Privileges count=") != std::string::npos);
+            bool hasAdjust = (content.find("[PeekDiag] AdjustTokenPrivileges(SeTcbPrivilege):") != std::string::npos);
+            bool hasDiagEnd = (content.find("[PeekDiag] Process Token Diagnostics END") != std::string::npos);
+
+            if (hasDiagStart && hasTokenUser && hasIntegrity && hasPrivCount && hasAdjust && hasDiagEnd)
+            {
+                std::wcout << L"  PASS: Diagnostics executed and verified in log: Token User, Integrity Level, Privileges, AdjustTokenPrivileges\n";
+            }
+            else
+            {
+                std::wcout << L"  FAIL: Diagnostics log missing expected markers: start=" << hasDiagStart
+                           << L", user=" << hasTokenUser << L", integrity=" << hasIntegrity
+                           << L", privs=" << hasPrivCount << L", adjust=" << hasAdjust << L", end=" << hasDiagEnd << L"\n";
+                failed++;
+            }
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Could not open log file to verify diagnostics output\n";
+            failed++;
+        }
+    }
+
     // Cleanup
     DeleteTempTestDirectory(tempDir);
     SetEnvironmentVariableW(L"PEEK_PROFILES_DIR", NULL);

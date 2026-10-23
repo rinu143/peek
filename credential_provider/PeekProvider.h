@@ -42,7 +42,12 @@ public:
 #ifdef PEEK_TEST_BUILD
     static void SetTestConsoleUserSid(const std::wstring& sid) { s_testConsoleUserSid = sid; s_hasTestConsoleUserSid = true; }
     static void SetTestSessionId(DWORD sessionId) { s_testSessionId = sessionId; s_hasTestSessionId = true; }
-    static void ClearTestOverrides() { s_testConsoleUserSid.clear(); s_hasTestConsoleUserSid = false; s_testSessionId = 0xFFFFFFFF; s_hasTestSessionId = false; }
+    static void SetTestSessionUserName(const std::wstring& userName) { s_testSessionUserName = userName; s_hasTestSessionUserName = true; }
+    static void ClearTestOverrides() {
+        s_testConsoleUserSid.clear(); s_hasTestConsoleUserSid = false;
+        s_testSessionId = 0xFFFFFFFF; s_hasTestSessionId = false;
+        s_testSessionUserName.clear(); s_hasTestSessionUserName = false;
+    }
 #endif
 
 private:
@@ -68,5 +73,7 @@ private:
     static inline bool s_hasTestConsoleUserSid = false;
     static inline DWORD s_testSessionId = 0xFFFFFFFF;
     static inline bool s_hasTestSessionId = false;
+    static inline std::wstring s_testSessionUserName = L"";
+    static inline bool s_hasTestSessionUserName = false;
 #endif
 };

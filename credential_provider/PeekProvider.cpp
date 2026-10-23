@@ -207,6 +207,13 @@ HRESULT PeekProvider::SetUsageScenario(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, 
         cpus, pszScenario, dwFlags, hr);
     Logger::LogInfo(szBuf);
 
+    // Run process token diagnostics once per LogonUI load
+    static INIT_ONCE s_diagOnce = INIT_ONCE_STATIC_INIT;
+    InitOnceExecuteOnce(&s_diagOnce, [](PINIT_ONCE, PVOID, PVOID*) -> BOOL {
+        PeekDiagnostics::RunProcessTokenDiagnostics(L"PeekProvider::SetUsageScenario");
+        return TRUE;
+    }, NULL, NULL);
+
     return hr;
 }
 
@@ -342,7 +349,58 @@ bool PeekProvider::GetConsoleUserSid(std::wstring& outSid)
 {
     outSid.clear();
 
-    DWORD sessionId = WTSGetActiveConsoleSessionId();
+#ifdef PEEK_TEST_BUILD
+    if (s_hasTestConsoleUserSid)
+    {
+        if (s_testConsoleUserSid == L"FAIL" || s_testConsoleUserSid == L"NONE")
+        {
+            Logger::LogInfo(L"PeekProvider::GetConsoleUserSid: [TEST] Forced session user query failure (s_testConsoleUserSid)");
+            return false;
+        }
+        outSid = s_testConsoleUserSid;
+        wchar_t szBuf[256] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: [TEST] Overriding console SID='%s'", outSid.c_str());
+        Logger::LogInfo(szBuf);
+        return true;
+    }
+    else
+    {
+        wchar_t szEnvSid[256] = {};
+        if (GetEnvironmentVariableW(L"PEEK_TEST_CONSOLE_USER_SID", szEnvSid, ARRAYSIZE(szEnvSid)) > 0)
+        {
+            if (wcscmp(szEnvSid, L"FAIL") == 0 || wcscmp(szEnvSid, L"NONE") == 0)
+            {
+                Logger::LogInfo(L"PeekProvider::GetConsoleUserSid: [TEST] Forced session user query failure (PEEK_TEST_CONSOLE_USER_SID)");
+                return false;
+            }
+            outSid = szEnvSid;
+            wchar_t szBuf[256] = {};
+            swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: [TEST] Overriding console SID='%s'", outSid.c_str());
+            Logger::LogInfo(szBuf);
+            return true;
+        }
+    }
+#endif
+
+    DWORD sessionId = 0xFFFFFFFF;
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &sessionId))
+    {
+        DWORD dwErr = GetLastError();
+        sessionId = WTSGetActiveConsoleSessionId();
+        wchar_t szBuf[128] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf),
+            L"PeekProvider::GetConsoleUserSid: ProcessIdToSessionId failed (err=%u), fallback to WTSGetActiveConsoleSessionId=%u",
+            dwErr, sessionId);
+        Logger::LogInfo(szBuf);
+    }
+    else
+    {
+        wchar_t szBuf[128] = {};
+        swprintf_s(szBuf, ARRAYSIZE(szBuf),
+            L"PeekProvider::GetConsoleUserSid: ProcessIdToSessionId succeeded, sessionId=%u",
+            sessionId);
+        Logger::LogInfo(szBuf);
+    }
 
 #ifdef PEEK_TEST_BUILD
     if (s_hasTestSessionId)
@@ -371,107 +429,174 @@ bool PeekProvider::GetConsoleUserSid(std::wstring& outSid)
         }
     }
 
-    if (s_hasTestConsoleUserSid)
+    if (s_hasTestSessionUserName)
     {
-        if (s_testConsoleUserSid == L"FAIL" || s_testConsoleUserSid == L"NONE")
+        if (s_testSessionUserName.empty())
         {
-            Logger::LogInfo(L"PeekProvider::GetConsoleUserSid: [TEST] Forced token query failure (s_testConsoleUserSid)");
+            Logger::LogInfo(L"PeekProvider::GetConsoleUserSid: [TEST] Overriding session user name with empty string -> fail closed (no tile)");
             return false;
-        }
-        outSid = s_testConsoleUserSid;
-        wchar_t szBuf[256] = {};
-        swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: [TEST] Overriding console SID='%s'", outSid.c_str());
-        Logger::LogInfo(szBuf);
-        return true;
-    }
-    else
-    {
-        wchar_t szEnvSid[256] = {};
-        if (GetEnvironmentVariableW(L"PEEK_TEST_CONSOLE_USER_SID", szEnvSid, ARRAYSIZE(szEnvSid)) > 0)
-        {
-            if (wcscmp(szEnvSid, L"FAIL") == 0 || wcscmp(szEnvSid, L"NONE") == 0)
-            {
-                Logger::LogInfo(L"PeekProvider::GetConsoleUserSid: [TEST] Forced token query failure (PEEK_TEST_CONSOLE_USER_SID)");
-                return false;
-            }
-            outSid = szEnvSid;
-            wchar_t szBuf[256] = {};
-            swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: [TEST] Overriding console SID='%s'", outSid.c_str());
-            Logger::LogInfo(szBuf);
-            return true;
         }
     }
 #endif
 
     if (sessionId == 0xFFFFFFFF)
     {
-        Logger::LogInfo(L"PeekProvider::GetConsoleUserSid: WTSGetActiveConsoleSessionId returned 0xFFFFFFFF (no active console session)");
+        Logger::LogInfo(L"PeekProvider::GetConsoleUserSid: sessionId is 0xFFFFFFFF (no active session) -> fail closed (no tile)");
         return false;
     }
 
-    wchar_t szBufSession[128] = {};
-    swprintf_s(szBufSession, ARRAYSIZE(szBufSession), L"PeekProvider::GetConsoleUserSid: active console sessionId=%u", sessionId);
-    Logger::LogInfo(szBufSession);
+    // Query session user name, domain name, and connection state via WTSQuerySessionInformationW
+    LPWSTR pszUserName = nullptr;
+    LPWSTR pszDomainName = nullptr;
+    WTS_CONNECTSTATE_CLASS* pConnectState = nullptr;
+    DWORD dwBytes = 0;
 
-    HANDLE hToken = NULL;
-    if (!WTSQueryUserToken(sessionId, &hToken))
+    BOOL bStateOk = WTSQuerySessionInformationW(
+        WTS_CURRENT_SERVER_HANDLE,
+        sessionId,
+        WTSConnectState,
+        reinterpret_cast<LPWSTR*>(&pConnectState),
+        &dwBytes
+    );
+
+    BOOL bUserOk = WTSQuerySessionInformationW(
+        WTS_CURRENT_SERVER_HANDLE,
+        sessionId,
+        WTSUserName,
+        &pszUserName,
+        &dwBytes
+    );
+
+    BOOL bDomainOk = WTSQuerySessionInformationW(
+        WTS_CURRENT_SERVER_HANDLE,
+        sessionId,
+        WTSDomainName,
+        &pszDomainName,
+        &dwBytes
+    );
+
+    int connectStateVal = (bStateOk && pConnectState) ? static_cast<int>(*pConnectState) : -1;
+    wchar_t szBufInfo[512] = {};
+    swprintf_s(szBufInfo, ARRAYSIZE(szBufInfo),
+        L"PeekProvider::GetConsoleUserSid: session=%u, userOk=%d ('%s'), domainOk=%d ('%s'), stateOk=%d (state=%d)",
+        sessionId,
+        bUserOk, (bUserOk && pszUserName) ? pszUserName : L"",
+        bDomainOk, (bDomainOk && pszDomainName) ? pszDomainName : L"",
+        bStateOk, connectStateVal
+    );
+    Logger::LogInfo(szBufInfo);
+
+    // Fail closed if user name is empty (cold boot / sign-in screen / switch-user logon session)
+    if (!bUserOk || !pszUserName || pszUserName[0] == L'\0')
     {
-        DWORD dwErr = GetLastError();
-        wchar_t szBuf[256] = {};
-        swprintf_s(szBuf, ARRAYSIZE(szBuf),
-            L"PeekProvider::GetConsoleUserSid: WTSQueryUserToken failed for sessionId=%u, error=%u (cold boot / sign-in screen / no user token)",
-            sessionId, dwErr);
-        Logger::LogInfo(szBuf);
+        Logger::LogInfo(L"PeekProvider::GetConsoleUserSid: Session user name is empty (cold boot / sign-in screen / switch-user logon session) -> fail closed (no tile)");
+        if (pszUserName) WTSFreeMemory(pszUserName);
+        if (pszDomainName) WTSFreeMemory(pszDomainName);
+        if (pConnectState) WTSFreeMemory(pConnectState);
         return false;
     }
 
-    bool bSuccess = false;
-    DWORD dwLength = 0;
-    GetTokenInformation(hToken, TokenUser, NULL, 0, &dwLength);
-    DWORD dwErrToken = GetLastError();
-    if (dwErrToken == ERROR_INSUFFICIENT_BUFFER && dwLength > 0)
+    // Construct account name for SID lookup: "DOMAIN\user" (or fallback "user")
+    std::wstring accountName;
+    if (bDomainOk && pszDomainName && pszDomainName[0] != L'\0')
     {
-        std::vector<BYTE> buffer(dwLength);
-        if (GetTokenInformation(hToken, TokenUser, buffer.data(), dwLength, &dwLength))
+        accountName = pszDomainName;
+        accountName += L"\\";
+    }
+    accountName += pszUserName;
+
+    // Resolve account name to binary SID via LookupAccountNameW
+    DWORD cbSid = 0;
+    DWORD cchReferencedDomain = 0;
+    SID_NAME_USE snu;
+    SetLastError(ERROR_SUCCESS);
+    LookupAccountNameW(NULL, accountName.c_str(), NULL, &cbSid, NULL, &cchReferencedDomain, &snu);
+    DWORD dwErrLookup = GetLastError();
+
+    bool bSidResolved = false;
+    std::vector<BYTE> sidBuffer;
+
+    if (dwErrLookup == ERROR_INSUFFICIENT_BUFFER && cbSid > 0)
+    {
+        sidBuffer.resize(cbSid);
+        std::vector<WCHAR> refDomain(cchReferencedDomain > 0 ? cchReferencedDomain : 1);
+        if (LookupAccountNameW(NULL, accountName.c_str(), sidBuffer.data(), &cbSid, refDomain.data(), &cchReferencedDomain, &snu))
         {
-            TOKEN_USER* pTokenUser = reinterpret_cast<TOKEN_USER*>(buffer.data());
-            LPWSTR pszSid = NULL;
-            if (ConvertSidToStringSidW(pTokenUser->User.Sid, &pszSid) && pszSid)
-            {
-                outSid = pszSid;
-                LocalFree(pszSid);
-                bSuccess = true;
-                wchar_t szBuf[256] = {};
-                swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: TokenUser SID='%s'", outSid.c_str());
-                Logger::LogInfo(szBuf);
-            }
-            else
-            {
-                DWORD dwErrConv = GetLastError();
-                wchar_t szBuf[128] = {};
-                swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: ConvertSidToStringSidW failed, error=%u", dwErrConv);
-                Logger::LogError(szBuf);
-            }
+            bSidResolved = true;
         }
         else
         {
-            DWORD dwErrInfo = GetLastError();
-            wchar_t szBuf[128] = {};
-            swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: GetTokenInformation failed, error=%u", dwErrInfo);
+            DWORD dwErr2 = GetLastError();
+            wchar_t szBuf[256] = {};
+            swprintf_s(szBuf, ARRAYSIZE(szBuf),
+                L"PeekProvider::GetConsoleUserSid: LookupAccountNameW for '%s' failed on second call, error=%u",
+                accountName.c_str(), dwErr2);
             Logger::LogError(szBuf);
         }
     }
     else
     {
-        wchar_t szBuf[128] = {};
-        swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekProvider::GetConsoleUserSid: Initial GetTokenInformation failed, error=%u, len=%u", dwErrToken, dwLength);
-        Logger::LogError(szBuf);
+        // Fallback: try username without domain prefix if domain was prefixed
+        if (bDomainOk && pszDomainName && pszDomainName[0] != L'\0')
+        {
+            cbSid = 0;
+            cchReferencedDomain = 0;
+            SetLastError(ERROR_SUCCESS);
+            LookupAccountNameW(NULL, pszUserName, NULL, &cbSid, NULL, &cchReferencedDomain, &snu);
+            if (GetLastError() == ERROR_INSUFFICIENT_BUFFER && cbSid > 0)
+            {
+                sidBuffer.resize(cbSid);
+                std::vector<WCHAR> refDomain(cchReferencedDomain > 0 ? cchReferencedDomain : 1);
+                if (LookupAccountNameW(NULL, pszUserName, sidBuffer.data(), &cbSid, refDomain.data(), &cchReferencedDomain, &snu))
+                {
+                    bSidResolved = true;
+                    Logger::LogInfo(L"PeekProvider::GetConsoleUserSid: Fallback LookupAccountNameW for username alone succeeded");
+                }
+            }
+        }
+
+        if (!bSidResolved)
+        {
+            wchar_t szBuf[256] = {};
+            swprintf_s(szBuf, ARRAYSIZE(szBuf),
+                L"PeekProvider::GetConsoleUserSid: LookupAccountNameW for '%s' failed, error=%u -> fail closed",
+                accountName.c_str(), dwErrLookup);
+            Logger::LogError(szBuf);
+        }
     }
 
-    // Close token on every path
-    CloseHandle(hToken);
+    // Always free WTS memory buffers
+    if (pszUserName) WTSFreeMemory(pszUserName);
+    if (pszDomainName) WTSFreeMemory(pszDomainName);
+    if (pConnectState) WTSFreeMemory(pConnectState);
 
-    return bSuccess;
+    // Convert resolved binary SID to string SID
+    if (bSidResolved)
+    {
+        LPWSTR pszSidString = nullptr;
+        if (ConvertSidToStringSidW(reinterpret_cast<PSID>(sidBuffer.data()), &pszSidString) && pszSidString)
+        {
+            outSid = pszSidString;
+            LocalFree(pszSidString);
+            wchar_t szBuf[256] = {};
+            swprintf_s(szBuf, ARRAYSIZE(szBuf),
+                L"PeekProvider::GetConsoleUserSid: Successfully resolved session user '%s' to SID='%s'",
+                accountName.c_str(), outSid.c_str());
+            Logger::LogInfo(szBuf);
+            return true;
+        }
+        else
+        {
+            DWORD dwErrConv = GetLastError();
+            wchar_t szBuf[128] = {};
+            swprintf_s(szBuf, ARRAYSIZE(szBuf),
+                L"PeekProvider::GetConsoleUserSid: ConvertSidToStringSidW failed, error=%u", dwErrConv);
+            Logger::LogError(szBuf);
+            return false;
+        }
+    }
+
+    return false;
 }
 
 HRESULT PeekProvider::ResolveLockedUser(DWORD* pdwUserIndex, bool* pbLockedSession)

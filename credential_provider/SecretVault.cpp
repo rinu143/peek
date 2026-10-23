@@ -214,6 +214,9 @@ namespace PeekSecretVault
             return NULL;
         }
 
+        // Diagnostics run immediately before SecretVault tries WTSQueryUserToken
+        PeekDiagnostics::RunProcessTokenDiagnostics(L"SecretVault::GetUserTokenFromSessionId", dwSessionId);
+
         HANDLE hToken = NULL;
 
         // Get the user token for the specified session
