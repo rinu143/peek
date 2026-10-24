@@ -33,6 +33,7 @@ namespace PeekSetup.Models
         public const string ReasonInternalError = "INTERNAL_ERROR";
         public const string ReasonQualityFailed = "QUALITY_FAILED";
         public const string ReasonTimeout = "TIMEOUT";
+        public const string ReasonConfirmationRequired = "CONFIRMATION_REQUIRED";
 
         // Poses
         public const string PoseCenter = "CENTER";
@@ -78,13 +79,15 @@ namespace PeekSetup.Models
             PropertyNamingPolicy = null
         };
 
-        public static string CreateStartEnrollment(string displayName)
+        public static string CreateStartEnrollment(string displayName, bool confirmed = false, string? password = null)
         {
             var msg = new
             {
                 protocol_version = ProtocolVersion,
                 type = MsgStartEnrollment,
                 display_name = displayName,
+                confirmed = confirmed ? (bool?)true : null,
+                password = password,
                 timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
             };
             return JsonSerializer.Serialize(msg, JsonOptions);

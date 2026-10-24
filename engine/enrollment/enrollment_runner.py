@@ -213,6 +213,8 @@ class EnrollmentRunner:
         candidates_per_pose: int = 2,
         keep_best_per_pose: int = 1,
         camera_index: int = 0,
+        confirmed: bool = False,
+        password: Optional[str] = None,
     ):
         self.display_name = display_name
         self.profile_store = profile_store or SecureProfileStore()
@@ -224,6 +226,8 @@ class EnrollmentRunner:
         self._camera_owned = camera is None
         self.session = session or self._create_default_session()
 
+        self.confirmed = confirmed
+        self.confirmation_password = password
         self._cancelled = False
         self._advance_requested = False
         self.saved_profile: Optional[PeekProfile] = None
@@ -267,10 +271,13 @@ class EnrollmentRunner:
         if self._camera_owned:
             self._camera = None
 
-    def start(self, display_name: Optional[str] = None):
+    def start(self, display_name: Optional[str] = None, confirmed: bool = False, password: Optional[str] = None):
         """Starts or restarts the enrollment session."""
         if display_name:
             self.display_name = display_name
+        self.confirmed = confirmed
+        if password is not None:
+            self.confirmation_password = password
         self._cancelled = False
         self._advance_requested = False
         self.saved_profile = None
@@ -447,7 +454,7 @@ class EnrollmentRunner:
         if self.session.is_complete:
             if self.saved_profile is None and not self._cancelled:
                 try:
-                    self.saved_profile = self.session.finalize_and_save_profile(display_name=self.display_name)
+                    self.saved_profile = self.session.finalize_and_save_profile(display_name=self.display_name, confirmed=self.confirmed, password=self.confirmation_password)
                     logger.info("Enrollment finished and profile '%s' secured via DPAPI.", self.display_name)
                 except Exception as ex:
                     logger.error("Failed to finalize and save profile: %s", ex, exc_info=True)

@@ -11,6 +11,7 @@ Validates:
 8. Sequential client connect / disconnect cycling.
 """
 
+import os
 import unittest
 import time
 import uuid
@@ -57,6 +58,7 @@ from engine.ipc.pipe_server import PipeServer
 from engine.ipc.pipe_client import PipeClient
 from engine.ipc.protocol import (
     MSG_START_AUTH,
+    make_start_auth,
     MSG_CAMERA_STARTING,
     MSG_SEARCHING,
     MSG_AUTHENTICATED,
@@ -94,7 +96,7 @@ class MockEnrollmentRunner:
     def stop_camera(self):
         self.stopped = True
 
-    def start(self, display_name: Optional[str] = None):
+    def start(self, display_name: Optional[str] = None, confirmed: bool = False, password: Optional[str] = None):
         if display_name:
             self.display_name = display_name
         self.started = True
@@ -196,6 +198,9 @@ class MockAuthFaceEngine:
 class TestEnrollmentPipeServer(unittest.TestCase):
 
     def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix="peek_test_enroll_store_")
+        self._prev_profiles_dir = os.environ.get("PEEK_PROFILES_DIR")
+        os.environ["PEEK_PROFILES_DIR"] = self.temp_dir
         self.pipe_name = rf"\\.\pipe\PeekTestEnroll_{uuid.uuid4().hex[:8]}"
         self.server: Optional[EnrollmentPipeServer] = None
         self.client: Optional[EnrollmentPipeClient] = None
@@ -205,6 +210,12 @@ class TestEnrollmentPipeServer(unittest.TestCase):
             self.client.close()
         if self.server:
             self.server.stop()
+        if self._prev_profiles_dir is not None:
+            os.environ["PEEK_PROFILES_DIR"] = self._prev_profiles_dir
+        else:
+            os.environ.pop("PEEK_PROFILES_DIR", None)
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_connect_and_ping(self):
         """Validates that a client connects, receives ENROLLMENT_READY, and exchanges PING/PONG."""
@@ -342,11 +353,21 @@ class TestEnrollmentPipeServer(unittest.TestCase):
         auth_pipe = rf"\\.\pipe\PeekTestAuth_{uuid.uuid4().hex[:8]}"
         enroll_pipe = rf"\\.\pipe\PeekTestEnroll_{uuid.uuid4().hex[:8]}"
 
+        try:
+            import win32process
+            token = win32security.OpenProcessToken(win32process.GetCurrentProcess(), win32con.TOKEN_QUERY)
+            tok_sid, _ = win32security.GetTokenInformation(token, win32security.TokenUser)
+            auth_sddl = f"D:(A;;GA;;;SY)(A;;GA;;;{win32security.ConvertSidToStringSid(tok_sid)})"
+            token.Close()
+        except Exception:
+            auth_sddl = "D:(A;;GA;;;WD)"
+
         auth_server = PipeServer(
             pipe_name=auth_pipe,
             face_engine=MockAuthFaceEngine(),
             camera=MockAuthCamera(),
             default_auth_timeout=5.0,
+            sddl=auth_sddl,
             coordinator=coordinator
         )
         enroll_runner = MockEnrollmentRunner(frames_to_complete=100)
@@ -371,7 +392,7 @@ class TestEnrollmentPipeServer(unittest.TestCase):
             enroll_client.read_message(timeout_seconds=2.0) # ENROLLMENT_READY
 
             # Case A: Start Auth -> Attempt Enrollment -> Should be rejected
-            auth_client.send_message({"type": MSG_START_AUTH, "protocol_version": "1.0", "timeout_seconds": 4.0})
+            auth_client.send_message(make_start_auth(timeout_seconds=4.0))
             auth_start = auth_client.read_message(timeout_seconds=2.0)
             self.assertEqual(auth_start.get("type"), MSG_CAMERA_STARTING)
 
@@ -398,7 +419,7 @@ class TestEnrollmentPipeServer(unittest.TestCase):
             self.assertEqual(enroll_frame.get("type"), MSG_PREVIEW_FRAME)
 
             # Auth attempt while enrollment is running
-            auth_client.send_message({"type": MSG_START_AUTH, "protocol_version": "1.0", "timeout_seconds": 4.0})
+            auth_client.send_message(make_start_auth(timeout_seconds=4.0))
             auth_reply = auth_client.read_message(timeout_seconds=2.0)
 
             self.assertIsNotNone(auth_reply)
@@ -543,7 +564,7 @@ class TestEnrollmentPipeServer(unittest.TestCase):
             self.assertEqual(resp1.get("type"), MSG_STATUS_RESPONSE)
             self.assertFalse(resp1.get("has_enrolled_profile"))
             self.assertEqual(resp1.get("display_name"), "")
-            self.assertEqual(resp1.get("profile_id"), "")
+            self.assertNotIn("profile_id", resp1)
 
             # 2. Add an enabled profile to the store
             p = PeekProfile(
@@ -560,7 +581,7 @@ class TestEnrollmentPipeServer(unittest.TestCase):
             self.assertEqual(resp2.get("type"), MSG_STATUS_RESPONSE)
             self.assertTrue(resp2.get("has_enrolled_profile"))
             self.assertEqual(resp2.get("display_name"), "Charlie Brown")
-            self.assertEqual(resp2.get("profile_id"), "profile_status_test_1")
+            self.assertNotIn("profile_id", resp2)
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 

@@ -238,10 +238,11 @@ namespace PeekSecretVault
     bool ParseSecretPayload(
         const BYTE* pbData,
         DWORD cbData,
-        const std::wstring& expectedProfileId,
+        std::wstring& outProfileId,
         std::wstring& outPassword
     )
     {
+        outProfileId.clear();
         outPassword.clear();
         if (!pbData || cbData < sizeof(DWORD) * 3 || cbData > LSA_SECRET_MAX_SIZE)
         {
@@ -273,7 +274,7 @@ namespace PeekSecretVault
             return false;
         }
 
-        std::wstring storedProfileId(reinterpret_cast<const wchar_t*>(ptr), profileIdBytes / sizeof(wchar_t));
+        outProfileId.assign(reinterpret_cast<const wchar_t*>(ptr), profileIdBytes / sizeof(wchar_t));
         ptr += profileIdBytes;
 
         DWORD passwordBytes = 0;
@@ -282,22 +283,44 @@ namespace PeekSecretVault
 
         if (passwordBytes == 0 || (passwordBytes % sizeof(wchar_t)) != 0)
         {
+            outProfileId.clear();
             return false;
         }
 
         DWORD expectedRemaining = cbData - (sizeof(DWORD) * 3 + profileIdBytes);
         if (passwordBytes != expectedRemaining)
         {
-            return false;
-        }
-
-        // Profile ID binding: stored profile_id must strictly match expected profile_id
-        if (storedProfileId != expectedProfileId)
-        {
+            outProfileId.clear();
             return false;
         }
 
         outPassword.assign(reinterpret_cast<const wchar_t*>(ptr), passwordBytes / sizeof(wchar_t));
+        return true;
+    }
+
+    bool ParseSecretPayload(
+        const BYTE* pbData,
+        DWORD cbData,
+        const std::wstring& expectedProfileId,
+        std::wstring& outPassword
+    )
+    {
+        std::wstring storedProfileId;
+        if (!ParseSecretPayload(pbData, cbData, storedProfileId, outPassword))
+        {
+            return false;
+        }
+
+        if (storedProfileId != expectedProfileId)
+        {
+            if (!outPassword.empty())
+            {
+                SecureZeroMemory(&outPassword[0], outPassword.size() * sizeof(wchar_t));
+                outPassword.clear();
+            }
+            return false;
+        }
+
         return true;
     }
 
@@ -306,18 +329,14 @@ namespace PeekSecretVault
         return L"L$PeekCred_" + userSid;
     }
 
-    bool ReadPasswordSecret(
+    bool GetStoredProfileId(
         const std::wstring& userSid,
-        const std::wstring& expectedProfileId,
-        std::wstring& outPassword,
+        std::wstring& outProfileId,
         ILsaSecretStore* pStore
     )
     {
-        outPassword.clear();
-        if (userSid.empty() || expectedProfileId.empty())
-        {
-            return false;
-        }
+        outProfileId.clear();
+        if (userSid.empty()) return false;
 
         std::shared_ptr<ILsaSecretStore> spStore;
         if (!pStore)
@@ -325,10 +344,7 @@ namespace PeekSecretVault
             spStore = GetLsaSecretStore();
             pStore = spStore.get();
         }
-        if (!pStore)
-        {
-            return false;
-        }
+        if (!pStore) return false;
 
         std::wstring keyName = GetSecretKeyName(userSid);
         std::vector<BYTE> secretData;
@@ -338,9 +354,84 @@ namespace PeekSecretVault
             return false;
         }
 
-        bool parsed = ParseSecretPayload(secretData.data(), static_cast<DWORD>(secretData.size()), expectedProfileId, outPassword);
-        SecureZeroMemory(secretData.data(), secretData.size());
-        return parsed;
+        std::wstring dummyPassword;
+        bool ok = ParseSecretPayload(secretData.data(), static_cast<DWORD>(secretData.size()), outProfileId, dummyPassword);
+        if (!dummyPassword.empty())
+        {
+            SecureZeroMemory(&dummyPassword[0], dummyPassword.size() * sizeof(wchar_t));
+        }
+        if (!secretData.empty())
+        {
+            SecureZeroMemory(secretData.data(), secretData.size());
+        }
+        return ok && !outProfileId.empty();
+    }
+
+    bool ReadPasswordSecret(
+        const std::wstring& userSid,
+        std::wstring& outPassword,
+        std::wstring* pOutProfileId,
+        ILsaSecretStore* pStore
+    )
+    {
+        outPassword.clear();
+        if (pOutProfileId) pOutProfileId->clear();
+        if (userSid.empty()) return false;
+
+        std::shared_ptr<ILsaSecretStore> spStore;
+        if (!pStore)
+        {
+            spStore = GetLsaSecretStore();
+            pStore = spStore.get();
+        }
+        if (!pStore) return false;
+
+        std::wstring keyName = GetSecretKeyName(userSid);
+        std::vector<BYTE> secretData;
+        NTSTATUS status = pStore->RetrieveSecret(keyName, secretData);
+        if (status != STATUS_SUCCESS || secretData.empty())
+        {
+            return false;
+        }
+
+        std::wstring storedProfileId;
+        bool ok = ParseSecretPayload(secretData.data(), static_cast<DWORD>(secretData.size()), storedProfileId, outPassword);
+        if (!secretData.empty())
+        {
+            SecureZeroMemory(secretData.data(), secretData.size());
+        }
+        if (ok)
+        {
+            if (pOutProfileId) *pOutProfileId = storedProfileId;
+            return true;
+        }
+        return false;
+    }
+
+    bool ReadPasswordSecret(
+        const std::wstring& userSid,
+        const std::wstring& expectedProfileId,
+        std::wstring& outPassword,
+        ILsaSecretStore* pStore
+    )
+    {
+        std::wstring storedProfileId;
+        if (!ReadPasswordSecret(userSid, outPassword, &storedProfileId, pStore))
+        {
+            return false;
+        }
+
+        if (storedProfileId != expectedProfileId)
+        {
+            if (!outPassword.empty())
+            {
+                SecureZeroMemory(&outPassword[0], outPassword.size() * sizeof(wchar_t));
+                outPassword.clear();
+            }
+            return false;
+        }
+
+        return true;
     }
 
     bool DeletePasswordSecret(

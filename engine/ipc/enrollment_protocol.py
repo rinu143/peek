@@ -8,6 +8,10 @@ SECURITY & DESIGN PRINCIPLES:
    streamed via base64 JSON, and never written to disk by the IPC server.
 3. Fail open, bounded latency: error and failure responses are machine-readable
    without leaking raw internal stack traces across the pipe.
+4. Profile ID and frame protection: profile_id is excluded from status responses;
+   preview frames are only streamed to a client verified as the enrolled user's process.
+5. Explicit replacement confirmation: replacing an existing enabled profile requires
+   explicit user confirmation or current password verification.
 """
 
 import json
@@ -60,6 +64,7 @@ REASON_INVALID_MESSAGE = "INVALID_MESSAGE"
 REASON_INTERNAL_ERROR = "INTERNAL_ERROR"
 REASON_QUALITY_FAILED = "QUALITY_FAILED"
 REASON_TIMEOUT = "TIMEOUT"
+REASON_CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
 
 
 class ProtocolError(Exception):
@@ -126,18 +131,35 @@ def parse_message(raw_data: Any) -> Dict[str, Any]:
     if "protocol_version" not in data:
         raise ProtocolError("Missing 'protocol_version' field in message")
 
+    if data["protocol_version"] != PROTOCOL_VERSION:
+        raise ProtocolError(
+            f"Unsupported protocol version '{data['protocol_version']}'; expected '{PROTOCOL_VERSION}'"
+        )
+
+    msg_type = data["type"]
+    if msg_type not in VALID_CLIENT_MESSAGES and msg_type not in VALID_SERVER_MESSAGES:
+        raise ProtocolError(f"Unknown message type '{msg_type}'")
+
     return data
 
 
 # --- Helper Constructors for Client Messages ---
 
-def make_start_enrollment(display_name: str = "Primary User") -> Dict[str, Any]:
-    return {
+def make_start_enrollment(
+    display_name: str = "Primary User",
+    confirmed: bool = False,
+    password: Optional[str] = None
+) -> Dict[str, Any]:
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_START_ENROLLMENT,
         "display_name": str(display_name),
+        "confirmed": bool(confirmed),
         "timestamp": time.time(),
     }
+    if password is not None:
+        msg["password"] = str(password)
+    return msg
 
 
 def make_cancel_enrollment(reason: str = "USER_CANCELLED") -> Dict[str, Any]:
@@ -234,7 +256,7 @@ def make_enrollment_complete(
     }
 
 
-def make_enrollment_failed(reason_code: str, detail: str) -> Dict[str, Any]:
+def make_enrollment_failed(reason_code: str, detail: str = "Enrollment failed") -> Dict[str, Any]:
     return {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_ENROLLMENT_FAILED,
@@ -244,7 +266,7 @@ def make_enrollment_failed(reason_code: str, detail: str) -> Dict[str, Any]:
     }
 
 
-def make_error(reason_code: str, detail: str) -> Dict[str, Any]:
+def make_error(reason_code: str, detail: str = "Internal engine error") -> Dict[str, Any]:
     return {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_ERROR,
@@ -265,13 +287,11 @@ def make_pong() -> Dict[str, Any]:
 def make_status_response(
     has_enrolled_profile: bool,
     display_name: str = "",
-    profile_id: str = "",
 ) -> Dict[str, Any]:
     return {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_STATUS_RESPONSE,
         "has_enrolled_profile": bool(has_enrolled_profile),
         "display_name": str(display_name) if has_enrolled_profile and display_name else "",
-        "profile_id": str(profile_id) if has_enrolled_profile and profile_id else "",
         "timestamp": time.time(),
     }

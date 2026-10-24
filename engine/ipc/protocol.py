@@ -9,13 +9,17 @@ SECURITY & PRIVACY CONSTRAINTS:
    and sanitized status text are transmitted.
 3. Fail open, bounded latency: error and failure responses are machine-readable
    without leaking raw exception tracebacks to client processes.
+4. Nonce binding: START_AUTH carries a per-attempt random 128-bit challenge nonce
+   that must be echoed identically in AUTHENTICATED.
+5. Profile ID protection: profile_id is NEVER emitted across the authentication pipe.
 """
 
 import json
 import time
+import secrets
 from typing import Dict, Any, Optional
 
-PROTOCOL_VERSION = "1.0"
+PROTOCOL_VERSION = "2.0"
 
 # Client -> Server Message Types
 MSG_START_AUTH = "START_AUTH"
@@ -68,8 +72,9 @@ REASON_CAMERA_UNAVAILABLE = "CAMERA_UNAVAILABLE"
 REASON_ENGINE_ERROR = "ENGINE_ERROR"
 REASON_INVALID_MESSAGE = "INVALID_MESSAGE"
 REASON_INTERNAL_ERROR = "INTERNAL_ERROR"
+REASON_CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
 
-# Security guard: prohibited payload keys that could leak raw biometric/template data
+# Security guard: prohibited payload keys that could leak raw biometric/template data or private IDs
 PROHIBITED_PAYLOAD_KEYS = {
     "embedding",
     "embeddings",
@@ -118,6 +123,7 @@ def parse_message(raw_data: Any) -> Dict[str, Any]:
     """
     Parses a JSON line (str or bytes) into a validated message dictionary.
     Handles malformed JSON or corrupted data safely without crashing.
+    Enforces strict protocol schema and version.
     """
     if isinstance(raw_data, bytes):
         try:
@@ -147,15 +153,34 @@ def parse_message(raw_data: Any) -> Dict[str, Any]:
     if "protocol_version" not in data:
         raise ProtocolError("Missing 'protocol_version' field in message")
 
+    if data["protocol_version"] != PROTOCOL_VERSION:
+        raise ProtocolError(
+            f"Unsupported protocol version '{data['protocol_version']}'; expected '{PROTOCOL_VERSION}'"
+        )
+
+    msg_type = data["type"]
+    if msg_type not in VALID_CLIENT_MESSAGES and msg_type not in VALID_SERVER_MESSAGES:
+        raise ProtocolError(f"Unknown message type '{msg_type}'")
+
+    # Prohibited keys check on receive
+    for key in data:
+        if key.lower() in PROHIBITED_PAYLOAD_KEYS:
+            raise ProtocolError(
+                f"Security violation: Prohibited key '{key}' received in IPC message."
+            )
+
     return data
 
 
 # --- Helper Constructors for Client Messages ---
 
-def make_start_auth(timeout_seconds: float = 12.0) -> Dict[str, Any]:
+def make_start_auth(timeout_seconds: float = 12.0, nonce: Optional[str] = None) -> Dict[str, Any]:
+    if nonce is None:
+        nonce = secrets.token_hex(16)
     return {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_START_AUTH,
+        "nonce": str(nonce),
         "timeout_seconds": float(timeout_seconds),
         "timestamp": time.time(),
     }
@@ -254,13 +279,16 @@ def make_liveness_check(
 
 def make_authenticated(
     display_name: str,
-    profile_id: str = "",
+    nonce: Optional[str] = None,
     is_authorized_to_unlock: bool = True,
     detail: str = "Authentication successful"
 ) -> Dict[str, Any]:
     """
-    CRITICAL SECURITY INVARIANT:
-    is_authorized_to_unlock must strictly be True.
+    CRITICAL SECURITY INVARIANTS:
+    1. is_authorized_to_unlock must strictly be True.
+    2. display_name must be non-empty.
+    3. nonce must match the per-attempt 128-bit challenge from START_AUTH.
+    4. profile_id is NEVER emitted across the pipe.
     """
     if not is_authorized_to_unlock:
         raise ValueError("Cannot construct AUTHENTICATED message with is_authorized_to_unlock=False")
@@ -268,18 +296,23 @@ def make_authenticated(
     if not display_name or not isinstance(display_name, str):
         raise ValueError("AUTHENTICATED message requires a valid display_name")
 
+    if nonce is None:
+        nonce = secrets.token_hex(16)
+    elif not nonce or not isinstance(nonce, str):
+        raise ValueError("AUTHENTICATED message requires a valid non-empty nonce")
+
     return {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_AUTHENTICATED,
         "is_authorized_to_unlock": True,
         "display_name": display_name,
-        "profile_id": profile_id,
+        "nonce": str(nonce),
         "detail": detail,
         "timestamp": time.time(),
     }
 
 
-def make_auth_failed(reason_code: str, detail: str) -> Dict[str, Any]:
+def make_auth_failed(reason_code: str, detail: str = "Authentication failed") -> Dict[str, Any]:
     return {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_AUTH_FAILED,
@@ -299,7 +332,7 @@ def make_timeout(detail: str = "Authentication timed out") -> Dict[str, Any]:
     }
 
 
-def make_error(reason_code: str, detail: str) -> Dict[str, Any]:
+def make_error(reason_code: str, detail: str = "Internal engine error") -> Dict[str, Any]:
     return {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_ERROR,

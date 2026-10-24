@@ -18,6 +18,8 @@ namespace PeekSetup.Tests
         public bool ThrowOnStatusRequest { get; set; }
         public bool StatusRequestCalled { get; private set; }
         public string? LastStartedDisplayName { get; private set; }
+        public bool LastStartedConfirmed { get; private set; }
+        public string? LastStartedPassword { get; private set; }
         public bool CancelCalled { get; private set; }
         public bool DisconnectCalled { get; private set; }
 
@@ -53,9 +55,11 @@ namespace PeekSetup.Tests
             return Task.FromResult(MockStatusResponse);
         }
 
-        public Task StartEnrollmentAsync(string displayName, CancellationToken ct = default)
+        public Task StartEnrollmentAsync(string displayName, bool confirmed = false, string? password = null, CancellationToken ct = default)
         {
             LastStartedDisplayName = displayName;
+            LastStartedConfirmed = confirmed;
+            LastStartedPassword = password;
             return Task.CompletedTask;
         }
 

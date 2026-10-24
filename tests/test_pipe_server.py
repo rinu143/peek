@@ -21,6 +21,7 @@ from engine.ipc.pipe_server import PipeServer
 from engine.ipc.pipe_client import PipeClient
 from engine.ipc.protocol import (
     MSG_START_AUTH,
+    make_start_auth,
     MSG_CANCEL_AUTH,
     MSG_PING,
     MSG_PONG,
@@ -147,6 +148,25 @@ class TestPipeServer(unittest.TestCase):
         self.pipe_name = rf"\\.\pipe\PeekTest_{uuid.uuid4().hex[:8]}"
         self.server = None
         self.client = None
+        try:
+            import win32security
+            import win32process
+            import win32con
+            token = win32security.OpenProcessToken(win32process.GetCurrentProcess(), win32con.TOKEN_QUERY)
+            user_sid, _ = win32security.GetTokenInformation(token, win32security.TokenUser)
+            user_sid_str = win32security.ConvertSidToStringSid(user_sid)
+            self.test_sddl = f"D:(A;;GA;;;SY)(A;;GA;;;{user_sid_str})"
+        except Exception:
+            self.test_sddl = "D:(A;;GA;;;WD)"
+
+    def create_server(self, face_engine=None, camera=None, default_auth_timeout=12.0):
+        return PipeServer(
+            pipe_name=self.pipe_name,
+            face_engine=face_engine,
+            camera=camera,
+            default_auth_timeout=default_auth_timeout,
+            sddl=self.test_sddl
+        )
 
     def tearDown(self):
         if self.client:
@@ -157,7 +177,7 @@ class TestPipeServer(unittest.TestCase):
     def test_connect_and_ping(self):
         """Validates that a client can connect, receive ENGINE_READY, and exchange PING/PONG."""
         mock_engine = MockFaceEngine()
-        self.server = PipeServer(pipe_name=self.pipe_name, face_engine=mock_engine, camera=MockCamera())
+        self.server = self.create_server(face_engine=mock_engine, camera=MockCamera())
         self.server.start()
 
         self.client = PipeClient(pipe_name=self.pipe_name)
@@ -173,7 +193,7 @@ class TestPipeServer(unittest.TestCase):
     def test_sequential_connect_disconnect_cycling(self):
         """Validates that multiple sequential clients can connect, operate, and disconnect cleanly."""
         mock_engine = MockFaceEngine()
-        self.server = PipeServer(pipe_name=self.pipe_name, face_engine=mock_engine, camera=MockCamera())
+        self.server = self.create_server(face_engine=mock_engine, camera=MockCamera())
         self.server.start()
 
         for i in range(3):
@@ -194,7 +214,7 @@ class TestPipeServer(unittest.TestCase):
         """
         mock_engine = MockFaceEngine(authorized_at_frame=3, display_name="Dr. Ellen Ripley")
         mock_cam = MockCamera()
-        self.server = PipeServer(pipe_name=self.pipe_name, face_engine=mock_engine, camera=mock_cam)
+        self.server = self.create_server(face_engine=mock_engine, camera=mock_cam)
         self.server.start()
 
         self.client = PipeClient(pipe_name=self.pipe_name)
@@ -223,7 +243,7 @@ class TestPipeServer(unittest.TestCase):
         AUTHENTICATED MUST NEVER BE EMITTED. Session must timeout without unlocking.
         """
         mock_engine = MockFaceEngine(temporal_only=True)
-        self.server = PipeServer(pipe_name=self.pipe_name, face_engine=mock_engine, camera=MockCamera())
+        self.server = self.create_server(face_engine=mock_engine, camera=MockCamera())
         self.server.start()
 
         self.client = PipeClient(pipe_name=self.pipe_name)
@@ -244,7 +264,7 @@ class TestPipeServer(unittest.TestCase):
         """
         # Engine will not authorize for 50 frames
         mock_engine = MockFaceEngine(authorized_at_frame=50)
-        self.server = PipeServer(pipe_name=self.pipe_name, face_engine=mock_engine, camera=MockCamera())
+        self.server = self.create_server(face_engine=mock_engine, camera=MockCamera())
         self.server.start()
 
         self.client = PipeClient(pipe_name=self.pipe_name)
@@ -253,7 +273,7 @@ class TestPipeServer(unittest.TestCase):
         self.client.read_message(timeout_seconds=2.0)  # ENGINE_READY
 
         # Start auth
-        self.client.send_message({"type": MSG_START_AUTH, "protocol_version": "1.0", "timeout_seconds": 10.0})
+        self.client.send_message(make_start_auth(timeout_seconds=10.0))
 
         # Wait for camera starting
         start_msg = self.client.read_message(timeout_seconds=2.0)
@@ -279,7 +299,7 @@ class TestPipeServer(unittest.TestCase):
     def test_spoof_detection_emits_auth_failed(self):
         """Validates that a spoof detection triggers immediate AUTH_FAILED with reason code."""
         mock_engine = MockFaceEngine(simulate_spoof=True)
-        self.server = PipeServer(pipe_name=self.pipe_name, face_engine=mock_engine, camera=MockCamera())
+        self.server = self.create_server(face_engine=mock_engine, camera=MockCamera())
         self.server.start()
 
         self.client = PipeClient(pipe_name=self.pipe_name)
@@ -299,7 +319,7 @@ class TestPipeServer(unittest.TestCase):
         """Validates that if camera acquisition fails, server emits ERROR without hanging."""
         mock_engine = MockFaceEngine()
         broken_cam = MockCamera(should_fail=True)
-        self.server = PipeServer(pipe_name=self.pipe_name, face_engine=mock_engine, camera=broken_cam)
+        self.server = self.create_server(face_engine=mock_engine, camera=broken_cam)
         self.server.start()
 
         self.client = PipeClient(pipe_name=self.pipe_name)
@@ -316,7 +336,7 @@ class TestPipeServer(unittest.TestCase):
     def test_malformed_client_message_does_not_crash_server(self):
         """Validates that client writing garbage JSON receives ERROR but server remains alive."""
         mock_engine = MockFaceEngine()
-        self.server = PipeServer(pipe_name=self.pipe_name, face_engine=mock_engine, camera=MockCamera())
+        self.server = self.create_server(face_engine=mock_engine, camera=MockCamera())
         self.server.start()
 
         self.client = PipeClient(pipe_name=self.pipe_name)

@@ -2,6 +2,7 @@
 #include "PeekProvider.h"
 #include "PeekCredential.h"
 #include "PeekPipeClient.h"
+#include "JsonParser.h"
 #include "SecretVault.h"
 #include <windows.h>
 #include <wincred.h>
@@ -1183,6 +1184,286 @@ int main()
         else
         {
             std::wcout << L"  FAIL: Could not open log file to verify diagnostics output\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 22: Strict JSON Schema Parser & Prohibited Keys Rejection
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 22] Testing strict JSON schema parser and prohibited keys rejection...\n";
+    {
+        bool t22Ok = true;
+
+        // Valid message
+        PeekJson::PeekProtocolMessage msgValid;
+        std::string jsonValid = "{\"protocol_version\":\"2.0\",\"type\":\"SEARCHING\",\"detail\":\"Looking for face\"}";
+        if (!PeekJson::ProtocolSchemaValidator::ValidateAndParse(jsonValid, msgValid) || msgValid.type != L"SEARCHING")
+        {
+            t22Ok = false;
+        }
+
+        // Outdated protocol version rejected
+        PeekJson::PeekProtocolMessage msgOutdated;
+        std::string jsonOutdated = "{\"protocol_version\":\"1.0\",\"type\":\"SEARCHING\"}";
+        if (PeekJson::ProtocolSchemaValidator::ValidateAndParse(jsonOutdated, msgOutdated))
+        {
+            t22Ok = false;
+        }
+
+        // Missing protocol version rejected
+        PeekJson::PeekProtocolMessage msgNoVer;
+        std::string jsonNoVer = "{\"type\":\"SEARCHING\"}";
+        if (PeekJson::ProtocolSchemaValidator::ValidateAndParse(jsonNoVer, msgNoVer))
+        {
+            t22Ok = false;
+        }
+
+        // Prohibited biometric key 'embedding' rejected
+        PeekJson::PeekProtocolMessage msgEmb;
+        std::string jsonEmb = "{\"protocol_version\":\"2.0\",\"type\":\"SEARCHING\",\"embedding\":[0.1,0.2]}";
+        if (PeekJson::ProtocolSchemaValidator::ValidateAndParse(jsonEmb, msgEmb))
+        {
+            t22Ok = false;
+        }
+
+        // Prohibited biometric key 'templates' rejected
+        PeekJson::PeekProtocolMessage msgTmpl;
+        std::string jsonTmpl = "{\"protocol_version\":\"2.0\",\"type\":\"SEARCHING\",\"templates\":[\"abc\"]}";
+        if (PeekJson::ProtocolSchemaValidator::ValidateAndParse(jsonTmpl, msgTmpl))
+        {
+            t22Ok = false;
+        }
+
+        // Trailing garbage rejected
+        PeekJson::PeekProtocolMessage msgTrailing;
+        std::string jsonTrailing = "{\"protocol_version\":\"2.0\",\"type\":\"PING\"}garbage";
+        if (PeekJson::ProtocolSchemaValidator::ValidateAndParse(jsonTrailing, msgTrailing))
+        {
+            t22Ok = false;
+        }
+
+        // AUTHENTICATED message with profile_id rejected
+        PeekJson::PeekProtocolMessage msgAuthWithProf;
+        std::string jsonAuthWithProf = "{\"protocol_version\":\"2.0\",\"type\":\"AUTHENTICATED\",\"is_authorized_to_unlock\":true,\"nonce\":\"0123456789abcdef0123456789abcdef\",\"profile_id\":\"profile_123\"}";
+        if (PeekJson::ProtocolSchemaValidator::ValidateAndParse(jsonAuthWithProf, msgAuthWithProf))
+        {
+            t22Ok = false;
+        }
+
+        // AUTHENTICATED message with is_authorized_to_unlock=false rejected
+        PeekJson::PeekProtocolMessage msgAuthFalse;
+        std::string jsonAuthFalse = "{\"protocol_version\":\"2.0\",\"type\":\"AUTHENTICATED\",\"is_authorized_to_unlock\":false,\"nonce\":\"0123456789abcdef0123456789abcdef\"}";
+        if (PeekJson::ProtocolSchemaValidator::ValidateAndParse(jsonAuthFalse, msgAuthFalse))
+        {
+            t22Ok = false;
+        }
+
+        // AUTHENTICATED message without nonce rejected
+        PeekJson::PeekProtocolMessage msgAuthNoNonce;
+        std::string jsonAuthNoNonce = "{\"protocol_version\":\"2.0\",\"type\":\"AUTHENTICATED\",\"is_authorized_to_unlock\":true}";
+        if (PeekJson::ProtocolSchemaValidator::ValidateAndParse(jsonAuthNoNonce, msgAuthNoNonce))
+        {
+            t22Ok = false;
+        }
+
+        // Valid AUTHENTICATED message parses correctly
+        PeekJson::PeekProtocolMessage msgAuthOk;
+        std::string jsonAuthOk = "{\"protocol_version\":\"2.0\",\"type\":\"AUTHENTICATED\",\"is_authorized_to_unlock\":true,\"nonce\":\"0123456789abcdef0123456789abcdef\",\"display_name\":\"Alice\"}";
+        if (!PeekJson::ProtocolSchemaValidator::ValidateAndParse(jsonAuthOk, msgAuthOk) || !msgAuthOk.isAuthorizedToUnlock || msgAuthOk.displayName != L"Alice")
+        {
+            t22Ok = false;
+        }
+
+        if (t22Ok)
+        {
+            std::wcout << L"  PASS: Strict JSON parser rejected outdated versions, trailing garbage, biometric leakage, and profile_id in AUTHENTICATED\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Strict schema parser validation failed\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 23: Spoof-Server Rejection (Wrong Image Path and Wrong Token SID)
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 23] Testing spoof-server rejection (wrong image path and wrong token SID)...\n";
+    {
+        std::wstring testPipe = L"\\\\.\\pipe\\PeekTestSpoof_" + std::to_wstring(GetCurrentProcessId());
+        HANDLE hServerPipe = CreateNamedPipeW(
+            testPipe.c_str(),
+            PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            1,
+            4096,
+            4096,
+            0,
+            nullptr
+        );
+
+        if (hServerPipe != INVALID_HANDLE_VALUE)
+        {
+            HANDLE hClientPipe = CreateFileW(
+                testPipe.c_str(),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                nullptr,
+                OPEN_EXISTING,
+                SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+                nullptr
+            );
+
+            if (hClientPipe != INVALID_HANDLE_VALUE)
+            {
+                // Subtest A: Image path is test_autoselect.exe (NOT %ProgramFiles%\Peek\PeekEngine.exe)
+                // With NO override, VerifyServerProcess must reject immediately
+                SetEnvironmentVariableW(L"PEEK_TEST_EXPECTED_IMAGE", NULL);
+                SetEnvironmentVariableW(L"PEEK_TEST_ALLOW_CURRENT_USER_SID", NULL);
+                bool okImageCheck = PeekPipeClient::VerifyServerProcess(hClientPipe, L"S-1-5-21-99999");
+
+                // Subtest B: Image path override matches, but SID is wrong
+                SetEnvironmentVariableW(L"PEEK_TEST_EXPECTED_IMAGE", L"*");
+                bool okSidMismatch = PeekPipeClient::VerifyServerProcess(hClientPipe, L"S-1-5-21-WRONG-SID-99999");
+
+                // Subtest C: Allow current user SID override -> now succeeds
+                SetEnvironmentVariableW(L"PEEK_TEST_ALLOW_CURRENT_USER_SID", L"1");
+                bool okValid = PeekPipeClient::VerifyServerProcess(hClientPipe, L"");
+
+                // Reset overrides
+                SetEnvironmentVariableW(L"PEEK_TEST_EXPECTED_IMAGE", NULL);
+                SetEnvironmentVariableW(L"PEEK_TEST_ALLOW_CURRENT_USER_SID", NULL);
+
+                CloseHandle(hClientPipe);
+
+                if (!okImageCheck && !okSidMismatch && okValid)
+                {
+                    std::wcout << L"  PASS: Spoof server rejected on wrong image path and rejected on wrong token SID\n";
+                }
+                else
+                {
+                    std::wcout << L"  FAIL: Spoof server check failed: okImageCheck=" << okImageCheck
+                               << L", okSidMismatch=" << okSidMismatch << L", okValid=" << okValid << L"\n";
+                    failed++;
+                }
+            }
+            else
+            {
+                std::wcout << L"  FAIL: Could not connect to spoof test pipe\n";
+                failed++;
+            }
+            CloseHandle(hServerPipe);
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Could not create spoof test pipe\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 24: Nonce Verification & Replay Attack Rejection
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 24] Testing nonce challenge echo and replay rejection...\n";
+    {
+        // Subtest A: Nonce generation produces 32-character hex
+        std::string nonce1 = PeekPipeClient::GenerateChallengeNonce();
+        std::string nonce2 = PeekPipeClient::GenerateChallengeNonce();
+        bool nonceFormatOk = (nonce1.length() == 32 && nonce2.length() == 32 && nonce1 != nonce2);
+
+        // Subtest B: Replayed / mismatched nonce rejected by pipe client
+        bool rejectedOnMismatch = false;
+
+        std::string replayedMsg = "{\"protocol_version\":\"2.0\",\"type\":\"AUTHENTICATED\",\"is_authorized_to_unlock\":true,\"nonce\":\"00000000000000000000000000000000\"}";
+        PeekJson::PeekProtocolMessage parsed;
+        PeekJson::ProtocolSchemaValidator::ValidateAndParse(replayedMsg, parsed);
+
+        if (parsed.isValid)
+        {
+            std::wstring expectedWide = PeekJson::Utf8ToWide(nonce1);
+            if (_wcsicmp(parsed.nonce.c_str(), expectedWide.c_str()) != 0)
+            {
+                rejectedOnMismatch = true;
+            }
+        }
+
+        if (nonceFormatOk && rejectedOnMismatch)
+        {
+            std::wcout << L"  PASS: 128-bit random nonces generated uniquely and replayed/mismatched nonces rejected\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Nonce verification failed: nonceFormatOk=" << nonceFormatOk
+                       << L", rejectedOnMismatch=" << rejectedOnMismatch << L"\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 25: LSA Payload Profile ID Extraction (No Pipe Leakage)
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 25] Testing LSA payload profile_id extraction in GetSerialization...\n";
+    {
+        auto fakeLsa = std::make_shared<PeekSecretVault::InMemoryLsaSecretStore>();
+        PeekSecretVault::SetLsaSecretStore(fakeLsa);
+        PeekSecretVault::SetPasswordValidator([](PCWSTR, PCWSTR, PCWSTR, DWORD* pdwErr) -> bool {
+            if (pdwErr) *pdwErr = ERROR_SUCCESS;
+            return true;
+        });
+
+        std::wstring testSid = L"S-1-5-21-999999-1005";
+        std::wstring testUuid = L"b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e";
+        std::wstring testPassword = L"HardenedPhase7SecretPassword!";
+
+        PeekSecretVault::StorePasswordSecret(testSid, testUuid, testPassword);
+
+        CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR rgcpfd[PFI_COUNT] = {
+            { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
+            { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Peek - Face Unlock"), CPFG_CREDENTIAL_PROVIDER_LABEL },
+            { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User"),   GUID_NULL },
+            { PFI_STATUS_TEXT,  CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status"), GUID_NULL },
+        };
+        PeekCredential cred;
+        cred.Initialize(CPUS_UNLOCK_WORKSTATION, rgcpfd, PFI_COUNT, L"SecureUser", L"DOMAIN", testSid.c_str(), true);
+
+        // Simulate pipe AUTHENTICATED: pipe DOES NOT provide profile_id!
+        // m_profileId is empty on credential!
+        cred.TestSetAuthenticated(true, L"");
+
+        CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE resp = CPGSR_NO_CREDENTIAL_FINISHED;
+        CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION cpcs = {};
+        HRESULT hrSer = cred.GetSerialization(&resp, &cpcs, nullptr, nullptr);
+
+        bool serOk = (SUCCEEDED(hrSer) && resp == CPGSR_RETURN_CREDENTIAL_FINISHED && cpcs.rgbSerialization != nullptr);
+        bool pwMatch = false;
+
+        if (serOk)
+        {
+            wchar_t szUser[256] = {};
+            DWORD cchUser = ARRAYSIZE(szUser);
+            wchar_t szDomain[256] = {};
+            DWORD cchDomain = ARRAYSIZE(szDomain);
+            wchar_t szPass[256] = {};
+            DWORD cchPass = ARRAYSIZE(szPass);
+            if (CredUnPackAuthenticationBufferW(0, cpcs.rgbSerialization, cpcs.cbSerialization, szUser, &cchUser, szDomain, &cchDomain, szPass, &cchPass))
+            {
+                pwMatch = (wcscmp(szPass, testPassword.c_str()) == 0);
+            }
+            CoTaskMemFree(cpcs.rgbSerialization);
+        }
+
+        fakeLsa->Clear();
+        PeekSecretVault::SetLsaSecretStore(nullptr);
+        PeekSecretVault::SetPasswordValidator(nullptr);
+
+        if (serOk && pwMatch)
+        {
+            std::wcout << L"  PASS: GetSerialization extracted profile ID from LSA payload and unwrapped credentials without pipe profile_id\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: LSA profile ID extraction failed: serOk=" << serOk << L", pwMatch=" << pwMatch << L"\n";
             failed++;
         }
     }

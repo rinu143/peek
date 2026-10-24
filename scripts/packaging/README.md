@@ -124,7 +124,7 @@ If you encounter any bugs, crashes, or unexpected behavior during testing:
    - Engine service logs (if run manually in a console: `PeekEngine.exe --debug`).
    - Enrolled profiles: `%LOCALAPPDATA%\Peek\Profiles`.
 3. **Submit Reports**:
-   - Open an issue on GitHub: https://github.com/rinu/peek/issues (or your designated feedback channel).
+   - Open an issue on GitHub: https://github.com/rinu143/peek/issues (or your designated feedback channel).
    - Please do NOT include photos or secret files in public bug reports.
 
 ---

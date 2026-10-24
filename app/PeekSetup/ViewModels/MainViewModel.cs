@@ -454,9 +454,10 @@ namespace PeekSetup.ViewModels
 
             try
             {
+                bool isReEnrollment = CurrentStep == SetupStep.AlreadyEnrolled || !string.IsNullOrEmpty(ExistingProfileName);
                 await _pipeClient.ConnectAsync();
                 EnrollmentMode = EnrollmentViewMode.Enrolling;
-                await _pipeClient.StartEnrollmentAsync(DisplayName);
+                await _pipeClient.StartEnrollmentAsync(DisplayName, confirmed: isReEnrollment);
             }
             catch (EngineUnavailableException ex)
             {

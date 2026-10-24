@@ -266,7 +266,7 @@ HRESULT PeekCredential::SetSelected(BOOL* pbAutoLogon)
     Logger::LogInfo("PeekCredential::SetSelected: starting background authentication via StartAuthAsync");
     m_pipeClient.StartAuthAsync([this](const PeekAuthResult& result) {
         this->OnEngineStateUpdate(result);
-    }, 12.0f);
+    }, m_sid, 12.0f);
 
     Logger::LogInfo("PeekCredential::SetSelected -> S_OK");
     return S_OK;
@@ -488,8 +488,8 @@ HRESULT PeekCredential::GetSerialization(
 
     // NON-NEGOTIABLE SECURITY INVARIANT:
     // Only return credentials if authentication strictly succeeded via the engine
-    // AND it is a locked session scenario with valid SID and profile ID.
-    if (!isAuth || !isLocked || sid.empty() || profileId.empty())
+    // AND it is a locked session scenario with valid SID.
+    if (!isAuth || !isLocked || sid.empty())
     {
         *pcpgsr = CPGSR_NO_CREDENTIAL_FINISHED;
         return S_OK;
@@ -498,7 +498,18 @@ HRESULT PeekCredential::GetSerialization(
     Logger::LogInfo(L"GetSerialization for locked session scenario - attempting to retrieve password from LSA secret store");
 
     std::wstring password;
-    if (PeekSecretVault::ReadPasswordSecret(sid, profileId, password))
+    bool readSuccess = false;
+    if (profileId.empty())
+    {
+        // Phase 7 hardening: expected profile_id is taken from the LSA payload directly, not from the pipe
+        readSuccess = PeekSecretVault::ReadPasswordSecret(sid, password, &profileId);
+    }
+    else
+    {
+        readSuccess = PeekSecretVault::ReadPasswordSecret(sid, profileId, password);
+    }
+
+    if (readSuccess && !password.empty() && !profileId.empty())
     {
         Logger::LogInfo(L"Successfully retrieved and validated secret from LSA store for bound profile");
 
@@ -708,10 +719,7 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
             {
                 m_displayName = result.displayName;
             }
-            if (!result.profileId.empty())
-            {
-                m_profileId = result.profileId;
-            }
+            // In Phase 7, profile_id is excluded from pipe; m_profileId is read from LSA directly
             std::wstring enrolledName = m_displayName;
             std::wstring rawUser = m_username;
             LeaveCriticalSection(&m_cs);

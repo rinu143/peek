@@ -5,7 +5,7 @@ Validates:
 2. Presence of version field ("protocol_version") on every message.
 3. Zero-biometric leakage enforcement (prohibited keys raise ProtocolError).
 4. Malformed message handling (garbage JSON, non-JSON bytes, empty payloads).
-5. Invariant enforcement on make_authenticated (cannot set is_authorized_to_unlock=False).
+5. Invariant enforcement on make_authenticated (cannot set is_authorized_to_unlock=False, must have nonce, no profile_id).
 """
 
 import unittest
@@ -114,6 +114,7 @@ class TestIPCProtocol(unittest.TestCase):
         """
         NON-NEGOTIABLE SECURITY INVARIANT:
         make_authenticated must fail if is_authorized_to_unlock is False or display_name is empty.
+        Must generate or include 128-bit nonce, and must never contain profile_id.
         """
         # Cannot authorize with False
         with self.assertRaises(ValueError):
@@ -127,10 +128,12 @@ class TestIPCProtocol(unittest.TestCase):
             make_authenticated(display_name=None, is_authorized_to_unlock=True)
 
         # Valid authorization succeeds
-        msg = make_authenticated(display_name="Verified User", is_authorized_to_unlock=True)
+        msg = make_authenticated(display_name="Verified User", nonce="1234567890abcdef1234567890abcdef", is_authorized_to_unlock=True)
         self.assertEqual(msg["type"], MSG_AUTHENTICATED)
         self.assertTrue(msg["is_authorized_to_unlock"])
         self.assertEqual(msg["display_name"], "Verified User")
+        self.assertEqual(msg["nonce"], "1234567890abcdef1234567890abcdef")
+        self.assertNotIn("profile_id", msg)
 
     def test_malformed_message_handling(self):
         """Validates that malformed JSON or invalid bytes do not crash the parser."""
@@ -140,8 +143,9 @@ class TestIPCProtocol(unittest.TestCase):
             b"not a json line\n",
             b"{\nincomplete json",
             b'{"type": "TEST"}',                  # missing protocol_version
-            b'{"protocol_version": "1.0"}',        # missing type
-            b'{"type": 123, "protocol_version": "1.0"}',  # invalid type type
+            b'{"protocol_version": "2.0"}',        # missing type
+            b'{"type": 123, "protocol_version": "2.0"}',  # invalid type type
+            b'{"type": "START_AUTH", "protocol_version": "1.0"}', # outdated protocol version
             b"[]\n",                               # not an object
             b"12345\n",
             b"\xff\xfe\xfd",                       # invalid utf-8

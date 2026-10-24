@@ -6,9 +6,11 @@ SECURITY CONSTRAINTS:
 1. No raw camera frames or pixel data are ever stored.
 2. Embeddings and profile metadata are encrypted at rest using Windows DPAPI (CryptProtectData).
 3. Versioned schema with migration hooks.
+4. Profile IDs are generated as UUID4. Legacy profile_<timestamp> profiles are migrated to UUID4.
 """
 
 import os
+import re
 import json
 import time
 import uuid
@@ -17,7 +19,7 @@ import logging
 import platform
 from ctypes import wintypes
 from dataclasses import dataclass, field, asdict
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 logger = logging.getLogger("Peek.Storage")
 
@@ -34,12 +36,7 @@ _kernel32 = None
 
 
 def _get_dpapi_libs():
-    """Lazily resolve crypt32/kernel32. Deferring this to call time (instead
-    of binding ctypes.windll at module import) means `import storage` and
-    `import engine` stay safe on non-Windows dev/CI machines; the hard
-    failure only happens if code actually tries to encrypt/decrypt off
-    Windows, which is correct — DPAPI has no non-Windows equivalent, so
-    that should fail loudly rather than silently no-op."""
+    """Lazily resolve crypt32/kernel32."""
     global _crypt32, _kernel32
     if not _IS_WINDOWS:
         raise RuntimeError(
@@ -53,22 +50,11 @@ def _get_dpapi_libs():
 
 
 def get_machine_entropy() -> bytes:
-    """Return the machine-bound entropy value used for DPAPI secret wrapping.
-    
-    SECURITY RESIDUAL-RISK NOTE:
-    Adding machine-bound entropy is defense-in-depth against casual or scripted
-    decryption and prevents offline decryption if the .secret file is copied to
-    another system. It is NOT a fix for the fundamental risk that any process
-    running under the enrolled user's logon session can locate this entropy value,
-    invoke CryptUnprotectData, and recover the plaintext Windows account password.
-    This does NOT make stored passwords inherently safe.
-    """
-    # 1. Environment variable override (useful for isolated unit testing)
+    """Return the machine-bound entropy value used for DPAPI secret wrapping."""
     env_entropy = os.environ.get("PEEK_MACHINE_ENTROPY")
     if env_entropy:
         return env_entropy.strip().encode("utf-8")
 
-    # 2. Check %ProgramData%\Peek\machine_entropy.bin
     program_data = os.environ.get("ProgramData", r"C:\ProgramData")
     entropy_dir = os.path.join(program_data, "Peek")
     entropy_file = os.path.join(entropy_dir, "machine_entropy.bin")
@@ -81,7 +67,6 @@ def get_machine_entropy() -> bytes:
     except Exception as ex:
         logger.warning("Could not read machine entropy file: %s", ex)
 
-    # 3. First-run creation: write a per-install machine GUID
     try:
         os.makedirs(entropy_dir, exist_ok=True)
         new_guid = str(uuid.uuid4()).encode("utf-8")
@@ -91,7 +76,6 @@ def get_machine_entropy() -> bytes:
     except Exception as ex:
         logger.warning("Could not persist machine entropy file: %s", ex)
 
-    # 4. Fallback to Windows MachineGuid in registry
     if _IS_WINDOWS:
         try:
             import winreg
@@ -102,7 +86,6 @@ def get_machine_entropy() -> bytes:
         except Exception as ex:
             logger.warning("Could not read Windows MachineGuid: %s", ex)
 
-    # 5. Last-resort fallback to stable machine node
     return str(uuid.getnode()).encode("utf-8")
 
 
@@ -158,9 +141,10 @@ class PeekProfile:
     matching_threshold: float = 0.50
     templates: List[PeekTemplate] = field(default_factory=list)
     schema_version: int = 1
+    user_sid: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "schema_version": self.schema_version,
             "profile_id": self.profile_id,
             "display_name": self.display_name,
@@ -169,6 +153,9 @@ class PeekProfile:
             "matching_threshold": self.matching_threshold,
             "templates": [asdict(t) for t in self.templates]
         }
+        if self.user_sid:
+            d["user_sid"] = self.user_sid
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PeekProfile":
@@ -180,7 +167,8 @@ class PeekProfile:
             created_at=data.get("created_at", time.time()),
             enabled=data.get("enabled", True),
             matching_threshold=data.get("matching_threshold", 0.50),
-            templates=templates
+            templates=templates,
+            user_sid=data.get("user_sid")
         )
 
 
@@ -188,13 +176,18 @@ class SecureProfileStore:
     """
     Manages loading, saving, and querying encrypted biometric profiles.
     All data persisted to disk is encrypted via Windows DPAPI.
+    Supports migration of legacy timestamp profiles to UUID4.
     """
 
     def __init__(self, storage_dir: Optional[str] = None):
         if storage_dir is None:
-            # Default to %LOCALAPPDATA%\Peek\Profiles
-            base = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
-            self.storage_dir = os.path.join(base, "Peek", "Profiles")
+            env_dir = os.environ.get("PEEK_PROFILES_DIR")
+            if env_dir:
+                self.storage_dir = env_dir
+            else:
+                # Default to %LOCALAPPDATA%\Peek\Profiles
+                base = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
+                self.storage_dir = os.path.join(base, "Peek", "Profiles")
         else:
             self.storage_dir = storage_dir
 
@@ -236,12 +229,41 @@ class SecureProfileStore:
             logger.error(f"Failed to load/decrypt profile {profile_id}: {ex}")
             return None
 
-    def list_profiles(self) -> List[PeekProfile]:
-        """Lists all decrypted profiles currently on disk."""
-        profiles = []
+    def migrate_legacy_profiles(self) -> List[Tuple[str, str]]:
+        """
+        Migrates existing profiles with legacy profile_<timestamp> IDs
+        to RFC 4122 UUID4 IDs.
+        Returns a list of (old_id, new_id) pairs migrated.
+        """
+        migrated = []
         if not os.path.exists(self.storage_dir):
-            return profiles
+            return migrated
 
+        for fname in os.listdir(self.storage_dir):
+            if fname.endswith(".peek"):
+                pid = fname[:-5]
+                # Match legacy profile_<digits> format
+                if re.match(r"^profile_\d+$", pid):
+                    profile = self.load_profile(pid)
+                    if profile is not None:
+                        new_id = str(uuid.uuid4())
+                        old_id = profile.profile_id
+                        profile.profile_id = new_id
+                        self.save_profile(profile)
+                        self.delete_profile(old_id)
+                        migrated.append((old_id, new_id))
+                        logger.info(f"Migrated legacy profile ID '{old_id}' -> '{new_id}'")
+        return migrated
+
+    def list_profiles(self) -> List[PeekProfile]:
+        """Lists all decrypted profiles currently on disk, running legacy migration if needed."""
+        if not os.path.exists(self.storage_dir):
+            return []
+
+        # Run legacy migration if any profile_<timestamp> files exist
+        self.migrate_legacy_profiles()
+
+        profiles = []
         for fname in os.listdir(self.storage_dir):
             if fname.endswith(".peek"):
                 pid = fname[:-5]

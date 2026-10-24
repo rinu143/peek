@@ -7,6 +7,7 @@ Validates:
 4. Malformed message handling (garbage JSON, non-JSON bytes, empty payloads).
 5. Invariant enforcement on make_enrollment_complete (requires valid profile_id and display_name).
 6. Failure and error messages reason codes and detail formatting.
+7. Profile ID exclusion from STATUS_RESPONSE.
 """
 
 import unittest
@@ -75,7 +76,7 @@ class TestEnrollmentProtocol(unittest.TestCase):
             make_error(reason_code=REASON_CAMERA_ERROR, detail="Device busy"),
             make_pong(),
             make_status_request(),
-            make_status_response(has_enrolled_profile=True, display_name="Test User", profile_id="prof_123"),
+            make_status_response(has_enrolled_profile=True, display_name="Test User"),
             make_status_response(has_enrolled_profile=False),
         ]
 
@@ -86,34 +87,35 @@ class TestEnrollmentProtocol(unittest.TestCase):
             self.assertIsInstance(msg["type"], str)
 
     def test_status_request_and_response_schema(self):
-        """Validates that status request and response messages serialize and deserialize correctly."""
+        """Validates that status request and response messages serialize and deserialize correctly without profile_id."""
         req = make_status_request()
         self.assertEqual(req["type"], MSG_STATUS_REQUEST)
         req_parsed = parse_message(serialize_message(req))
         self.assertEqual(req_parsed["type"], MSG_STATUS_REQUEST)
 
-        # Has enrolled profile
+        # Has enrolled profile: profile_id must NOT be in STATUS_RESPONSE
         resp_true = make_status_response(
             has_enrolled_profile=True,
-            display_name="Alice Smith",
-            profile_id="profile_9999"
+            display_name="Alice Smith"
         )
         self.assertEqual(resp_true["type"], MSG_STATUS_RESPONSE)
         self.assertTrue(resp_true["has_enrolled_profile"])
         self.assertEqual(resp_true["display_name"], "Alice Smith")
-        self.assertEqual(resp_true["profile_id"], "profile_9999")
+        self.assertNotIn("profile_id", resp_true)
+
         parsed_true = parse_message(serialize_message(resp_true))
         self.assertTrue(parsed_true["has_enrolled_profile"])
         self.assertEqual(parsed_true["display_name"], "Alice Smith")
-        self.assertEqual(parsed_true["profile_id"], "profile_9999")
+        self.assertNotIn("profile_id", parsed_true)
 
         # No enrolled profile
         resp_false = make_status_response(has_enrolled_profile=False)
         self.assertFalse(resp_false["has_enrolled_profile"])
         self.assertEqual(resp_false["display_name"], "")
-        self.assertEqual(resp_false["profile_id"], "")
+        self.assertNotIn("profile_id", resp_false)
         parsed_false = parse_message(serialize_message(resp_false))
         self.assertFalse(parsed_false["has_enrolled_profile"])
+        self.assertNotIn("profile_id", parsed_false)
 
     def test_serialization_round_trip(self):
         """Validates that messages serialize to UTF-8 JSON lines and parse back identically."""

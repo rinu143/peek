@@ -166,12 +166,14 @@ class PipeClient:
         """Sends CANCEL_AUTH message to abort current authentication session."""
         return self.send_message(make_cancel_auth(reason=reason))
 
-    def stream_auth(self, timeout_seconds: float = 12.0) -> Generator[Dict[str, Any], None, None]:
+    def stream_auth(self, timeout_seconds: float = 12.0, nonce: Optional[str] = None) -> Generator[Dict[str, Any], None, None]:
         """
-        Sends START_AUTH and yields streamed state updates until a terminal message
+        Sends START_AUTH with random nonce and yields streamed state updates until a terminal message
         (AUTHENTICATED, AUTH_FAILED, TIMEOUT, ERROR) is received or connection drops.
         """
-        if not self.send_message(make_start_auth(timeout_seconds=timeout_seconds)):
+        start_msg = make_start_auth(timeout_seconds=timeout_seconds, nonce=nonce)
+        sent_nonce = start_msg.get("nonce")
+        if not self.send_message(start_msg):
             yield {"type": MSG_ERROR, "reason_code": "PIPE_ERROR", "detail": "Failed to send START_AUTH"}
             return
 
@@ -189,6 +191,15 @@ class PipeClient:
                     }
                     break
                 continue
+
+            if msg.get("type") == MSG_AUTHENTICATED:
+                if msg.get("nonce") != sent_nonce:
+                    yield {
+                        "type": MSG_ERROR,
+                        "reason_code": "NONCE_MISMATCH",
+                        "detail": "Nonce mismatch or missing in AUTHENTICATED message"
+                    }
+                    break
 
             yield msg
 

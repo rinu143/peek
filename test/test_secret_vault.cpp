@@ -333,6 +333,33 @@ int main()
         }
     }
 
+    // -------------------------------------------------------------
+    // Test 8: Direct Profile ID Extraction and Unbound Read
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 8] Testing Direct Profile ID Extraction and Unbound Read...\n";
+    {
+        const std::wstring testUuid = L"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d";
+        const std::wstring testPw = L"SecretPassword123!";
+        PeekSecretVault::StorePasswordSecret(validSid, testUuid, testPw);
+
+        std::wstring extractedProfileId;
+        bool okGet = PeekSecretVault::GetStoredProfileId(validSid, extractedProfileId);
+
+        std::wstring unboundPw;
+        std::wstring unboundProfileId;
+        bool okRead = PeekSecretVault::ReadPasswordSecret(validSid, unboundPw, &unboundProfileId);
+
+        if (okGet && extractedProfileId == testUuid && okRead && unboundPw == testPw && unboundProfileId == testUuid)
+        {
+            std::wcout << L"  PASS: Stored profile ID directly extracted and unbound read succeeded\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Direct profile ID extraction failed (okGet=" << okGet << L", okRead=" << okRead << L")\n";
+            failedTests++;
+        }
+    }
+
     // Cleanup
     fakeStore->Clear();
     PeekSecretVault::SetLsaSecretStore(nullptr);

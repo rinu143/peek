@@ -5,28 +5,32 @@ Layer F: Secure Named Pipe Server on \\\\.\\pipe\\PeekEngine for Windows Credent
 SECURITY DESCRIPTOR & SDDL RATIONALE:
 ------------------------------------
 Named pipe: \\\\.\\pipe\\PeekEngine
-SDDL String: D:(A;;GRGW;;;AU)(A;;GA;;;BA)(A;;GA;;;SY)
+SDDL String: D:(A;;GA;;;SY)
 
 Rationale:
 1. D: Discretionary Access Control List (DACL).
-2. (A;;GRGW;;;AU): Allow Authenticated Users (AU) Generic Read and Generic Write (GRGW).
-   This allows interactive desktop users and logon processes running in local user sessions
-   to connect and exchange authentication requests/responses.
-3. (A;;GA;;;BA): Allow Built-in Administrators (BA) Generic All (GA) for full management control.
-4. (A;;GA;;;SY): Allow Local System (SY) Generic All (GA). This is essential because the
-   Windows LogonUI and Credential Provider host processes execute under the SYSTEM security context.
-5. PIPE_REJECT_REMOTE_CLIENTS (0x00000008): Rejects all remote SMB network connections.
-   The pipe is accessible ONLY to processes running on the local machine.
+2. (A;;GA;;;SY): Allow Local System (SY) Generic All (GA) only.
+   Windows LogonUI and Credential Provider host processes execute exclusively under
+   the SYSTEM security context. Authenticated Users (AU) are strictly excluded from
+   connecting to the authentication pipe.
+3. PIPE_REJECT_REMOTE_CLIENTS (0x00000008): Rejects all remote SMB network connections.
+   The pipe is accessible ONLY to local processes.
+4. FILE_FLAG_FIRST_PIPE_INSTANCE (0x00080000): The initial instance must be created with
+   this flag to prevent squatting/impersonation. Startup fails closed if already taken.
+5. Continuous instance listening: a subsequent pipe instance is created before disconnecting
+   the active instance, guaranteeing that the pipe namespace entry is never dropped.
 
 ZERO BIOMETRIC LEAKAGE GUARANTEE:
 ---------------------------------
 No facial images, embeddings, landmarks, or template vectors ever cross this pipe.
-Only versioned state labels, booleans, display names, and sanitized status text are emitted.
+Only versioned state labels, booleans, display names, and generic status text are emitted.
+No profile IDs cross the authentication pipe.
 
 DUAL-GATE AUTHORIZATION INVARIANT:
 ----------------------------------
 The server will NEVER emit an AUTHENTICATED message unless EngineFrameResult.is_authorized_to_unlock
 is strictly True. Biometric match alone or temporal match alone will never trigger unlock.
+Every AUTHENTICATED message echoes the 128-bit challenge nonce sent in START_AUTH.
 """
 
 import os
@@ -90,11 +94,17 @@ from engine.pipeline.face_engine import FaceEngine, EngineFrameResult
 logger = logging.getLogger("Peek.PipeServer")
 
 DEFAULT_PIPE_NAME = r"\\.\pipe\PeekEngine"
-DEFAULT_SDDL = "D:(A;;GRGW;;;AU)(A;;GA;;;BA)(A;;GA;;;SY)"
+DEFAULT_SDDL = "D:(A;;GA;;;SY)"
 PIPE_REJECT_REMOTE_CLIENTS = 0x00000008
+FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000
 ERROR_BROKEN_PIPE = 109
 ERROR_NO_DATA = 232
 ERROR_PIPE_CONNECTED = 535
+ERROR_ACCESS_DENIED = 5
+ERROR_PIPE_BUSY = 231
+
+MAX_LINE_LENGTH = 4096      # 4 KB per line
+MAX_BUFFER_SIZE = 8192      # 8 KB max buffer before dropping client
 
 
 class PipeClientSession:
@@ -125,13 +135,18 @@ class PipeClientSession:
     def read_pending_lines(self) -> Tuple[bool, list]:
         """
         Reads any available bytes from the pipe and returns (is_alive, [lines]).
-        Non-blocking if peek indicates data is ready.
+        Enforces IO limits: max line length 4KB, max buffer 8KB.
+        Drops client if limits are exceeded.
         """
         avail = self.peek_available_bytes()
         if avail < 0:
             return False, []
         if avail == 0:
             return True, []
+
+        if len(self._read_buffer) + avail > MAX_BUFFER_SIZE:
+            logger.warning(f"Client buffer exceeded {MAX_BUFFER_SIZE} bytes; dropping client connection.")
+            return False, []
 
         try:
             _, chunk = win32file.ReadFile(self.handle, avail)
@@ -145,9 +160,16 @@ class PipeClientSession:
         lines = []
         while b"\n" in self._read_buffer:
             line_bytes, self._read_buffer = self._read_buffer.split(b"\n", 1)
+            if len(line_bytes) > MAX_LINE_LENGTH:
+                logger.warning(f"Client line exceeded {MAX_LINE_LENGTH} bytes; dropping client connection.")
+                return False, []
             line = line_bytes.decode("utf-8", errors="replace").strip()
             if line:
                 lines.append(line)
+
+        if len(self._read_buffer) > MAX_LINE_LENGTH:
+            logger.warning(f"Unfinished client line exceeded {MAX_LINE_LENGTH} bytes; dropping client connection.")
+            return False, []
 
         return True, lines
 
@@ -179,14 +201,14 @@ class PipeServer:
         face_engine: Optional[FaceEngine] = None,
         camera: Optional[Any] = None,
         default_auth_timeout: float = 12.0,
-        sddl: str = DEFAULT_SDDL,
+        sddl: Optional[str] = None,
         coordinator: Optional[Any] = None,
     ):
         self.pipe_name = pipe_name
         self.face_engine = face_engine
         self._injected_camera = camera
         self.default_auth_timeout = default_auth_timeout
-        self.sddl = sddl
+        self.sddl = sddl if sddl is not None else DEFAULT_SDDL
         self.coordinator = coordinator
 
         self._stop_event = threading.Event()
@@ -195,6 +217,7 @@ class PipeServer:
         self._current_session: Optional[PipeClientSession] = None
         self._active_camera: Optional[Any] = None
         self._camera_lock = threading.Lock()
+        self._initial_pipe = None
 
     def _create_security_attributes(self) -> win32security.SECURITY_ATTRIBUTES:
         """Builds SECURITY_ATTRIBUTES from configured SDDL string."""
@@ -206,6 +229,24 @@ class PipeServer:
         sa.bInheritHandle = False
         return sa
 
+    def _create_pipe_instance(self, is_first: bool = False):
+        """Creates a named pipe instance. Enforces FILE_FLAG_FIRST_PIPE_INSTANCE on the first."""
+        sa = self._create_security_attributes()
+        open_mode = win32pipe.PIPE_ACCESS_DUPLEX
+        if is_first:
+            open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE
+
+        return win32pipe.CreateNamedPipe(
+            self.pipe_name,
+            open_mode,
+            win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            win32pipe.PIPE_UNLIMITED_INSTANCES,
+            65536,
+            65536,
+            0,
+            sa
+        )
+
     def _ensure_face_engine(self) -> FaceEngine:
         """Lazily initializes FaceEngine if not provided in constructor."""
         if self.face_engine is None:
@@ -214,10 +255,20 @@ class PipeServer:
         return self.face_engine
 
     def start(self):
-        """Starts the pipe server in a background thread."""
+        """
+        Starts the pipe server in a background thread.
+        Synchronously creates the first instance with FILE_FLAG_FIRST_PIPE_INSTANCE.
+        Fails startup immediately if the pipe name is already taken.
+        """
         if self._is_running:
             logger.warning("Pipe server is already running.")
             return
+
+        try:
+            self._initial_pipe = self._create_pipe_instance(is_first=True)
+        except pywintypes.error as ex:
+            logger.error(f"Cannot start pipe server: named pipe '{self.pipe_name}' is already taken: {ex}")
+            raise RuntimeError(f"Failed to start PipeServer: pipe '{self.pipe_name}' already exists or name taken ({ex})") from ex
 
         self._stop_event.clear()
         self._is_running = True
@@ -268,28 +319,24 @@ class PipeServer:
             self.stop()
 
     def _run_server_loop(self):
-        """Continuous listener loop supporting multiple sequential client connections."""
-        sa = self._create_security_attributes()
+        """
+        Continuous listener loop.
+        Maintains one instance listening/created at all times:
+        creates the next instance before disconnecting/closing the current instance.
+        """
+        h_pipe = getattr(self, "_initial_pipe", None)
+        self._initial_pipe = None
+
+        if h_pipe is None:
+            try:
+                h_pipe = self._create_pipe_instance(is_first=True)
+            except Exception as ex:
+                logger.error(f"Failed to create initial pipe instance: {ex}")
+                self._is_running = False
+                return
 
         while not self._stop_event.is_set():
-            h_pipe = None
             try:
-                h_pipe = win32pipe.CreateNamedPipe(
-                    self.pipe_name,
-                    win32pipe.PIPE_ACCESS_DUPLEX,
-                    win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                    1,       # Max 1 client instance at a time
-                    65536,   # Out buffer size
-                    65536,   # In buffer size
-                    0,       # Default timeout (50ms)
-                    sa
-                )
-
-                if self._stop_event.is_set():
-                    if h_pipe:
-                        win32file.CloseHandle(h_pipe)
-                    break
-
                 logger.debug("Waiting for client connection on Named Pipe...")
                 try:
                     win32pipe.ConnectNamedPipe(h_pipe, None)
@@ -301,12 +348,6 @@ class PipeServer:
                         raise
 
                 if self._stop_event.is_set():
-                    try:
-                        win32pipe.DisconnectNamedPipe(h_pipe)
-                    except Exception:
-                        pass
-                    if h_pipe:
-                        win32file.CloseHandle(h_pipe)
                     break
 
                 logger.info("Client connected to Peek Named Pipe.")
@@ -324,6 +365,17 @@ class PipeServer:
             finally:
                 self._current_session = None
                 self._release_camera()
+
+                # CRITICAL SECURITY REQUIREMENT:
+                # Keep one instance listening at all times:
+                # create the next instance BEFORE disconnecting/closing the current one.
+                next_pipe = None
+                if not self._stop_event.is_set():
+                    try:
+                        next_pipe = self._create_pipe_instance(is_first=False)
+                    except Exception as ex:
+                        logger.error(f"Failed to create next pipe instance: {ex}")
+
                 if h_pipe:
                     try:
                         win32pipe.DisconnectNamedPipe(h_pipe)
@@ -333,6 +385,14 @@ class PipeServer:
                         win32file.CloseHandle(h_pipe)
                     except Exception:
                         pass
+
+                h_pipe = next_pipe
+
+        if h_pipe:
+            try:
+                win32file.CloseHandle(h_pipe)
+            except Exception:
+                pass
 
     def _handle_client(self, session: PipeClientSession):
         """Processes requests from a single connected client session."""
@@ -353,11 +413,11 @@ class PipeServer:
                 msg = parse_message(line)
             except ProtocolError as ex:
                 logger.warning(f"Malformed protocol message received: {ex}")
-                session.write_message(make_error(REASON_INVALID_MESSAGE, str(ex)))
+                session.write_message(make_error(REASON_INVALID_MESSAGE, "Invalid message format"))
                 continue
             except Exception as ex:
                 logger.error(f"Error parsing client message: {ex}")
-                session.write_message(make_error(REASON_INVALID_MESSAGE, "Invalid JSON payload"))
+                session.write_message(make_error(REASON_INVALID_MESSAGE, "Invalid message format"))
                 continue
 
             msg_type = msg.get("type")
@@ -367,6 +427,12 @@ class PipeServer:
 
             elif msg_type == MSG_START_AUTH:
                 logger.info("START_AUTH message received from client")
+                nonce = msg.get("nonce")
+                if not nonce or not isinstance(nonce, str) or len(nonce) < 16:
+                    logger.warning("Rejecting START_AUTH: missing or invalid challenge nonce.")
+                    session.write_message(make_error(REASON_INVALID_MESSAGE, "Invalid challenge nonce"))
+                    continue
+
                 if self.coordinator is not None and not self.coordinator.acquire_auth():
                     logger.warning("Rejecting START_AUTH: enrollment session currently active.")
                     session.write_message(
@@ -376,10 +442,7 @@ class PipeServer:
 
                 try:
                     timeout_sec = float(msg.get("timeout_seconds", self.default_auth_timeout))
-                    logger.info(f"Starting authentication session with timeout: {timeout_sec}s")
-                    logger.info("About to call _run_auth_session")
-                    self._run_auth_session(session, timeout_seconds=timeout_sec)
-                    logger.info("_run_auth_session completed")
+                    self._run_auth_session(session, timeout_seconds=timeout_sec, nonce=nonce)
                 finally:
                     if self.coordinator is not None:
                         self.coordinator.release_auth()
@@ -390,7 +453,7 @@ class PipeServer:
 
             else:
                 logger.warning(f"Unknown message type '{msg_type}' received from client.")
-                session.write_message(make_error(REASON_INVALID_MESSAGE, f"Unknown message type '{msg_type}'"))
+                session.write_message(make_error(REASON_INVALID_MESSAGE, "Unknown message type"))
 
     def _acquire_camera(self) -> Tuple[bool, Optional[Any], str]:
         """Acquires the camera device safely with error reporting."""
@@ -426,7 +489,7 @@ class PipeServer:
                 finally:
                     self._active_camera = None
 
-    def _run_auth_session(self, session: PipeClientSession, timeout_seconds: float):
+    def _run_auth_session(self, session: PipeClientSession, timeout_seconds: float, nonce: str):
         """
         Executes a live authentication session:
         1. Emits CAMERA_STARTING
@@ -436,14 +499,14 @@ class PipeServer:
         5. Emits AUTHENTICATED, AUTH_FAILED, TIMEOUT, or ERROR
         6. Honors CANCEL_AUTH with bounded latency (<50ms)
         7. Releases camera upon completion
+        Emits only generic details over the wire; keeps specifics in local logs only.
         """
-        logger.info("_run_auth_session started")
         session.write_message(make_camera_starting("Acquiring camera..."))
 
         cam_ok, camera, err_detail = self._acquire_camera()
         if not cam_ok or camera is None:
             logger.error(f"Cannot perform authentication: {err_detail}")
-            session.write_message(make_error(REASON_CAMERA_UNAVAILABLE, err_detail))
+            session.write_message(make_error(REASON_CAMERA_UNAVAILABLE, "Camera device unavailable"))
             return
 
         engine = self._ensure_face_engine()
@@ -453,7 +516,7 @@ class PipeServer:
         if engine.active_profile is None:
             logger.warning("Authentication requested but no profile is enrolled in storage.")
             self._release_camera()
-            session.write_message(make_auth_failed(REASON_NO_PROFILE, "No biometric profile is enrolled."))
+            session.write_message(make_auth_failed(REASON_NO_PROFILE, "No biometric profile enrolled"))
             return
 
         start_time = time.time()
@@ -482,14 +545,14 @@ class PipeServer:
                 elapsed = time.time() - start_time
                 if elapsed > timeout_seconds:
                     logger.info(f"Authentication timed out after {elapsed:.1f}s.")
-                    session.write_message(make_timeout("Authentication timed out without face confirmation"))
+                    session.write_message(make_timeout("Authentication timed out"))
                     return
 
                 # 3. Read camera frame
                 ret, frame = camera.read_frame()
                 if not ret or frame is None:
                     logger.error("Camera failed to deliver frame.")
-                    session.write_message(make_error(REASON_CAMERA_ERROR, "Camera feed lost or unavailable"))
+                    session.write_message(make_error(REASON_CAMERA_ERROR, "Camera feed lost"))
                     return
 
                 # 4. Process frame through FaceEngine
@@ -497,7 +560,7 @@ class PipeServer:
                     result: EngineFrameResult = engine.process_frame(frame)
                 except Exception as ex:
                     logger.error(f"FaceEngine.process_frame raised exception: {ex}", exc_info=True)
-                    session.write_message(make_error(REASON_ENGINE_ERROR, "Internal recognition engine error"))
+                    session.write_message(make_error(REASON_ENGINE_ERROR, "Recognition processing failed"))
                     return
 
                 # 5. Dual-Gate Authorization Check (NON-NEGOTIABLE SECURITY INVARIANT)
@@ -511,9 +574,9 @@ class PipeServer:
                     session.write_message(
                         make_authenticated(
                             display_name=display_name,
-                            profile_id=engine.active_profile.profile_id if engine.active_profile else "",
+                            nonce=nonce,
                             is_authorized_to_unlock=True,
-                            detail=result.details or "Biometric & liveness verification confirmed"
+                            detail="Biometric & liveness verification confirmed"
                         )
                     )
                     logger.info("AUTHENTICATED message sent to client")
@@ -522,11 +585,11 @@ class PipeServer:
                 # 6. Spoof Rejection Check
                 if result.liveness_result and result.liveness_result.state == "SPOOF_DETECTED":
                     spoof_reason = result.liveness_result.spoof_reason or "Presentation Attack Detected"
-                    logger.warning(f"Spoof attack detected: {spoof_reason}. Emitting AUTH_FAILED.")
+                    logger.warning(f"Spoof attack detected: {spoof_reason}. Emitting generic AUTH_FAILED.")
                     session.write_message(
                         make_auth_failed(
                             reason_code=REASON_SPOOF_DETECTED,
-                            detail=f"Spoof detected: {spoof_reason}"
+                            detail="Presentation attack detected"
                         )
                     )
                     return
@@ -535,11 +598,11 @@ class PipeServer:
                 if (result.challenge_result and
                     result.challenge_result.state in ("FAILED", "TIMEOUT") and
                     not result.is_authorized_to_unlock):
-                    logger.warning(f"Active challenge failed: {result.challenge_result.details}. Emitting AUTH_FAILED.")
+                    logger.warning(f"Active challenge failed: {result.challenge_result.details}. Emitting generic AUTH_FAILED.")
                     session.write_message(
                         make_auth_failed(
                             reason_code=REASON_CHALLENGE_FAILED,
-                            detail=result.challenge_result.details or "Active challenge verification failed"
+                            detail="Verification challenge failed"
                         )
                     )
                     return
@@ -556,7 +619,7 @@ class PipeServer:
                             make_face_found(
                                 track_id=result.track_id,
                                 estimated_pose=result.estimated_pose,
-                                detail=result.details or "Face detected, tracking active"
+                                detail="Face detected, tracking active"
                             )
                         )
                         face_previously_found = True

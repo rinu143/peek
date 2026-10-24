@@ -69,13 +69,36 @@ namespace PeekSecretVault
         std::vector<BYTE>& outPayload
     );
 
-    // Parses and validates binary payload:
+    // Parses and validates binary payload, extracting profileId and password:
+    bool ParseSecretPayload(
+        const BYTE* pbData,
+        DWORD cbData,
+        std::wstring& outProfileId,
+        std::wstring& outPassword
+    );
+
+    // Parses and validates binary payload enforcing expected profileId:
     // Rejects invalid version, truncated length, size > 4KB, or profile_id mismatch.
     bool ParseSecretPayload(
         const BYTE* pbData,
         DWORD cbData,
         const std::wstring& expectedProfileId,
         std::wstring& outPassword
+    );
+
+    // Retrieves stored bound profile ID directly from LSA payload for user SID.
+    bool GetStoredProfileId(
+        const std::wstring& userSid,
+        std::wstring& outProfileId,
+        ILsaSecretStore* pStore = nullptr
+    );
+
+    // Reads and unwraps the password secret directly from LSA without requiring pipe profile ID.
+    bool ReadPasswordSecret(
+        const std::wstring& userSid,
+        std::wstring& outPassword,
+        std::wstring* pOutProfileId = nullptr,
+        ILsaSecretStore* pStore = nullptr
     );
 
     // Formats the LSA secret key name: L$PeekCred_<user SID string>

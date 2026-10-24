@@ -51,6 +51,9 @@ public:
 
     // Starts background authentication thread
     bool StartAuthAsync(PeekStateCallback callback, float timeoutSeconds = 12.0f);
+    bool StartAuthAsync(PeekStateCallback callback, const std::wstring& expectedSid, float timeoutSeconds = 12.0f);
+
+    void SetExpectedSid(const std::wstring& expectedSid);
 
     // Signals cancellation and cleanly disconnects from pipe
     void Cancel();
@@ -60,6 +63,12 @@ public:
 
     // Check if the engine pipe is reachable and listening
     static bool IsPipeReachable(const std::wstring& pipeName = PEEK_PIPE_NAME);
+
+    // Verifies genuine server process image path and token SID
+    static bool VerifyServerProcess(HANDLE hPipe, const std::wstring& expectedSid);
+
+    // Generates a 128-bit random challenge nonce formatted as 32 hex chars
+    static std::string GenerateChallengeNonce();
 
 private:
     static DWORD WINAPI WorkerThreadProc(LPVOID lpParam);
@@ -71,6 +80,9 @@ private:
     void ParseAndDispatchMessage(const std::string& line, PeekAuthResult& result);
 
     std::wstring m_pipeName;
+    std::wstring m_expectedSid;
+    std::string m_expectedNonce;
+    bool m_isServerVerified;
     HANDLE m_hPipe;
     HANDLE m_hThread;
     HANDLE m_hCancelEvent;

@@ -6,9 +6,13 @@ SECURITY CONSTRAINTS:
 1. Multi-frame candidate selection runs in memory; camera frames are discarded immediately.
 2. Only 512-D float vectors and minimal quality metrics are persisted.
 3. Templates are encrypted via Windows DPAPI before touching disk.
+4. Profile IDs are generated as UUID4.
+5. Explicit confirmation is strictly required to replace an existing enabled profile.
 """
 
+import os
 import time
+import uuid
 import numpy as np
 import logging
 from enum import Enum
@@ -24,6 +28,32 @@ from storage.template_store import SecureProfileStore, PeekProfile, PeekTemplate
 
 logger = logging.getLogger("Peek.EnrollmentSession")
 
+
+def verify_windows_password(password: str, username: Optional[str] = None, domain: Optional[str] = None) -> bool:
+    """Verifies a Windows password using LogonUserW."""
+    if not password:
+        return False
+    try:
+        import win32security
+        import win32con
+        user = username or os.environ.get("USERNAME", "")
+        dom = domain or os.environ.get("USERDOMAIN", "")
+        handle = win32security.LogonUser(
+            user,
+            dom if dom else None,
+            password,
+            win32con.LOGON32_LOGON_INTERACTIVE,
+            win32con.LOGON32_PROVIDER_DEFAULT
+        )
+        if handle:
+            handle.Close()
+            return True
+        return False
+    except Exception as ex:
+        logger.debug(f"LogonUser validation failed: {ex}")
+        return False
+
+
 class EnrollmentState(str, Enum):
     IDLE = "IDLE"
     GUIDING_TO_POSE = "GUIDING_TO_POSE"
@@ -31,6 +61,7 @@ class EnrollmentState(str, Enum):
     POSE_COMPLETED = "POSE_COMPLETED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+
 
 @dataclass
 class PoseCandidate:
@@ -244,46 +275,50 @@ class EnrollmentSession:
     def finalize_and_save_profile(
         self,
         display_name: str = "Primary User",
-        profile_id: Optional[str] = None
+        profile_id: Optional[str] = None,
+        confirmed: bool = False,
+        password: Optional[str] = None,
+        user_sid: Optional[str] = None,
     ) -> PeekProfile:
         """
         Creates and encrypts the completed PeekProfile with Windows DPAPI.
+        CRITICAL SECURITY REQUIREMENT:
+        Replacing an existing enabled profile requires explicit confirmation
+        (confirmed=True or validated Windows password).
         """
         if not self.final_templates:
             raise ValueError("No templates enrolled to create a profile.")
 
-        # Active-profile replacement semantics (single-user operation):
-        # Look up existing enabled profiles and set enabled=False on all of them
-        # (persisting the change) before saving the new profile as enabled=True.
-        # Exactly one profile should be enabled at a time under normal single-user operation.
-        #
-        # NOTE ON RECOVERABILITY & FUTURE WORK:
-        # We do not delete old profiles outright — we only disable them — so previous
-        # profiles remain on disk and recoverable if needed. Multi-profile/multi-user
-        # profile switching is a PROPOSED future feature, not implemented in this pass.
-        try:
-            existing_profiles = self.profile_store.list_profiles()
-            for prev_profile in existing_profiles:
-                if prev_profile.enabled:
-                    prev_profile.enabled = False
-                    self.profile_store.save_profile(prev_profile)
-                    logger.info(
-                        "Disabled previous active profile '%s' (%s) for single-user replacement.",
-                        prev_profile.display_name,
-                        prev_profile.profile_id,
-                    )
-        except Exception as ex:
-            logger.warning("Error disabling previous profiles during re-enrollment: %s", ex)
+        existing_profiles = self.profile_store.list_profiles()
+        enabled_existing = [p for p in existing_profiles if p.enabled]
 
-        pid = profile_id or f"profile_{int(time.time())}"
+        if enabled_existing and not confirmed:
+            if password:
+                if not verify_windows_password(password):
+                    raise PermissionError("Confirmation failed: invalid Windows password")
+                confirmed = True
+            else:
+                raise PermissionError("Explicit confirmation required to replace an existing enabled profile")
+
+        for prev_profile in enabled_existing:
+            prev_profile.enabled = False
+            self.profile_store.save_profile(prev_profile)
+            logger.info(
+                "Disabled previous active profile '%s' (%s) for single-user replacement.",
+                prev_profile.display_name,
+                prev_profile.profile_id,
+            )
+
+        pid = profile_id or str(uuid.uuid4())
         profile = PeekProfile(
             profile_id=pid,
             display_name=display_name,
             matching_threshold=0.50,
             templates=self.final_templates,
-            enabled=True
+            enabled=True,
+            user_sid=user_sid,
         )
 
         self.profile_store.save_profile(profile)
-        logger.info("Encrypted and saved multi-pose profile '%s' with %d templates.", display_name, len(profile.templates))
+        logger.info("Encrypted and saved multi-pose profile '%s' (UUID=%s) with %d templates.", display_name, pid, len(profile.templates))
         return profile

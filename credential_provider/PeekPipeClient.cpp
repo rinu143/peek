@@ -1,71 +1,10 @@
 // Peek Face Engine - Native C++ Named Pipe Client Implementation
 #include "PeekPipeClient.h"
+#include "JsonParser.h"
 #include <sstream>
-
-// Helper to convert UTF-8 std::string to std::wstring
-static std::wstring Utf8ToWide(const std::string& utf8Str)
-{
-    if (utf8Str.empty()) return L"";
-    int cchNeeded = MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), (int)utf8Str.size(), nullptr, 0);
-    if (cchNeeded <= 0) return L"";
-    std::wstring wideStr(cchNeeded, 0);
-    MultiByteToWideChar(CP_UTF8, 0, utf8Str.c_str(), (int)utf8Str.size(), &wideStr[0], cchNeeded);
-    return wideStr;
-}
-
-// Lightweight JSON value extraction helpers for protocol parsing
-static bool ExtractJsonString(const std::string& json, const std::string& key, std::wstring& outVal)
-{
-    std::string needle = "\"" + key + "\":";
-    size_t pos = json.find(needle);
-    if (pos == std::string::npos) return false;
-
-    pos += needle.length();
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
-
-    if (pos >= json.size() || json[pos] != '\"') return false;
-    pos++; // Skip opening quote
-
-    std::string value;
-    while (pos < json.size() && json[pos] != '\"')
-    {
-        if (json[pos] == '\\' && pos + 1 < json.size())
-        {
-            pos++;
-            value += json[pos];
-        }
-        else
-        {
-            value += json[pos];
-        }
-        pos++;
-    }
-
-    outVal = Utf8ToWide(value);
-    return true;
-}
-
-static bool ExtractJsonBool(const std::string& json, const std::string& key, bool& outVal)
-{
-    std::string needle = "\"" + key + "\":";
-    size_t pos = json.find(needle);
-    if (pos == std::string::npos) return false;
-
-    pos += needle.length();
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
-
-    if (json.compare(pos, 4, "true") == 0)
-    {
-        outVal = true;
-        return true;
-    }
-    if (json.compare(pos, 5, "false") == 0)
-    {
-        outVal = false;
-        return true;
-    }
-    return false;
-}
+#include <vector>
+#include <sddl.h>
+#include <wincrypt.h>
 
 static std::wstring GetConfiguredPipeName(const std::wstring& defaultName = PEEK_PIPE_NAME)
 {
@@ -82,6 +21,9 @@ static std::wstring GetConfiguredPipeName(const std::wstring& defaultName = PEEK
 
 PeekPipeClient::PeekPipeClient(const std::wstring& pipeName)
     : m_pipeName(GetConfiguredPipeName(pipeName))
+    , m_expectedSid(L"")
+    , m_expectedNonce("")
+    , m_isServerVerified(false)
     , m_hPipe(INVALID_HANDLE_VALUE)
     , m_hThread(nullptr)
     , m_hCancelEvent(nullptr)
@@ -99,6 +41,11 @@ PeekPipeClient::~PeekPipeClient()
         CloseHandle(m_hCancelEvent);
         m_hCancelEvent = nullptr;
     }
+}
+
+void PeekPipeClient::SetExpectedSid(const std::wstring& expectedSid)
+{
+    m_expectedSid = expectedSid;
 }
 
 bool PeekPipeClient::IsRunning() const
@@ -121,10 +68,183 @@ bool PeekPipeClient::IsPipeReachable(const std::wstring& pipeName)
     return false;
 }
 
+std::string PeekPipeClient::GenerateChallengeNonce()
+{
+    BYTE bytes[16] = {};
+    HCRYPTPROV hProv = 0;
+    if (CryptAcquireContextW(&hProv, nullptr, nullptr, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT | CRYPT_SILENT))
+    {
+        CryptGenRandom(hProv, sizeof(bytes), bytes);
+        CryptReleaseContext(hProv, 0);
+    }
+    else
+    {
+        LARGE_INTEGER qpc;
+        QueryPerformanceCounter(&qpc);
+        DWORD tick = GetTickCount();
+        memcpy(bytes, &qpc.QuadPart, 8);
+        memcpy(bytes + 8, &tick, 4);
+    }
+
+    char hex[33] = {};
+    for (int i = 0; i < 16; i++)
+    {
+        sprintf_s(hex + (i * 2), 3, "%02x", bytes[i]);
+    }
+    return std::string(hex);
+}
+
+bool PeekPipeClient::VerifyServerProcess(HANDLE hPipe, const std::wstring& expectedSid)
+{
+    if (hPipe == INVALID_HANDLE_VALUE)
+    {
+        Logger::LogError("VerifyServerProcess: Invalid pipe handle");
+        return false;
+    }
+
+    ULONG serverPid = 0;
+    if (!GetNamedPipeServerProcessId(hPipe, &serverPid) || serverPid == 0)
+    {
+        Logger::LogError("VerifyServerProcess: GetNamedPipeServerProcessId failed");
+        return false;
+    }
+
+    HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, serverPid);
+    if (!hProc)
+    {
+        Logger::LogError(("VerifyServerProcess: OpenProcess failed for server PID " + std::to_string(serverPid)).c_str());
+        return false;
+    }
+
+    // 1. Verify image path is genuine %ProgramFiles%\Peek\PeekEngine.exe
+    wchar_t szImagePath[MAX_PATH * 2] = {};
+    DWORD dwSize = ARRAYSIZE(szImagePath);
+    if (!QueryFullProcessImageNameW(hProc, 0, szImagePath, &dwSize))
+    {
+        CloseHandle(hProc);
+        Logger::LogError("VerifyServerProcess: QueryFullProcessImageNameW failed");
+        return false;
+    }
+
+    wchar_t szExpectedImage[MAX_PATH * 2] = {};
+    ExpandEnvironmentStringsW(L"%ProgramFiles%\\Peek\\PeekEngine.exe", szExpectedImage, ARRAYSIZE(szExpectedImage));
+
+    // Normalize both paths using GetLongPathNameW to avoid short-path / 8.3 mismatch (e.g. PROGRA~1)
+    wchar_t szActualLong[MAX_PATH * 2] = {};
+    if (GetLongPathNameW(szImagePath, szActualLong, ARRAYSIZE(szActualLong)) == 0)
+    {
+        wcscpy_s(szActualLong, szImagePath);
+    }
+
+    wchar_t szExpectedLong[MAX_PATH * 2] = {};
+    if (GetLongPathNameW(szExpectedImage, szExpectedLong, ARRAYSIZE(szExpectedLong)) == 0)
+    {
+        wcscpy_s(szExpectedLong, szExpectedImage);
+    }
+
+    bool bImageMatch = (_wcsicmp(szActualLong, szExpectedLong) == 0);
+
+#ifdef PEEK_TEST_BUILD
+    wchar_t szOverride[MAX_PATH * 2] = {};
+    DWORD dwLen = GetEnvironmentVariableW(L"PEEK_TEST_EXPECTED_IMAGE", szOverride, ARRAYSIZE(szOverride));
+    if (dwLen > 0 && dwLen < ARRAYSIZE(szOverride))
+    {
+        if (_wcsicmp(szOverride, L"*") == 0)
+        {
+            bImageMatch = true;
+        }
+        else
+        {
+            bImageMatch = (_wcsicmp(szActualLong, szOverride) == 0);
+        }
+    }
+#endif
+
+    if (!bImageMatch)
+    {
+        Logger::LogError(L"VerifyServerProcess: Server image mismatch. Actual='" + std::wstring(szImagePath) + L"', Expected='" + szExpectedImage + L"'");
+        CloseHandle(hProc);
+        return false;
+    }
+
+    // 2. Verify token user SID matches expected SID or genuine SYSTEM (S-1-5-18)
+    HANDLE hToken = nullptr;
+    if (!OpenProcessToken(hProc, TOKEN_QUERY, &hToken))
+    {
+        CloseHandle(hProc);
+        Logger::LogError("VerifyServerProcess: OpenProcessToken failed");
+        return false;
+    }
+
+    DWORD dwTokenLen = 0;
+    GetTokenInformation(hToken, TokenUser, nullptr, 0, &dwTokenLen);
+    std::vector<BYTE> tokenBuf(dwTokenLen);
+    if (!GetTokenInformation(hToken, TokenUser, tokenBuf.data(), dwTokenLen, &dwTokenLen))
+    {
+        CloseHandle(hToken);
+        CloseHandle(hProc);
+        Logger::LogError("VerifyServerProcess: GetTokenInformation failed");
+        return false;
+    }
+
+    TOKEN_USER* pTokenUser = reinterpret_cast<TOKEN_USER*>(tokenBuf.data());
+    LPWSTR pszSid = nullptr;
+    if (!ConvertSidToStringSidW(pTokenUser->User.Sid, &pszSid))
+    {
+        CloseHandle(hToken);
+        CloseHandle(hProc);
+        Logger::LogError("VerifyServerProcess: ConvertSidToStringSidW failed");
+        return false;
+    }
+
+    std::wstring serverSid = pszSid;
+    LocalFree(pszSid);
+    CloseHandle(hToken);
+    CloseHandle(hProc);
+
+    bool bSidMatch = false;
+    if (!expectedSid.empty())
+    {
+        if (_wcsicmp(serverSid.c_str(), expectedSid.c_str()) == 0 ||
+            _wcsicmp(serverSid.c_str(), L"S-1-5-18") == 0)
+        {
+            bSidMatch = true;
+        }
+    }
+    else
+    {
+        // Cold boot logon without specific user SID: must be SYSTEM
+        bSidMatch = (_wcsicmp(serverSid.c_str(), L"S-1-5-18") == 0);
+    }
+
+#ifdef PEEK_TEST_BUILD
+    wchar_t szSidOverride[256] = {};
+    DWORD dwSidLen = GetEnvironmentVariableW(L"PEEK_TEST_ALLOW_CURRENT_USER_SID", szSidOverride, ARRAYSIZE(szSidOverride));
+    if (dwSidLen > 0 && _wcsicmp(szSidOverride, L"1") == 0)
+    {
+        bSidMatch = true;
+    }
+#endif
+
+    if (!bSidMatch)
+    {
+        Logger::LogError(L"VerifyServerProcess: Token user SID mismatch. Server SID='" + serverSid + L"', Expected SID='" + expectedSid + L"'");
+        return false;
+    }
+
+    Logger::LogInfo(L"VerifyServerProcess: Server verified successfully (PID=" + std::to_wstring(serverPid) + L", SID=" + serverSid + L")");
+    return true;
+}
+
 bool PeekPipeClient::StartAuthAsync(PeekStateCallback callback, float timeoutSeconds)
 {
+    return StartAuthAsync(callback, m_expectedSid, timeoutSeconds);
+}
+
+bool PeekPipeClient::StartAuthAsync(PeekStateCallback callback, const std::wstring& expectedSid, float timeoutSeconds)
+{
     Logger::LogInfo("PeekPipeClient::StartAuthAsync called");
-    
+
     if (m_isRunning.load())
     {
         Logger::LogError("StartAuthAsync called while already running");
@@ -132,12 +252,14 @@ bool PeekPipeClient::StartAuthAsync(PeekStateCallback callback, float timeoutSec
     }
 
     m_callback = callback;
+    m_expectedSid = expectedSid;
     m_timeoutSeconds = timeoutSeconds;
+    m_isServerVerified = false;
     ResetEvent(m_hCancelEvent);
     m_isRunning = true;
 
     Logger::LogInfo("Creating worker thread for authentication");
-    
+
     m_hThread = CreateThread(
         nullptr,
         0,
@@ -168,7 +290,7 @@ void PeekPipeClient::Cancel()
     if (m_hPipe != INVALID_HANDLE_VALUE)
     {
         // Attempt to send CANCEL_AUTH before teardown
-        std::string cancelMsg = "{\"protocol_version\":\"1.0\",\"type\":\"CANCEL_AUTH\",\"reason\":\"USER_CANCELLED\"}\n";
+        std::string cancelMsg = "{\"protocol_version\":\"2.0\",\"type\":\"CANCEL_AUTH\",\"reason\":\"USER_CANCELLED\"}\n";
         DWORD written = 0;
         WriteFile(m_hPipe, cancelMsg.c_str(), (DWORD)cancelMsg.size(), &written, nullptr);
 
@@ -213,12 +335,24 @@ bool PeekPipeClient::ConnectToPipe(DWORD timeoutMs)
             0,
             nullptr,
             OPEN_EXISTING,
-            0,
+            SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
             nullptr
         );
 
         if (m_hPipe != INVALID_HANDLE_VALUE)
         {
+            // CRITICAL SECURITY REQUIREMENT:
+            // Verify server process image path and token SID
+            if (!VerifyServerProcess(m_hPipe, m_expectedSid))
+            {
+                Logger::LogError("ConnectToPipe: Server process verification failed; closing connection");
+                CloseHandle(m_hPipe);
+                m_hPipe = INVALID_HANDLE_VALUE;
+                m_isServerVerified = false;
+                return false;
+            }
+
+            m_isServerVerified = true;
             return true;
         }
 
@@ -229,9 +363,7 @@ bool PeekPipeClient::ConnectToPipe(DWORD timeoutMs)
         }
         else
         {
-            // First connect attempt failed and pipe is not busy (e.g. offline / not found).
-            // Do not loop or hang; fall back immediately.
-            Logger::LogError("ConnectToPipe: Engine pipe unreachable or not found on first attempt");
+            Logger::LogError(("ConnectToPipe: CreateFile failed with error " + std::to_string(err)).c_str());
             return false;
         }
     }
@@ -262,7 +394,6 @@ bool PeekPipeClient::ReadNextMessage(std::string& outLine)
             return false;
         }
 
-        // Check if full line is in buffer
         size_t newlinePos = m_readBuffer.find('\n');
         if (newlinePos != std::string::npos)
         {
@@ -271,7 +402,6 @@ bool PeekPipeClient::ReadNextMessage(std::string& outLine)
             return true;
         }
 
-        // Peek available bytes
         DWORD bytesAvail = 0;
         if (!PeekNamedPipe(m_hPipe, nullptr, 0, nullptr, &bytesAvail, nullptr))
         {
@@ -299,68 +429,108 @@ bool PeekPipeClient::ReadNextMessage(std::string& outLine)
 
 void PeekPipeClient::ParseAndDispatchMessage(const std::string& line, PeekAuthResult& result)
 {
-    std::wstring typeStr;
-    if (!ExtractJsonString(line, "type", typeStr))
+    PeekJson::PeekProtocolMessage msg;
+    if (!PeekJson::ProtocolSchemaValidator::ValidateAndParse(line, msg))
     {
+        Logger::LogError(L"ParseAndDispatchMessage: Protocol schema validation failed: " + msg.parseError);
+        result.state = PeekIPCState::ERROR_STATE;
+        result.reasonCode = L"PROTOCOL_VIOLATION";
+        result.detail = L"Security violation or invalid message schema";
+        if (m_callback) m_callback(result);
         return;
     }
 
-    ExtractJsonString(line, "detail", result.detail);
-    ExtractJsonString(line, "display_name", result.displayName);
-    ExtractJsonString(line, "profile_id", result.profileId);
-    ExtractJsonString(line, "reason_code", result.reasonCode);
-    ExtractJsonString(line, "prompt_text", result.promptText);
-    ExtractJsonBool(line, "is_authorized_to_unlock", result.isAuthorizedToUnlock);
+    result.detail = msg.detail;
+    result.displayName = msg.displayName;
+    result.reasonCode = msg.reasonCode;
+    result.promptText = msg.promptText;
+    result.isAuthorizedToUnlock = msg.isAuthorizedToUnlock;
 
-    if (typeStr == L"ENGINE_READY")
+    if (msg.type == L"ENGINE_READY")
     {
-        Logger::LogInfo(L"ParseAndDispatchMessage: Received ENGINE_READY message");
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received ENGINE_READY");
         result.state = PeekIPCState::ENGINE_READY;
     }
-    else if (typeStr == L"CAMERA_STARTING")
+    else if (msg.type == L"CAMERA_STARTING")
     {
-        Logger::LogInfo(L"ParseAndDispatchMessage: Received CAMERA_STARTING message");
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received CAMERA_STARTING");
         result.state = PeekIPCState::CAMERA_STARTING;
     }
-    else if (typeStr == L"SEARCHING")
+    else if (msg.type == L"SEARCHING")
     {
-        Logger::LogInfo(L"ParseAndDispatchMessage: Received SEARCHING message");
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received SEARCHING");
         result.state = PeekIPCState::SEARCHING;
     }
-    else if (typeStr == L"FACE_FOUND")
+    else if (msg.type == L"FACE_FOUND")
     {
-        Logger::LogInfo(L"ParseAndDispatchMessage: Received FACE_FOUND message");
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received FACE_FOUND");
         result.state = PeekIPCState::FACE_FOUND;
     }
-    else if (typeStr == L"VERIFYING")
+    else if (msg.type == L"VERIFYING")
     {
-        Logger::LogInfo(L"ParseAndDispatchMessage: Received VERIFYING message");
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received VERIFYING");
         result.state = PeekIPCState::VERIFYING;
     }
-    else if (typeStr == L"LIVENESS_CHECK")
+    else if (msg.type == L"LIVENESS_CHECK")
     {
-        Logger::LogInfo(L"ParseAndDispatchMessage: Received LIVENESS_CHECK message");
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received LIVENESS_CHECK");
         result.state = PeekIPCState::LIVENESS_CHECK;
     }
-    else if (typeStr == L"AUTHENTICATED")
+    else if (msg.type == L"AUTHENTICATED")
     {
-        Logger::LogInfo(L"ParseAndDispatchMessage: Received AUTHENTICATED message");
+        // CRITICAL SECURITY REQUIREMENT:
+        // Never act on AUTHENTICATED from an unverified server
+        if (!m_isServerVerified)
+        {
+            Logger::LogError("ParseAndDispatchMessage: Refusing AUTHENTICATED from unverified server");
+            result.state = PeekIPCState::ERROR_STATE;
+            result.reasonCode = L"UNVERIFIED_SERVER";
+            result.isAuthorizedToUnlock = false;
+            if (m_callback) m_callback(result);
+            return;
+        }
+
+        // CRITICAL SECURITY REQUIREMENT:
+        // Reject missing or mismatched challenge nonce
+        std::wstring expectedNonceWide = PeekJson::Utf8ToWide(m_expectedNonce);
+        if (msg.nonce.empty() || _wcsicmp(msg.nonce.c_str(), expectedNonceWide.c_str()) != 0)
+        {
+            Logger::LogError(L"ParseAndDispatchMessage: Challenge nonce mismatch! Received='" + msg.nonce + L"', Expected='" + expectedNonceWide + L"'");
+            result.state = PeekIPCState::ERROR_STATE;
+            result.reasonCode = L"NONCE_MISMATCH";
+            result.isAuthorizedToUnlock = false;
+            if (m_callback) m_callback(result);
+            return;
+        }
+
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received verified AUTHENTICATED with valid challenge nonce");
         result.state = PeekIPCState::AUTHENTICATED;
     }
-    else if (typeStr == L"AUTH_FAILED")
+    else if (msg.type == L"AUTH_FAILED")
     {
-        Logger::LogInfo(L"ParseAndDispatchMessage: Received AUTH_FAILED message");
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received AUTH_FAILED");
         result.state = PeekIPCState::AUTH_FAILED;
     }
-    else if (typeStr == L"TIMEOUT")
+    else if (msg.type == L"TIMEOUT")
     {
-        Logger::LogInfo(L"ParseAndDispatchMessage: Received TIMEOUT message");
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received TIMEOUT");
         result.state = PeekIPCState::TIMEOUT;
     }
-    else if (typeStr == L"ERROR")
+    else if (msg.type == L"ERROR")
     {
-        Logger::LogInfo(L"ParseAndDispatchMessage: Received ERROR message");
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received ERROR");
         result.state = PeekIPCState::ERROR_STATE;
+    }
+    else if (msg.type == L"PONG")
+    {
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received PONG");
+        return;
+    }
+    else
+    {
+        Logger::LogError(L"ParseAndDispatchMessage: Unknown message type " + msg.type);
+        result.state = PeekIPCState::ERROR_STATE;
+        result.reasonCode = L"INVALID_MESSAGE";
     }
 
     if (m_callback)
@@ -372,7 +542,7 @@ void PeekPipeClient::ParseAndDispatchMessage(const std::string& line, PeekAuthRe
 void PeekPipeClient::RunWorker()
 {
     Logger::LogInfo("PeekPipeClient::RunWorker started");
-    
+
     PeekAuthResult result;
 
     // 1. Initial State: Connecting
@@ -380,24 +550,27 @@ void PeekPipeClient::RunWorker()
     result.detail = L"Connecting to Peek Face Engine...";
     if (m_callback) m_callback(result);
 
-    // 2. Connect to Named Pipe
+    // 2. Connect to Named Pipe & Verify Server
     if (!ConnectToPipe(2500))
     {
-        // Fail-open: Engine service is offline or not installed
+        // Fail-open: Engine service is offline or unverified
         result.state = PeekIPCState::DISCONNECTED;
         result.detail = L"Peek engine offline. Sign in with password or PIN.";
         result.reasonCode = L"SERVICE_UNAVAILABLE";
         if (m_callback) m_callback(result);
         m_isRunning = false;
-        Logger::LogError("Failed to connect to Peek engine pipe");
+        Logger::LogError("Failed to connect or verify Peek engine pipe");
         return;
     }
 
-    Logger::LogInfo("Successfully connected to Peek engine pipe");
+    Logger::LogInfo("Successfully connected to and verified Peek engine pipe");
 
-    // 3. Send START_AUTH
+    // 3. Generate random 128-bit challenge nonce and send START_AUTH
+    m_expectedNonce = GenerateChallengeNonce();
+
     std::ostringstream ss;
-    ss << "{\"protocol_version\":\"1.0\",\"type\":\"START_AUTH\",\"timeout_seconds\":"
+    ss << "{\"protocol_version\":\"2.0\",\"type\":\"START_AUTH\",\"nonce\":\""
+       << m_expectedNonce << "\",\"timeout_seconds\":"
        << m_timeoutSeconds << "}\n";
     if (!SendMessageString(ss.str()))
     {
@@ -409,7 +582,7 @@ void PeekPipeClient::RunWorker()
         return;
     }
 
-    Logger::LogInfo("START_AUTH message sent successfully");
+    Logger::LogInfo("START_AUTH message sent successfully with challenge nonce");
 
     // 4. Stream responses until completion or cancel
     std::string line;

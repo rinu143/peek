@@ -96,7 +96,6 @@ def main():
     enrollment_server = EnrollmentPipeServer(
         pipe_name=args.enrollment_pipe_name,
         coordinator=coordinator,
-        sddl=DEFAULT_SDDL,
         profile_store=profile_store,
         face_engine=engine,
     )
@@ -111,9 +110,8 @@ def main():
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    logger.info(f"Listening on Auth Pipe: {args.pipe_name}")
-    logger.info(f"Listening on Enrollment Pipe: {args.enrollment_pipe_name}")
-    logger.info(f"Security Descriptor (SDDL): {DEFAULT_SDDL}")
+    logger.info(f"Listening on Auth Pipe: {args.pipe_name} (SDDL: {auth_server.sddl})")
+    logger.info(f"Listening on Enrollment Pipe: {args.enrollment_pipe_name} (SDDL: {enrollment_server.sddl})")
     logger.info(f"Services ready. Press Ctrl+C to terminate.")
 
     # Start both servers in background listener threads

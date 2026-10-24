@@ -73,20 +73,29 @@ $sourceMap = @{
 $candidateDirs = @(
     $SourceDir,
     (Join-Path $SourceDir "dist"),
+    (Join-Path $SourceDir "build\Release"),
     (Join-Path $SourceDir "app\PeekSetup\bin\Release\net8.0-windows\win-x64\publish"),
     (Join-Path $SourceDir "credential_provider\build\Release"),
+    (Join-Path $SourceDir "credential_provider\x64\Release"),
+    (Join-Path $SourceDir "scripts\packaging"),
     (Join-Path $SourceDir "..\dist"),
+    (Join-Path $SourceDir "..\build\Release"),
     (Join-Path $SourceDir "..\app\PeekSetup\bin\Release\net8.0-windows\win-x64\publish"),
-    (Join-Path $SourceDir "..\credential_provider\build\Release")
+    (Join-Path $SourceDir "..\credential_provider\build\Release"),
+    (Join-Path $SourceDir "..\credential_provider\x64\Release")
 )
 
 foreach ($key in @($sourceMap.Keys)) {
+    $found = @()
     foreach ($cand in $candidateDirs) {
         $testPath = Join-Path $cand $key
         if (Test-Path $testPath) {
-            $sourceMap[$key] = (Resolve-Path $testPath).Path
-            break
+            $found += Get-Item $testPath
         }
+    }
+    if ($found.Count -gt 0) {
+        $newest = $found | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $sourceMap[$key] = $newest.FullName
     }
 }
 
