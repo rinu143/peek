@@ -5,6 +5,7 @@
 #include "common.h"
 #include "PeekPipeClient.h"
 #include "TileAnimator.h"
+#include <set>
 
 // Forward declaration of provider class
 class PeekProvider;
@@ -12,6 +13,9 @@ class PeekProvider;
 class PeekCredential : public ICredentialProviderCredential2
 {
 public:
+    static constexpr bool kShowSuccessGreeting = true;
+    static constexpr int kMaxRetryCycles = 5;
+
     PeekCredential();
     virtual ~PeekCredential();
 
@@ -42,6 +46,18 @@ public:
         m_profileId = profileId;
         LeaveCriticalSection(&m_cs);
     }
+    void TestOnEngineStateUpdate(const PeekAuthResult& result)
+    {
+        OnEngineStateUpdate(result);
+    }
+    int TestGetConsecutiveFailedAttempts() const
+    {
+        EnterCriticalSection(&const_cast<CRITICAL_SECTION&>(m_cs));
+        int attempts = m_consecutiveFailedAttempts;
+        LeaveCriticalSection(&const_cast<CRITICAL_SECTION&>(m_cs));
+        return attempts;
+    }
+    TileAnimator& TestGetAnimator() { return m_animator; }
 #endif
 
     // Provider linkage for logon notifications
@@ -88,6 +104,8 @@ public:
 private:
     void OnEngineStateUpdate(const PeekAuthResult& result);
     void UpdateStatusText(const std::wstring& newText);
+    void ShowStatusText(const std::wstring& text);
+    void HideStatusText();
     void NotifyCredentialsReady();
     void QueueRetry();
     void RunRetrySequence();
@@ -103,6 +121,8 @@ private:
     std::wstring m_displayName;
     std::wstring m_profileId;
     std::wstring m_statusText;
+    bool m_statusTextVisible;
+    int m_consecutiveFailedAttempts;
     bool m_isAuthenticated;
     bool m_isSelected;
     PeekPipeClient m_pipeClient;

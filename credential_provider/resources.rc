@@ -4,9 +4,6 @@
 
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 
-// Static Fallback Bitmap
-IDB_PEEK_LOGO            BITMAP  "res\\peek_logo.bmp"
-
 // 32-bit ARGB Tile Animation PNG Frames
 IDR_PNG_FRAME_IDLE       RCDATA  "res\\frame_idle.png"
 IDR_PNG_FRAME_SEARCH_1   RCDATA  "res\\frame_search_1.png"

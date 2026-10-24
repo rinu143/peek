@@ -15,6 +15,7 @@ TileAnimator::TileAnimator()
     , m_hasFrames(false)
     , m_currentState(PeekUiState::IDLE)
     , m_currentFrameIndex(0)
+    , m_searchingStep(0)
     , m_hThread(NULL)
     , m_hWakeEvent(NULL)
     , m_hStopEvent(NULL)
@@ -27,6 +28,34 @@ TileAnimator::~TileAnimator()
 {
     Shutdown();
     DeleteCriticalSection(&m_cs);
+}
+
+const wchar_t* TileAnimator::GetFrameKindName(PeekUiState state, size_t index)
+{
+    switch (state)
+    {
+    case PeekUiState::IDLE:
+        return L"IDLE";
+    case PeekUiState::SEARCHING:
+        if (index == 0) return L"SEARCH_1";
+        if (index == 1) return L"SEARCH_2";
+        if (index == 2) return L"SEARCH_3";
+        return L"SEARCH_1";
+    case PeekUiState::FACE_FOUND:
+        return L"FACE_FOUND";
+    case PeekUiState::VERIFYING:
+        return L"VERIFYING";
+    case PeekUiState::LIVENESS:
+        return L"LIVENESS";
+    case PeekUiState::SUCCESS:
+        return L"SUCCESS";
+    case PeekUiState::FAILURE:
+        return L"FAILURE";
+    case PeekUiState::RETRY:
+        return L"RETRY";
+    default:
+        return L"UNKNOWN";
+    }
 }
 
 bool TileAnimator::Initialize(HINSTANCE hInstance, FrameChangedCallback callback)
@@ -54,10 +83,10 @@ bool TileAnimator::Initialize(HINSTANCE hInstance, FrameChangedCallback callback
         return false;
     };
 
-    // 1. IDLE (1 frame)
-    loadFrame(PeekUiState::IDLE, IDR_PNG_FRAME_IDLE);
+    // 1. IDLE: Resting icon mapped to frame_face_found.png
+    loadFrame(PeekUiState::IDLE, IDR_PNG_FRAME_FACE_FOUND);
 
-    // 2. SEARCHING (3 pulse animation frames)
+    // 2. SEARCHING: 3 pulse animation frames
     loadFrame(PeekUiState::SEARCHING, IDR_PNG_FRAME_SEARCH_1);
     loadFrame(PeekUiState::SEARCHING, IDR_PNG_FRAME_SEARCH_2);
     loadFrame(PeekUiState::SEARCHING, IDR_PNG_FRAME_SEARCH_3);
@@ -102,24 +131,32 @@ bool TileAnimator::Initialize(HINSTANCE hInstance, FrameChangedCallback callback
         return false;
     }
 
-    // Launch lightweight background animation thread for multi-frame state cycling
-    m_isRunning = true;
-    m_hThread = CreateThread(NULL, 0, AnimationThreadProc, this, 0, NULL);
-    if (!m_hThread)
-    {
-        Logger::LogError("TileAnimator: Failed to create animation thread");
-        m_isRunning = false;
-        return false;
-    }
-
-    Logger::LogInfo("TileAnimator initialized successfully with 32bpp ARGB frames");
+    Logger::LogInfo("TileAnimator initialized successfully with 32bpp ARGB frames (resting=frame_face_found)");
     return true;
 }
 
-void TileAnimator::Shutdown()
+void TileAnimator::StartAnimationThread()
+{
+    EnterCriticalSection(&m_cs);
+    if (!m_hThread && m_hasFrames && m_hStopEvent)
+    {
+        ResetEvent(m_hStopEvent);
+        m_isRunning = true;
+        m_hThread = CreateThread(NULL, 0, AnimationThreadProc, this, 0, NULL);
+        if (m_hThread)
+        {
+            Logger::LogInfo("TileAnimator: Animation timer thread started");
+        }
+    }
+    LeaveCriticalSection(&m_cs);
+}
+
+void TileAnimator::StopAnimationThread()
 {
     m_isRunning = false;
+    HANDLE hThreadToWait = NULL;
 
+    EnterCriticalSection(&m_cs);
     if (m_hStopEvent)
     {
         SetEvent(m_hStopEvent);
@@ -128,13 +165,21 @@ void TileAnimator::Shutdown()
     {
         SetEvent(m_hWakeEvent);
     }
+    hThreadToWait = m_hThread;
+    m_hThread = NULL;
+    LeaveCriticalSection(&m_cs);
 
-    if (m_hThread)
+    if (hThreadToWait)
     {
-        WaitForSingleObject(m_hThread, 1000);
-        CloseHandle(m_hThread);
-        m_hThread = NULL;
+        WaitForSingleObject(hThreadToWait, 1000);
+        CloseHandle(hThreadToWait);
+        Logger::LogInfo("TileAnimator: Animation timer thread stopped");
     }
+}
+
+void TileAnimator::Shutdown()
+{
+    StopAnimationThread();
 
     if (m_hWakeEvent)
     {
@@ -159,17 +204,26 @@ void TileAnimator::Shutdown()
 void TileAnimator::SetState(PeekUiState newState)
 {
     HBITMAP hbmpNotify = nullptr;
+    const wchar_t* pszKindNotify = L"UNKNOWN";
 
     EnterCriticalSection(&m_cs);
     m_currentState = newState;
     m_currentFrameIndex = 0;
+    m_searchingStep = 0;
 
     auto it = m_stateFrames.find(newState);
     if (it != m_stateFrames.end() && !it->second.empty())
     {
         hbmpNotify = it->second[0];
+        pszKindNotify = GetFrameKindName(newState, 0);
     }
     LeaveCriticalSection(&m_cs);
+
+    // If entering SEARCHING state, ensure timer thread is running
+    if (newState == PeekUiState::SEARCHING)
+    {
+        StartAnimationThread();
+    }
 
     // Wake the worker thread immediately so any in-flight frame timer is cancelled
     if (m_hWakeEvent)
@@ -180,7 +234,7 @@ void TileAnimator::SetState(PeekUiState newState)
     // Deliver the new state's initial frame immediately
     if (m_callback && hbmpNotify)
     {
-        m_callback(hbmpNotify);
+        m_callback(hbmpNotify, pszKindNotify);
     }
 }
 
@@ -195,6 +249,14 @@ PeekUiState TileAnimator::GetState() const
 HBITMAP TileAnimator::GetCurrentFrame() const
 {
     EnterCriticalSection(&m_cs);
+#ifdef PEEK_TEST_BUILD
+    if (m_testOverrideFrame)
+    {
+        HBITMAP hbmp = m_testOverrideFrame;
+        LeaveCriticalSection(&m_cs);
+        return hbmp;
+    }
+#endif
     HBITMAP hbmp = nullptr;
     auto it = m_stateFrames.find(m_currentState);
     if (it != m_stateFrames.end() && !it->second.empty())
@@ -231,7 +293,7 @@ void TileAnimator::AnimationLoop()
         LeaveCriticalSection(&m_cs);
 
         // If the current state has only 1 frame (e.g. SUCCESS, FAILURE, RETRY, FACE_FOUND, IDLE),
-        // there is no timer cycling needed. Wait indefinitely until SetState or Shutdown wakes us.
+        // there is no timer cycling needed. Wait indefinitely until SetState or StopAnimationThread wakes us.
         if (frameCount <= 1)
         {
             HANDLE handles[2] = { m_hStopEvent, m_hWakeEvent };
@@ -244,9 +306,10 @@ void TileAnimator::AnimationLoop()
             continue;
         }
 
-        // For multi-frame states (SEARCHING: 3 pulse frames), wait ~200ms per frame
+        // For multi-frame states (SEARCHING: cycles frame_search_1..3 ping-pong 1,2,3,2),
+        // wait ~150ms per frame (approx 6.67 fps, well within <= 8 calls/second)
         HANDLE handles[2] = { m_hStopEvent, m_hWakeEvent };
-        DWORD waitRes = WaitForMultipleObjects(2, handles, FALSE, 200);
+        DWORD waitRes = WaitForMultipleObjects(2, handles, FALSE, 150);
 
         if (waitRes == WAIT_OBJECT_0)
         {
@@ -262,19 +325,34 @@ void TileAnimator::AnimationLoop()
         {
             // Timer expired: cycle to next frame within the current multi-frame state
             HBITMAP hbmpNotify = nullptr;
+            const wchar_t* pszKindNotify = L"UNKNOWN";
 
             EnterCriticalSection(&m_cs);
             // Verify state has not changed
             if (m_currentState == currentState && !m_stateFrames[currentState].empty())
             {
-                m_currentFrameIndex = (m_currentFrameIndex + 1) % m_stateFrames[currentState].size();
-                hbmpNotify = m_stateFrames[currentState][m_currentFrameIndex];
+                if (currentState == PeekUiState::SEARCHING && m_stateFrames[currentState].size() == 3)
+                {
+                    // Ping-pong sequence: 0, 1, 2, 1 (frames 1, 2, 3, 2)
+                    m_searchingStep = (m_searchingStep + 1) % 4;
+                    static const size_t s_pingPongPattern[4] = { 0, 1, 2, 1 };
+                    static const wchar_t* const s_searchKinds[4] = { L"SEARCH_1", L"SEARCH_2", L"SEARCH_3", L"SEARCH_2" };
+                    m_currentFrameIndex = s_pingPongPattern[m_searchingStep];
+                    hbmpNotify = m_stateFrames[currentState][m_currentFrameIndex];
+                    pszKindNotify = s_searchKinds[m_searchingStep];
+                }
+                else
+                {
+                    m_currentFrameIndex = (m_currentFrameIndex + 1) % m_stateFrames[currentState].size();
+                    hbmpNotify = m_stateFrames[currentState][m_currentFrameIndex];
+                    pszKindNotify = GetFrameKindName(currentState, m_currentFrameIndex);
+                }
             }
             LeaveCriticalSection(&m_cs);
 
             if (m_callback && hbmpNotify)
             {
-                m_callback(hbmpNotify);
+                m_callback(hbmpNotify, pszKindNotify);
             }
         }
     }
@@ -316,12 +394,22 @@ HBITMAP TileAnimator::LoadPngResourceToDib(HINSTANCE hInstance, int resourceId)
         return nullptr;
     }
 
+    // Ensure GDI+ is active
+    ULONG_PTR gdiToken = 0;
+    Gdiplus::GdiplusStartupInput gdiInput;
+    bool localGdiInit = false;
+    if (Gdiplus::GdiplusStartup(&gdiToken, &gdiInput, NULL) == Gdiplus::Ok)
+    {
+        localGdiInit = true;
+    }
+
     Gdiplus::Bitmap* pBmp = Gdiplus::Bitmap::FromStream(pStream);
     pStream->Release();
 
     if (!pBmp || pBmp->GetLastStatus() != Gdiplus::Ok)
     {
         delete pBmp;
+        if (localGdiInit) Gdiplus::GdiplusShutdown(gdiToken);
         return nullptr;
     }
 
@@ -330,6 +418,7 @@ HBITMAP TileAnimator::LoadPngResourceToDib(HINSTANCE hInstance, int resourceId)
     if (width == 0 || height == 0)
     {
         delete pBmp;
+        if (localGdiInit) Gdiplus::GdiplusShutdown(gdiToken);
         return nullptr;
     }
 
@@ -350,6 +439,7 @@ HBITMAP TileAnimator::LoadPngResourceToDib(HINSTANCE hInstance, int resourceId)
     if (!hDib || !pBits)
     {
         delete pBmp;
+        if (localGdiInit) Gdiplus::GdiplusShutdown(gdiToken);
         return nullptr;
     }
 
@@ -380,6 +470,7 @@ HBITMAP TileAnimator::LoadPngResourceToDib(HINSTANCE hInstance, int resourceId)
     }
 
     delete pBmp;
+    if (localGdiInit) Gdiplus::GdiplusShutdown(gdiToken);
     return hDib;
 }
 

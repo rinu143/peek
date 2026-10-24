@@ -1,8 +1,8 @@
-# Phase 5 Verification: Windows Credential Provider Manual Test Checklist
+# Phase 5/7 Verification: Windows Credential Provider Manual Test Checklist
 
 Because the Windows Logon and Lock Screen subsystem (`LogonUI.exe`) executes in an isolated Winlogon desktop session (Session 0 / Winlogon secure desktop), COM credential provider behavior cannot be fully automated via standard headless test runners.
 
-Follow this step-by-step checklist to validate the native C++ Credential Provider on a Windows 10/11 test machine.
+Follow this step-by-step checklist to validate the native C++ Credential Provider on a Windows 10/11 test machine with the polished Phase 7 lock-screen tile experience.
 
 ---
 
@@ -12,57 +12,77 @@ Follow this step-by-step checklist to validate the native C++ Credential Provide
 - [ ] Build `PeekCredentialProvider.dll` in Release x64 mode:
   ```cmd
   cd credential_provider
-  msbuild PeekCredentialProvider.sln /p:Configuration=Release /p:Platform=x64
+  cmake --build build --config Release
   ```
 - [ ] Ensure Python 3.10+ virtual environment has dependencies installed (`pip install -r requirements.txt`).
-- [ ] Ensure at least one genuine user profile is enrolled in DPAPI storage (`storage/template_store.py`)
+- [ ] Ensure at least one genuine user profile is enrolled in DPAPI storage (`storage/template_store.py`).
 
 ---
 
-## Test Cases
+## Lock-Screen Tile Specification & Polish Checklist
 
-### LSA Secret Password Linking & Stale-Secret Verification
+### 1. Tile Title & Identity
+- [ ] **Title**: The tile displays **"PEEK"** in both the Sign-in options list and the tile label (`PFI_LABEL` tagged with `CPFG_CREDENTIAL_PROVIDER_LABEL`).
+  - No longer shows "Peek - Face Unlock" or "Peek Facial Recognition".
+- [ ] **No Email / Username Displayed**:
+  - `PFI_DISPLAY_NAME` returns `CPFS_HIDDEN` in all states.
+  - The Microsoft-account email / Windows username is NOT visible in any field on the lock screen tile.
+  - The enrolled name is kept internal and used solely for the success greeting.
 
-- [ ] **Link via UAC**:
-  1. Open PeekSetup (`app/PeekSetup/bin/Release/net8.0-windows/win-x64/publish/PeekSetup.exe`).
-  2. Complete face enrollment (Step 2) or choose "Link or Replace Windows Password" from the already-set-up screen.
-  3. On Step 3 ("Link Windows Password"), click "Link Windows Password".
-  4. Confirm a standard Windows UAC prompt appears asking for Administrator permission.
-  5. Accept UAC; confirm the elevated dialog displays the target account (`DOMAIN\user`).
-  6. Enter the correct Windows password and click "Link Password".
-  7. Confirm the window closes with exit code 0 and Step 4 shows "Password Linked" in green.
-  8. Confirm any old `<profile_id>.secret` file in `%LOCALAPPDATA%\Peek\Profiles` was automatically deleted.
+### 2. Icon Transparency & Resting State
+- [ ] **Resting / Idle Icon**:
+  - When the tile is not selected, in `IDLE` state, or on static fallback, the icon is `res\frame_face_found.png`.
+  - The glyph renders with true 32bpp alpha transparency (no black square/border behind the glyph in LogonUI).
+- [ ] **DuplicateArgbBitmap & GDI DIB Section**:
+  - Verify in `%SystemRoot%\Temp\credential_provider.log` (or local CP log) that every frame returned by `GetBitmapValue` and `SetFieldBitmap` is a fresh 32bpp top-down `BI_RGB` DIB section duplicated via `DuplicateArgbBitmap`.
+  - Confirm the logged frame metrics:
+    - `bmBitsPixel = 32`
+    - Corner pixel alpha `(0,0) = 0` (fully transparent)
+    - Center pixel alpha `> 0` (opaque/semi-transparent icon glyph)
+    - First 20 callback invocations log running count and `HRESULT` (S_OK).
 
-- [ ] **Win+L -> Face -> Unlock**:
-  1. Start the engine service (`python scripts/run_engine_service.py`).
-  2. Lock workstation with `Win + L`.
-  3. Look at camera; tile displays "Looking for face..." -> "Face detected — verifying..." -> "Hello, [Name]!".
-  4. Session unlocks directly to the Windows desktop with no password typed.
+### 3. Icon Animation & State Progression (No Status Text While Searching)
+- [ ] **Animation While Searching**:
+  - Upon selecting the PEEK tile, `SEARCHING` state begins cycling frames 1..3 in ping-pong order: `1 -> 2 -> 3 -> 2` at ~150ms interval (~6.67 fps, within the <= 8 calls/second rate limit).
+  - The animation timer thread runs smoothly while active and stops immediately when the tile is deselected or on `UnAdvise`.
+- [ ] **No Text While Searching**:
+  - `PFI_STATUS_TEXT` remains completely hidden (`CPFS_HIDDEN`) during `SEARCHING`, `FACE_FOUND`, `VERIFYING`, and `LIVENESS`.
+  - The icon animation is the **sole visual feedback** provided to the user.
+- [ ] **State Frame Synchrony**:
+  - `FACE_FOUND` displays `frame_face_found.png`.
+  - `VERIFYING` displays `frame_verifying.png`.
+  - `LIVENESS` displays `frame_liveness.png`.
+  - State transitions immediately update the icon with zero lag.
 
-- [ ] **Change Windows Password -> Stale Secret Removal**:
-  1. Change the real Windows account password (`Ctrl + Alt + Del` -> "Change a password").
-  2. Lock workstation with `Win + L`.
-  3. Look at camera; Peek verifies face and attempts unlock with the previously saved LSA secret.
-  4. Winlogon rejects with wrong password; Peek immediately deletes the stale LSA secret (`L$PeekCred_<SID>`).
-  5. The tile calmly fails open to password/PIN input without crashing.
-  6. Subsequent face unlock attempts fail open immediately to password/PIN (never submits stale password twice).
+### 4. Text Policy & Failure / Fallback Handling
+- [ ] **Engine Offline / Camera Failure**:
+  - When the engine service is stopped, offline, or pipe disconnected:
+    - Status text immediately becomes visible (`CPFS_DISPLAY_IN_SELECTED_TILE`).
+    - Status text reads: **"Sign in with your PIN or password"**.
+    - Detailed technical reason is recorded in the log file only, never shown to the user.
+- [ ] **Retry Limit (Max 3 Cycles)**:
+  - When authentication fails or times out (`AUTH_FAILED` or `TIMEOUT`):
+    - **Cycle 1 & 2**: Tile shows calm `frame_failure.png` followed by `frame_retry.png` and resumes searching. Status text **remains hidden**.
+    - **Cycle 3 (Max Reached)**: Consecutive failure count reaches 3 (`kMaxRetryCycles = 3`).
+      - Scanning session stops immediately.
+      - Icon displays `frame_failure.png`.
+      - Status text becomes visible displaying: **"Sign in with your PIN or password"**.
+      - Engine stops retrying automatically.
+  - **Tile Re-selection**:
+    - Clicking away from the tile and re-selecting it (`SetSelected`) resets the consecutive failure counter to 0, hides the status text, and begins a fresh scanning cycle.
 
-- [ ] **Profile ID Binding Verification**:
-  1. Re-enroll face under a new profile_id without relinking the password.
-  2. Lock workstation with `Win + L`.
-  3. Authenticate with face; face verification succeeds, but profile_id binding mismatch prevents reading the secret.
-  4. Tile calmly fails open to password/PIN input (no desktop unlock with unbound secret).
+### 5. Success Greeting & Desktop Unlock
+- [ ] **Success Presentation**:
+  - Upon genuine `AUTHENTICATED` message from engine:
+    - Icon displays smiling success glyph (`frame_success.png`).
+    - Status text becomes visible displaying: **"Hello, [Enrolled Name]!"** (or **"Welcome back"** if no custom display name was enrolled).
+    - Tile holds greeting and success icon for ~750ms so user clearly perceives successful recognition.
+    - Windows LogonUI unlocks session and smoothly transitions to the desktop.
+  - Security invariant: The tile **never** advances to `SUCCESS` without a verified `AUTHENTICATED` IPC message.
 
-- [ ] **Engine Offline -> Fail-Open**:
-  1. Stop or terminate `PeekEngine.exe` or `run_engine_service.py`.
-  2. Lock workstation with `Win + L`.
-  3. Peek tile displays: `"Peek engine offline. Sign in with password or PIN."`.
-  4. Standard Windows Password and PIN sign-in remain fully functional with zero delay.
+---
 
-- [ ] **Uninstaller Removes LSA Secrets**:
-  1. Run `scripts/packaging/uninstall.ps1` elevated as Administrator.
-  2. Verify uninstaller executes `PeekSetup.exe --unlink --sid <SID>` for each local account.
-  3. Verify `L$PeekCred_<SID>` secrets are cleanly removed from Windows LSA.
+## End-to-End Test Scenarios
 
 ### Test 1: DLL Registration & Registry Verification
 
@@ -71,7 +91,7 @@ Follow this step-by-step checklist to validate the native C++ Credential Provide
 1. Open an Administrator Command Prompt.
 2. Run:
    ```cmd
-   regsvr32.exe credential_provider\x64\Release\PeekCredentialProvider.dll
+   regsvr32.exe credential_provider\build\Release\PeekCredentialProvider.dll
    ```
    - [ ] Verify that a dialog reports: `DllRegisterServer in PeekCredentialProvider.dll succeeded.`
 3. Verify registry entries:
@@ -86,22 +106,23 @@ Follow this step-by-step checklist to validate the native C++ Credential Provide
 
 ### Test 2: Fail-Open Security (Engine Service Not Running)
 
-**Goal**: Verify that when the Python background service is stopped or offline, the system **never locks the user out** and standard Windows authentication options remain fully functional.
+**Goal**: Verify that when the Python background service is stopped or offline, the system **never locks the user out** and immediately guides the user to PIN/password.
 
 1. Ensure `scripts/run_engine_service.py` is **NOT** running.
 2. Lock the workstation: `Win + L`.
-3. Select the "Peek Facial Recognition" tile.
-   - [ ] Status text displays: `"Peek engine offline. Sign in with password or PIN."`
-   - [ ] No crash, no freeze, no infinite spinner.
-4. Click "Sign-in options" and select the standard Windows Password or PIN tile.
+3. Observe the resting icon: `frame_face_found.png` is displayed with title **"PEEK"** and no email.
+4. Select the "PEEK" tile.
+   - [ ] Status text immediately displays: **"Sign in with your PIN or password"**.
+   - [ ] No freeze, crash, or hung camera session.
+5. Click "Sign-in options" and select the standard Windows Password or PIN tile.
    - [ ] Standard password/PIN prompt works normally.
    - [ ] Enter valid password/PIN and unlock desktop.
 
 ---
 
-### Test 3: Successful Biometric Unlock Flow
+### Test 3: Successful Biometric Unlock Flow (Animation Without Text)
 
-**Goal**: Verify end-to-end authentication when the live user is present in front of the camera.
+**Goal**: Verify end-to-end authentication when the enrolled user is in front of the camera.
 
 1. Start the engine service in an Administrator console:
    ```cmd
@@ -109,190 +130,111 @@ Follow this step-by-step checklist to validate the native C++ Credential Provide
    ```
    - [ ] Confirm console logs: `Listening on Named Pipe: \\.\pipe\PeekEngine`.
 2. Lock the workstation: `Win + L`.
-3. Select the "Peek Facial Recognition" tile.
-4. Observe the tile status text progression:
-   - [ ] Stage 1: `"Acquiring camera device..."`
-   - [ ] Stage 2: `"Looking for face..."`
-   - [ ] Stage 3: `"Face detected — verifying..."`
-   - [ ] Stage 4: `"Evaluating liveness..."` (or active challenge prompt e.g. `"Tilt head up"`)
-   - [ ] Stage 5: `"Verified! Signing in..."`
-5. Windows completes unlock and returns to the desktop.
-6. Verify service console logs:
-   - [ ] Log displays: `Authentication verified for user '[User]'. Emitting AUTHENTICATED.`
-   - [ ] Log confirms camera capture was released upon unlock completion.
+3. Verify resting tile:
+   - [ ] Tile title is **"PEEK"**.
+   - [ ] No email address or Windows user name is visible.
+   - [ ] Resting icon is `frame_face_found.png` with transparent background.
+4. Select the "PEEK" tile:
+   - [ ] Search animation cycles `1, 2, 3, 2` smoothly at ~150ms.
+   - [ ] **NO status text is displayed** while searching.
+   - [ ] As face is detected and verified, icon switches to face found / verifying / liveness frames without status text.
+5. Biometric match completes:
+   - [ ] Icon switches to `frame_success.png`.
+   - [ ] Status text displays **"Hello, [Name]!"** (or **"Welcome back"**).
+   - [ ] After ~750ms hold, Windows unlocks and returns to desktop.
+6. Verify `credential_provider.log`:
+   - [ ] Logs show 32bpp depth, alpha(0,0)=0, center alpha, and `SetFieldBitmap` result codes for each frame kind.
 
 ---
 
-### Test 4: Cancel Mid-Authentication (Bounded Latency)
+### Test 4: Cancel Mid-Authentication (Rapid Switching)
 
-**Goal**: Verify that if a user decides to switch to password/PIN while facial recognition is actively scanning, the engine cancels immediately (<50ms) without locking the camera.
+**Goal**: Verify that if a user switches to password/PIN while facial recognition is actively scanning, the engine cancels immediately (<50ms) and animation stops.
 
 1. Ensure `python scripts/run_engine_service.py` is running.
 2. Lock the workstation: `Win + L`.
-3. Select the Peek tile to start scanning.
-4. While the camera is active (`Looking for face...`), immediately click "Sign-in options" and click the Password icon.
+3. Select the PEEK tile to start scanning.
+4. While the radar animation is cycling, immediately click "Sign-in options" and select the Password icon.
    - [ ] Switch occurs with zero perceived lag (<100ms).
+   - [ ] Tile animation thread terminates immediately upon deselection.
    - [ ] Camera indicator LED turns off promptly.
    - [ ] Service logs confirm: `CANCEL_AUTH received from client; terminating session.`
 
 ---
 
-### Test 5: Unenrolled / Impostor Face Rejection
+### Test 5: Retry Limit & Fallback (3 Cycles)
 
-**Goal**: Confirm that an unrecognized face does not grant access.
+**Goal**: Confirm that repeated failed matches do not loop indefinitely and gracefully stop at 3 cycles with fallback text.
 
 1. Ensure `python scripts/run_engine_service.py` is running.
 2. Lock the workstation: `Win + L`.
-3. Have an unenrolled person look into the webcam.
-4. Observe tile behavior:
-   - [ ] Status text indicates: `"Verifying..."` followed by `"Authentication failed. Please use password/PIN."`
-   - [ ] Desktop remains securely locked.
-   - [ ] User can switch to password/PIN tile to unlock.
+3. Select the "PEEK" tile and present an un-enrolled face or obscure the camera.
+4. Observe retry progression:
+   - [ ] **Attempt 1**: Fails, shows calm `frame_failure.png` then `frame_retry.png`; no status text shown.
+   - [ ] **Attempt 2**: Fails, shows calm `frame_failure.png` then `frame_retry.png`; no status text shown.
+   - [ ] **Attempt 3 (Limit Reached)**: Fails; retry cycle limit (3) is reached:
+     - Scanning session terminates (camera turns off).
+     - Icon displays `frame_failure.png`.
+     - Status text displays: **"Sign in with your PIN or password"**.
+     - No further retries occur.
+5. Click away and re-select the "PEEK" tile:
+   - [ ] Consecutive failure counter resets to 0.
+   - [ ] Status text hides again.
+   - [ ] Camera activates and search animation restarts.
 
 ---
 
 ### Test 6: Anti-Spoofing & Replay Attack Defense
 
-**Goal**: Confirm that photo/video/bezel replay attacks are blocked at the lock screen.
+**Goal**: Confirm that photo/video/bezel replay attacks are rejected.
 
 1. Ensure `python scripts/run_engine_service.py` is running.
 2. Lock the workstation: `Win + L`.
 3. Present a smartphone replay showing a photo/video of the enrolled user.
 4. Observe tile behavior:
-   - [ ] Status text displays: `"Authentication failed. Please use password/PIN."`
+   - [ ] Spoof is rejected; shows failure/retry frames.
    - [ ] Service logs: `Spoof attack detected: BEZEL_DETECTED (or SCREEN_MOIRE / LACKS_PARALLAX). Emitting AUTH_FAILED.`
    - [ ] Desktop remains securely locked.
+   - [ ] After 3 failed cycles, displays **"Sign in with your PIN or password"**.
 
 ---
 
-### Test 7: Phase 7 Lock-Screen UX — 1:1 State Icon Progression & Animation
+### Test 7: Fail-Soft Fallback (Missing Files or GDI+ Failure)
 
-**Goal**: Verify that the tile image icon and status text change in exact 1:1 synchrony, driven solely by real IPC pipe state messages.
-
-1. Ensure `python scripts/run_engine_service.py --debug` is running.
-2. Lock the workstation: `Win + L`.
-3. Select the "Peek Facial Recognition" tile.
-4. Verify visual progression:
-   - [ ] **SEARCHING**: Status text `"Looking for face..."` is accompanied by the 3-frame radial radar scan pulse animation cycling at ~200ms per frame.
-   - [ ] **FACE_FOUND**: Status text `"Face detected — verifying..."` pairs immediately with the focused corner bracket lock-on icon.
-   - [ ] **VERIFYING**: Status text `"Verifying biometric match..."` pairs with the biometric alignment node icon.
-   - [ ] **LIVENESS**: Active challenge prompt or `"Checking liveness..."` pairs with the dynamic glance guidance icon.
-   - [ ] State transitions immediately override in-flight animation frames with zero visual lag or lingering pulse frames.
-
----
-
-### Test 8: Phase 7 Success Copy & Pre-Unlock Hold Duration
-
-**Goal**: Verify dynamic name greeting and deliberate brief pause on SUCCESS before Windows unlock completes.
-
-1. Authenticate with an enrolled profile with display name set (e.g. `"Rinu"`):
-   - [ ] Status text transitions to: `"Hello, Rinu!"` (displays the real enrolled name, NOT the Windows username, and never a placeholder).
-   - [ ] Icon switches to the smiling teal success icon (`frame_success.png`).
-   - [ ] The success icon and greeting hold steady for ~750ms so the user clearly sees the visual confirmation.
-   - [ ] Windows automatically unlocks workstation after the hold beat.
-2. Authenticate with an enrolled profile where no custom display name was configured:
-   - [ ] Status text displays: `"Welcome back"` (clean fallback, never an empty string or hardcoded placeholder).
-   - [ ] Smiling success icon displays for the brief hold before unlocking.
-
----
-
-### Test 9: Phase 7 Calm Failure & Explicit RETRY Beat
-
-**Goal**: Verify calm failure treatment with no alarming artifacts, followed by an explicit RETRY beat before re-scanning.
-
-1. Present an unauthorized face or photo spoof to trigger failure:
-   - [ ] Status text displays `"Authentication failed. Try again or sign in with password/PIN."`
-   - [ ] Icon displays the calm failure sad silhouette (`frame_failure.png`) in neutral slate monochrome.
-   - [ ] **CRITICAL**: Confirm NO red screen, NO shake effect, NO sound.
-2. Observe automatic recovery loop:
-   - [ ] Failure presentation holds calmly for ~1.2s.
-   - [ ] Tile transitions to explicit **RETRY** beat: status text displays `"Try again..."` accompanied by circular reload arrow icon (`frame_retry.png`) for ~600ms.
-   - [ ] Tile smoothly transitions back to **SEARCHING** radar pulse animation and resumes scanning without requiring manual user clicks.
-3. Allow engine session to time out:
-   - [ ] Status text displays `"Timed out. Try again or sign in with password."` paired with the calm failure icon, followed by the explicit RETRY beat.
-
----
-
-### Test 10: Fail-Soft Fallback (Missing Resources or GDI+ Failure)
-
-**Goal**: Confirm that if TileAnimator encounters any resource loading failure, the credential provider fails soft to the static logo.
+**Goal**: Confirm that if any frame fails to load, the provider falls back safely to `frame_face_found.png` decoded directly, keeps "PEEK" title and hidden email, and never crashes `LogonUI.exe`.
 
 1. If resource extraction fails or GDI+ is unavailable:
-   - [ ] Provider falls back to `IDB_PEEK_LOGO` static bitmap.
-   - [ ] Winlogon never crashes or freezes.
-   - [ ] Authentication and password/PIN fallback continue to function normally.
+   - [ ] Provider falls back to decoded `IDR_PNG_FRAME_FACE_FOUND` icon section.
+   - [ ] Title remains **"PEEK"** and email remains hidden.
+   - [ ] Winlogon / LogonUI never crashes or freezes.
+   - [ ] Password and PIN sign-in continue to work without impediment.
 
 ---
 
-### Test 11: Clean Unregistration
+### Test 8: Stale-Secret Deletion via ReportResult on Password Change
+
+**Goal**: Verify that when a user password is changed externally, Winlogon rejects the stale secret and `ReportResult` deletes the stale LSA secret (`L$PeekCred_<SID>`) and local secret file, failing open to standard password/PIN entry.
+
+1. Change Windows password externally (`Ctrl + Alt + Del -> Change a password`).
+2. Lock the workstation: `Win + L`.
+3. Authenticate with face:
+   - [ ] Winlogon rejects the serialized logon.
+   - [ ] `ReportResult` handles `STATUS_LOGON_FAILURE` and deletes stale secret.
+   - [ ] Tile falls open cleanly to password/PIN input.
+   - [ ] Subsequent attempts do not re-submit the stale password.
+
+---
+
+### Test 9: Clean Unregistration
 
 **Goal**: Verify that unregistering the DLL cleanly removes all registry keys and restores default Windows lock screen behavior.
 
 1. Open Administrator Command Prompt.
 2. Run:
    ```cmd
-   regsvr32.exe /u credential_provider\x64\Release\PeekCredentialProvider.dll
+   regsvr32.exe /u credential_provider\build\Release\PeekCredentialProvider.dll
    ```
    - [ ] Dialog reports: `DllUnregisterServer in PeekCredentialProvider.dll succeeded.`
-3. Lock the workstation: `Win + L`.
-   - [ ] Peek tile is completely removed from the lock screen.
+3. Lock workstation (`Win + L`):
+   - [ ] PEEK tile is completely removed from lock screen.
    - [ ] Default Windows logon tiles function as normal.
-
----
-
-### Test 12: Stale-Secret Deletion via ReportResult on External Password Change
-
-**Goal**: Verify that when a user's Windows password is changed outside Peek, Peek's Credential Provider does not redundantly attempt LogonUserW pre-validation; instead, Winlogon serves as the single authority, rejects the stale password, and invokes `ReportResult` with `STATUS_LOGON_FAILURE` / `STATUS_WRONG_PASSWORD`, which triggers automatic deletion of that user's `<profile_id>.secret` file while cleanly falling back to standard authentication.
-
-1. Ensure the user is enrolled and has linked their current Windows password:
-   - Confirm `%LOCALAPPDATA%\Peek\Profiles\<profile_id>.secret` exists and is encrypted with machine-bound entropy.
-2. Deliberately change the Windows password externally (e.g., via `Ctrl + Alt + Del -> Change a password` or `net user <username> <new_password>`).
-3. Lock the workstation: `Win + L`.
-4. Select the Peek tile and look at the camera to trigger successful face verification.
-5. Observe authentication flow:
-   - [ ] Peek packages the decrypted stored password directly without performing a local `LogonUserW` pre-check (Winlogon is the sole authority; lockout counters are not double-incremented).
-   - [ ] Winlogon receives the serialized Kerberos logon and rejects the stale password.
-   - [ ] Winlogon invokes `PeekCredential::ReportResult` with `STATUS_LOGON_FAILURE` (0xC000006D) / `STATUS_WRONG_PASSWORD` (0xC000006A).
-   - [ ] `ReportResult` executes `PeekSecretVault::DeleteWrappedSecret` targeted strictly to the failing profile and session.
-   - [ ] LogonUI displays the standard Windows sign-in error or sign-in options tile.
-6. Unlock the workstation manually using the new password or PIN.
-7. Verify filesystem state:
-   - [ ] Confirm `%LOCALAPPDATA%\Peek\Profiles\<profile_id>.secret` has been deleted.
-   - [ ] Confirm no other profiles or data files were removed.
-   - [ ] Lock workstation again (`Win + L`); confirm subsequent face match cleanly falls back to standard password/PIN entry with `CPGSR_NO_CREDENTIAL_FINISHED` without attempting to submit stale credentials.
-
----
-
-### Test 13: Native WPF Setup App (`app/PeekSetup`) End-to-End Enrollment & Credential Provider Unlock
-
-**Goal**: Verify that a user profile and linked password created entirely through the native WPF desktop app (`app/PeekSetup/`) is 100% binary-compatible with the native C++ Credential Provider for lock screen auto-unlock.
-
-1. Start the Peek engine service in an Administrator console:
-   ```cmd
-   python scripts/run_engine_service.py --debug
-   ```
-2. Launch the native WPF setup application:
-   ```cmd
-   dotnet run --project app/PeekSetup/PeekSetup.csproj
-   ```
-3. Complete Step 1 (Welcome):
-   - [ ] Confirm display name is pre-filled from current Windows username (`Environment.UserName`).
-   - [ ] Click "Begin Face Enrollment".
-4. Complete Step 2 (Face Enrollment):
-   - [ ] Verify the WPF Image displays decoded camera preview frames over `\\.\pipe\PeekEnrollment`.
-   - [ ] Observe guidance text overlay and 9-pose progress indicators updating in real time.
-   - [ ] Complete all 9 head poses; verify automatic transition to Step 3 upon `ENROLLMENT_COMPLETE`.
-5. Complete Step 3 (Optional Password Linking):
-   - [ ] Enter the correct current Windows account password into the secure `PasswordBox`.
-   - [ ] Click "Link Password & Finish".
-   - [ ] Confirm verification succeeds and transitions to Step 4.
-   - [ ] Inspect `%LOCALAPPDATA%\Peek\Profiles`: confirm `<profile_id>.json` and `<profile_id>.secret` exist.
-6. Test Lock Screen Unlock with Credential Provider:
-   - [ ] Lock the workstation: `Win + L`.
-   - [ ] Select the "Peek Facial Recognition" tile.
-   - [ ] Face the camera: Credential Provider decrypts the `.secret` file written by `PeekSetup`, submits Kerberos interactive logon serialization, and successfully unlocks Windows directly to the desktop.
-7. Test Face-Only Mode (Password Skipped):
-   - [ ] Run `app/PeekSetup` again, enroll a new profile, but click "Skip for Now" on Step 3.
-   - [ ] Confirm no `.secret` file is written for this profile.
-   - [ ] Lock workstation (`Win + L`): confirm face verification succeeds and Credential Provider cleanly falls open to PIN/password entry.
-

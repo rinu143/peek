@@ -12,6 +12,7 @@
 #include <functional>
 #include <vector>
 #include <map>
+#include <string>
 
 // UI Presentation States matching the reference state machine
 enum class PeekUiState
@@ -29,9 +30,9 @@ enum class PeekUiState
 class TileAnimator
 {
 public:
-    // Callback invoked when a frame updates, receiving the new 32bpp HBITMAP.
+    // Callback invoked when a frame updates, receiving the new 32bpp HBITMAP and frame kind name.
     // TileAnimator is structurally incapable of calling authentication or logon methods.
-    using FrameChangedCallback = std::function<void(HBITMAP hbmp)>;
+    using FrameChangedCallback = std::function<void(HBITMAP hbmp, const wchar_t* pszFrameKind)>;
 
     TileAnimator();
     ~TileAnimator();
@@ -42,6 +43,10 @@ public:
 
     // Shuts down animation thread and cleans up GDI+ resources.
     void Shutdown();
+
+    // Starts/stops the timer thread for rate-controlled cycling
+    void StartAnimationThread();
+    void StopAnimationThread();
 
     // Sets the presentation state. Must only be driven by real pipe state updates.
     // State transitions cancel any in-flight frame timer instantly.
@@ -56,13 +61,25 @@ public:
     // Returns true if frames are loaded and ready.
     bool HasFrames() const { return m_hasFrames; }
 
+    // Static helper to load a PNG resource into a fresh 32bpp top-down ARGB DIB section preserving transparency
+    static HBITMAP LoadPngResourceToDib(HINSTANCE hInstance, int resourceId);
+
+    // Static helper to get readable frame kind name
+    static const wchar_t* GetFrameKindName(PeekUiState state, size_t index = 0);
+
+#ifdef PEEK_TEST_BUILD
+    void TestSetCurrentFrame(HBITMAP hbmp)
+    {
+        EnterCriticalSection(&m_cs);
+        m_testOverrideFrame = hbmp;
+        LeaveCriticalSection(&m_cs);
+    }
+#endif
+
 private:
-    // Background animation worker loop for multi-frame state cycling (~200ms per frame)
+    // Background animation worker loop for multi-frame state cycling (~150ms per frame ping-pong)
     static DWORD WINAPI AnimationThreadProc(LPVOID lpParam);
     void AnimationLoop();
-
-    // Loads a PNG resource into a 32bpp ARGB DIB section preserving transparency
-    HBITMAP LoadPngResourceToDib(HINSTANCE hInstance, int resourceId);
 
     // Frees all cached DIB section bitmaps
     void CleanupBitmaps();
@@ -76,6 +93,7 @@ private:
     mutable CRITICAL_SECTION m_cs;
     PeekUiState m_currentState;
     size_t m_currentFrameIndex;
+    size_t m_searchingStep;
 
     // Map each state to its list of pre-rendered 32bpp DIB section frames
     std::map<PeekUiState, std::vector<HBITMAP>> m_stateFrames;
@@ -85,4 +103,8 @@ private:
     HANDLE m_hWakeEvent;
     HANDLE m_hStopEvent;
     std::atomic<bool> m_isRunning;
+
+#ifdef PEEK_TEST_BUILD
+    HBITMAP m_testOverrideFrame = nullptr;
+#endif
 };

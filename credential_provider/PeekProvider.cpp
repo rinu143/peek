@@ -5,7 +5,7 @@
 static const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR s_rgcpfd[PFI_COUNT] =
 {
     { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Peek Biometrics"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
-    { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Peek - Face Unlock"), CPFG_CREDENTIAL_PROVIDER_LABEL },
+    { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"PEEK"), CPFG_CREDENTIAL_PROVIDER_LABEL },
     { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User"),              GUID_NULL },
     { PFI_STATUS_TEXT,  CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status"),            GUID_NULL },
 };

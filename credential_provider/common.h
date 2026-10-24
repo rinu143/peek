@@ -570,11 +570,74 @@ namespace PeekDiagnostics
 enum PEEK_FIELD_ID
 {
     PFI_LOGO = 0,             // CPFT_TILE_IMAGE: Peek Biometric Logo (guidFieldType = CPFG_CREDENTIAL_PROVIDER_LOGO)
-    PFI_LABEL = 1,            // CPFT_SMALL_TEXT: Credential Provider label/title ("Peek - Face Unlock")
-    PFI_DISPLAY_NAME = 2,     // CPFT_LARGE_TEXT: User display name / Peek greeting
-    PFI_STATUS_TEXT = 3,      // CPFT_SMALL_TEXT: Dynamic IPC state updates
+    PFI_LABEL = 1,            // CPFT_SMALL_TEXT: Credential Provider label/title ("PEEK")
+    PFI_DISPLAY_NAME = 2,     // CPFT_LARGE_TEXT: User display name (hidden)
+    PFI_STATUS_TEXT = 3,      // CPFT_SMALL_TEXT: Dynamic IPC state updates / fallback text
     PFI_COUNT = 4
 };
+
+// Creates a fresh 32bpp top-down BI_RGB DIB section of the same size and memcpy's pixel bits (no CopyImage)
+inline HBITMAP DuplicateArgbBitmap(HBITMAP hbmp)
+{
+    if (!hbmp) return nullptr;
+
+    DIBSECTION ds = {};
+    BITMAP bm = {};
+    int width = 0;
+    int height = 0;
+    void* pSrcBits = nullptr;
+
+    if (GetObjectW(hbmp, sizeof(ds), &ds) == sizeof(ds) && ds.dsBm.bmBits != nullptr)
+    {
+        width = ds.dsBm.bmWidth;
+        height = abs(ds.dsBm.bmHeight);
+        pSrcBits = ds.dsBm.bmBits;
+    }
+    else if (GetObjectW(hbmp, sizeof(bm), &bm) == sizeof(bm))
+    {
+        width = bm.bmWidth;
+        height = abs(bm.bmHeight);
+        pSrcBits = bm.bmBits;
+    }
+
+    if (width <= 0 || height <= 0)
+    {
+        return nullptr;
+    }
+
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -(LONG)height; // top-down
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* pDstBits = nullptr;
+    HDC hdc = GetDC(NULL);
+    HBITMAP hDuplicate = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pDstBits, NULL, 0);
+    ReleaseDC(NULL, hdc);
+
+    if (!hDuplicate || !pDstBits)
+    {
+        if (hDuplicate) DeleteObject(hDuplicate);
+        return nullptr;
+    }
+
+    size_t cbSize = static_cast<size_t>(width) * height * 4;
+    if (pSrcBits)
+    {
+        memcpy(pDstBits, pSrcBits, cbSize);
+    }
+    else
+    {
+        HDC hdcMem = GetDC(NULL);
+        GetDIBits(hdcMem, hbmp, 0, height, pDstBits, &bmi, DIB_RGB_COLORS);
+        ReleaseDC(NULL, hdcMem);
+    }
+
+    return hDuplicate;
+}
 
 // Global DLL Module Handle and Reference Counting
 extern HINSTANCE g_hinst;

@@ -13,26 +13,108 @@ PeekCredential::PeekCredential()
     , m_pProvider(nullptr)
     , m_isAuthenticated(false)
     , m_isSelected(false)
-    , m_displayName(L"Peek Facial Recognition")
-    , m_statusText(L"Looking for face...")
+    , m_displayName(L"")
+    , m_statusText(L"")
+    , m_statusTextVisible(false)
+    , m_consecutiveFailedAttempts(0)
     , m_hRetryCancelEvent(NULL)
 {
     InitializeCriticalSection(&m_cs);
     m_hRetryCancelEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
 
     // Initialize TileAnimator with a frame update callback that notifies LogonUI via SetFieldBitmap
-    m_animator.Initialize(g_hinst, [this](HBITMAP hbmp) {
+    m_animator.Initialize(g_hinst, [this](HBITMAP hbmp, const wchar_t* pszFrameKind) {
         EnterCriticalSection(&m_cs);
         ICredentialProviderCredentialEvents* pcpce = m_pcpce;
         if (pcpce) pcpce->AddRef();
+        bool isSelected = m_isSelected;
         LeaveCriticalSection(&m_cs);
 
-        if (pcpce)
+        if (!pcpce || !isSelected)
         {
-            HBITMAP hCopy = static_cast<HBITMAP>(CopyImage(hbmp, IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION));
-            pcpce->SetFieldBitmap(this, PFI_LOGO, hCopy ? hCopy : hbmp);
-            pcpce->Release();
+            if (pcpce) pcpce->Release();
+            return;
         }
+
+        // Rate-limit SetFieldBitmap to <= ~8 calls/second (minimum ~120ms between calls)
+        static ULONGLONG s_lastCallTick = 0;
+        ULONGLONG now = GetTickCount64();
+        if (now - s_lastCallTick < 120)
+        {
+            pcpce->Release();
+            return;
+        }
+        s_lastCallTick = now;
+
+        // Fresh 32bpp top-down BI_RGB DIB section copy (LogonUI owns what it receives)
+        HBITMAP hFresh = DuplicateArgbBitmap(hbmp);
+        if (!hFresh)
+        {
+            pcpce->Release();
+            return;
+        }
+
+        HRESULT hr = pcpce->SetFieldBitmap(this, PFI_LOGO, hFresh);
+
+        // Logging: once per frame kind: bitmap width/height/bmBitsPixel and the alpha of pixel (0,0) and of the center pixel, plus the HRESULT of SetFieldBitmap.
+        static std::set<std::wstring> s_loggedFrameKinds;
+        static CRITICAL_SECTION s_logCs;
+        static INIT_ONCE s_initLogOnce = INIT_ONCE_STATIC_INIT;
+        InitOnceExecuteOnce(&s_initLogOnce, [](PINIT_ONCE, PVOID, PVOID*) -> BOOL {
+            InitializeCriticalSection(&s_logCs);
+            return TRUE;
+        }, NULL, NULL);
+
+        std::wstring frameKindStr = pszFrameKind ? pszFrameKind : L"UNKNOWN";
+        bool needLogFrameKind = false;
+        EnterCriticalSection(&s_logCs);
+        if (s_loggedFrameKinds.find(frameKindStr) == s_loggedFrameKinds.end())
+        {
+            s_loggedFrameKinds.insert(frameKindStr);
+            needLogFrameKind = true;
+        }
+        LeaveCriticalSection(&s_logCs);
+
+        if (needLogFrameKind)
+        {
+            DIBSECTION ds = {};
+            if (GetObjectW(hFresh, sizeof(ds), &ds) == sizeof(ds) && ds.dsBm.bmBits)
+            {
+                int w = ds.dsBm.bmWidth;
+                int h = abs(ds.dsBm.bmHeight);
+                int bpp = ds.dsBm.bmBitsPixel;
+                const BYTE* pBits = reinterpret_cast<const BYTE*>(ds.dsBm.bmBits);
+                BYTE a00 = (bpp == 32) ? pBits[3] : 0;
+                int cx = w / 2;
+                int cy = h / 2;
+                BYTE aCenter = (bpp == 32) ? pBits[(cy * w + cx) * 4 + 3] : 0;
+
+                wchar_t szLog[384] = {};
+                swprintf_s(szLog, ARRAYSIZE(szLog),
+                    L"Tile frame [%s]: w=%d, h=%d, bpp=%d, alpha(0,0)=%u, alpha(center)=%u, SetFieldBitmap hr=0x%08X",
+                    frameKindStr.c_str(), w, h, bpp, a00, aCenter, hr);
+                Logger::LogInfo(szLog);
+            }
+        }
+
+        // Logging: first 20 callback invocations with HRESULT and running count
+        static std::atomic<int> s_callbackCount{0};
+        int count = ++s_callbackCount;
+        if (count <= 20)
+        {
+            wchar_t szCountLog[256] = {};
+            swprintf_s(szCountLog, ARRAYSIZE(szCountLog),
+                L"SetFieldBitmap invocation #%d [%s]: hr=0x%08X",
+                count, frameKindStr.c_str(), hr);
+            Logger::LogInfo(szCountLog);
+        }
+
+        if (FAILED(hr))
+        {
+            DeleteObject(hFresh);
+        }
+
+        pcpce->Release();
     });
 
     DllAddRef();
@@ -123,7 +205,7 @@ void PeekCredential::SetUserContext(
     if (pszUsername && *pszUsername)
     {
         m_username = pszUsername;
-        if (m_displayName == L"Peek Facial Recognition" || m_displayName.empty())
+        if (m_displayName.empty())
         {
             m_displayName = pszUsername;
         }
@@ -216,6 +298,7 @@ HRESULT PeekCredential::UnAdvise()
     Logger::LogInfo("PeekCredential::UnAdvise called");
     EnterCriticalSection(&m_cs);
     m_isSelected = false;
+    m_consecutiveFailedAttempts = 0;
     if (m_hRetryCancelEvent)
     {
         SetEvent(m_hRetryCancelEvent);
@@ -226,8 +309,11 @@ HRESULT PeekCredential::UnAdvise()
         m_pcpce->Release();
         m_pcpce = nullptr;
     }
+    m_statusTextVisible = false;
     LeaveCriticalSection(&m_cs);
+
     m_animator.SetState(PeekUiState::IDLE);
+    m_animator.StopAnimationThread();
     Logger::LogInfo("PeekCredential::UnAdvise -> S_OK");
     return S_OK;
 }
@@ -247,6 +333,7 @@ HRESULT PeekCredential::SetSelected(BOOL* pbAutoLogon)
     EnterCriticalSection(&m_cs);
     m_isSelected = true;
     m_isAuthenticated = false;
+    m_consecutiveFailedAttempts = 0; // Re-selecting resets the counter
     m_statusText = L"Initializing camera...";
     if (m_hRetryCancelEvent)
     {
@@ -254,13 +341,12 @@ HRESULT PeekCredential::SetSelected(BOOL* pbAutoLogon)
     }
     LeaveCriticalSection(&m_cs);
 
-    // Initial state presentation: searching animation and status text
-    m_animator.SetState(PeekUiState::SEARCHING);
+    // Hide status text initially per requirement 6
+    HideStatusText();
 
-    if (m_pcpce)
-    {
-        m_pcpce->SetFieldString(this, PFI_STATUS_TEXT, m_statusText.c_str());
-    }
+    // Initial state presentation: searching animation (no status text shown)
+    m_animator.StartAnimationThread();
+    m_animator.SetState(PeekUiState::SEARCHING);
 
     // Launch background asynchronous pipe authentication
     Logger::LogInfo("PeekCredential::SetSelected: starting background authentication via StartAuthAsync");
@@ -277,13 +363,17 @@ HRESULT PeekCredential::SetDeselected()
     Logger::LogInfo("PeekCredential::SetDeselected called");
     EnterCriticalSection(&m_cs);
     m_isSelected = false;
+    m_consecutiveFailedAttempts = 0;
     if (m_hRetryCancelEvent)
     {
         SetEvent(m_hRetryCancelEvent);
     }
     m_pipeClient.Cancel();
     LeaveCriticalSection(&m_cs);
+
+    HideStatusText();
     m_animator.SetState(PeekUiState::IDLE);
+    m_animator.StopAnimationThread();
     Logger::LogInfo("PeekCredential::SetDeselected -> S_OK");
     return S_OK;
 }
@@ -314,12 +404,19 @@ HRESULT PeekCredential::GetFieldState(
     {
     case PFI_LOGO:
     case PFI_LABEL:
-    case PFI_DISPLAY_NAME:
         *pcpfs = CPFS_DISPLAY_IN_BOTH;
         break;
 
+    case PFI_DISPLAY_NAME:
+        // Requirement 2: Email hidden in every state
+        *pcpfs = CPFS_HIDDEN;
+        break;
+
     case PFI_STATUS_TEXT:
-        *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+        // Requirement 6: Hidden by default, shown only for PIN fallback or success greeting
+        EnterCriticalSection(&m_cs);
+        *pcpfs = m_statusTextVisible ? CPFS_DISPLAY_IN_SELECTED_TILE : CPFS_HIDDEN;
+        LeaveCriticalSection(&m_cs);
         break;
 
     default:
@@ -351,11 +448,13 @@ HRESULT PeekCredential::GetStringValue(DWORD dwFieldID, PWSTR* ppsz)
     switch (dwFieldID)
     {
     case PFI_LABEL:
-        hr = CoTaskMemAllocString(L"Peek - Face Unlock", ppsz);
+        // Requirement 1: Title is "PEEK"
+        hr = CoTaskMemAllocString(L"PEEK", ppsz);
         break;
 
     case PFI_DISPLAY_NAME:
-        hr = CoTaskMemAllocString(m_displayName.c_str(), ppsz);
+        // Requirement 2: No username/email in any visible field
+        hr = CoTaskMemAllocString(L"", ppsz);
         break;
 
     case PFI_STATUS_TEXT:
@@ -391,31 +490,47 @@ HRESULT PeekCredential::GetBitmapValue(DWORD dwFieldID, HBITMAP* phbmp)
     HRESULT hr = S_OK;
     if (dwFieldID == PFI_LOGO)
     {
-        // 1. Return current 32bpp ARGB frame from TileAnimator if available
+        // 1. Return fresh copy of current 32bpp ARGB frame from TileAnimator if available
         HBITMAP hFrame = m_animator.GetCurrentFrame();
         if (hFrame)
         {
-            *phbmp = static_cast<HBITMAP>(CopyImage(hFrame, IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION));
+            *phbmp = DuplicateArgbBitmap(hFrame);
             if (*phbmp) hr = S_OK;
         }
 
         if (!*phbmp)
         {
-            // 2. Fail-soft fallback to static embedded bitmap if TileAnimator has no frames
-            *phbmp = LoadBitmapW(g_hinst, MAKEINTRESOURCEW(IDB_PEEK_LOGO));
+            // 2. Fail-soft fallback to decoding IDR_PNG_FRAME_FACE_FOUND directly
+            *phbmp = TileAnimator::LoadPngResourceToDib(g_hinst, IDR_PNG_FRAME_FACE_FOUND);
             hr = (*phbmp != NULL) ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+        }
+
+        if (*phbmp)
+        {
+            DIBSECTION ds = {};
+            if (GetObjectW(*phbmp, sizeof(ds), &ds) == sizeof(ds) && ds.dsBm.bmBits)
+            {
+                int w = ds.dsBm.bmWidth;
+                int h = abs(ds.dsBm.bmHeight);
+                int bpp = ds.dsBm.bmBitsPixel;
+                const BYTE* pBits = reinterpret_cast<const BYTE*>(ds.dsBm.bmBits);
+                BYTE a00 = (bpp == 32) ? pBits[3] : 0;
+                int cx = w / 2;
+                int cy = h / 2;
+                BYTE aCenter = (bpp == 32) ? pBits[(cy * w + cx) * 4 + 3] : 0;
+
+                wchar_t szBuf[384] = {};
+                swprintf_s(szBuf, ARRAYSIZE(szBuf),
+                    L"PeekCredential::GetBitmapValue: fieldID=%u, hbmp=%p (w=%d, h=%d, bpp=%d, alpha(0,0)=%u, alpha(center)=%u) -> hr=0x%08X",
+                    dwFieldID, *phbmp, w, h, bpp, a00, aCenter, hr);
+                Logger::LogInfo(szBuf);
+            }
         }
     }
     else
     {
         hr = E_INVALIDARG;
     }
-
-    wchar_t szBuf[256] = {};
-    swprintf_s(szBuf, ARRAYSIZE(szBuf),
-        L"PeekCredential::GetBitmapValue: fieldID=%u, hbmp=%p -> hr=0x%08X",
-        dwFieldID, *phbmp, hr);
-    Logger::LogInfo(szBuf);
 
     return hr;
 }
@@ -645,13 +760,41 @@ void PeekCredential::UpdateStatusText(const std::wstring& newText)
 {
     EnterCriticalSection(&m_cs);
     m_statusText = newText;
+    LeaveCriticalSection(&m_cs);
+    Logger::LogInfo(L"UpdateStatusText (internal log): " + newText);
+}
+
+void PeekCredential::ShowStatusText(const std::wstring& text)
+{
+    EnterCriticalSection(&m_cs);
+    m_statusText = text;
+    m_statusTextVisible = true;
     ICredentialProviderCredentialEvents* pcpce = m_pcpce;
     if (pcpce) pcpce->AddRef();
     LeaveCriticalSection(&m_cs);
 
+    Logger::LogInfo(L"ShowStatusText (visible): " + text);
+
     if (pcpce)
     {
-        pcpce->SetFieldString(this, PFI_STATUS_TEXT, newText.c_str());
+        pcpce->SetFieldString(this, PFI_STATUS_TEXT, text.c_str());
+        pcpce->SetFieldState(this, PFI_STATUS_TEXT, CPFS_DISPLAY_IN_SELECTED_TILE);
+        pcpce->Release();
+    }
+}
+
+void PeekCredential::HideStatusText()
+{
+    EnterCriticalSection(&m_cs);
+    bool wasVisible = m_statusTextVisible;
+    m_statusTextVisible = false;
+    ICredentialProviderCredentialEvents* pcpce = m_pcpce;
+    if (pcpce) pcpce->AddRef();
+    LeaveCriticalSection(&m_cs);
+
+    if (pcpce && wasVisible)
+    {
+        pcpce->SetFieldState(this, PFI_STATUS_TEXT, CPFS_HIDDEN);
         pcpce->Release();
     }
 }
@@ -715,21 +858,16 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
         {
             EnterCriticalSection(&m_cs);
             m_isAuthenticated = true;
+            m_consecutiveFailedAttempts = 0;
             if (!result.displayName.empty())
             {
                 m_displayName = result.displayName;
             }
-            // In Phase 7, profile_id is excluded from pipe; m_profileId is read from LSA directly
             std::wstring enrolledName = m_displayName;
             std::wstring rawUser = m_username;
             LeaveCriticalSection(&m_cs);
 
-            // Dynamic Greeting Copy:
-            // "when AUTHENTICATED arrives, set status text to
-            //  L"Hello, " + m_displayName + L"!" if m_displayName is non-empty and not
-            //  the placeholder "Peek Facial Recognition"/raw username fallback; if no
-            //  real enrolled display name is available, use "Welcome back" — never a
-            //  hardcoded example name."
+            // Dynamic Greeting Copy per requirement 6c
             std::wstring greeting;
             if (!enrolledName.empty() &&
                 enrolledName != L"Peek Facial Recognition" &&
@@ -743,22 +881,16 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
             }
 
             UpdateStatusText(greeting);
+            if (kShowSuccessGreeting)
+            {
+                ShowStatusText(greeting);
+            }
             m_animator.SetState(PeekUiState::SUCCESS);
 
             // SECURITY INVARIANT ENFORCEMENT & TIMING:
-            // The SUCCESS presentation delay (~750ms) applies strictly AFTER the
+            // SUCCESS presentation delay (~750ms) applies strictly AFTER the
             // authentication dual-gate has verified isAuthorizedToUnlock == true and
             // m_isAuthenticated == true under m_cs lock.
-            //
-            // NOTE ON INVARIANT ENFORCEMENT:
-            // The debug assert() previously placed here was not load-bearing (assert()
-            // compiles away to a no-op under NDEBUG in production Release builds).
-            // The real, load-bearing invariant enforcement is (and remains) the check in GetSerialization:
-            //   `if (!isAuth) return CPGSR_NO_CREDENTIAL_FINISHED;`
-            // which guarantees credentials can NEVER be serialized or returned unless
-            // the face engine strictly authenticated the user and authorized unlock.
-            // As defense-in-depth, we also perform an explicit runtime check here to
-            // safely abort signaling if authorization state was somehow violated:
             EnterCriticalSection(&m_cs);
             bool isAuthConfirmed = m_isAuthenticated;
             LeaveCriticalSection(&m_cs);
@@ -777,25 +909,42 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
         break;
 
     case PeekIPCState::AUTH_FAILED:
-        // Calm failure treatment: sad icon + "Try again" phrasing, no alarming visuals
-        UpdateStatusText(L"Authentication failed. Try again or sign in with password/PIN.");
-        m_animator.SetState(PeekUiState::FAILURE);
-        QueueRetry();
-        break;
-
     case PeekIPCState::TIMEOUT:
-        // Calm failure treatment: sad icon + "Try again" phrasing
-        UpdateStatusText(L"Timed out. Try again or sign in with password.");
-        m_animator.SetState(PeekUiState::FAILURE);
-        QueueRetry();
+        {
+            EnterCriticalSection(&m_cs);
+            m_consecutiveFailedAttempts++;
+            int attempts = m_consecutiveFailedAttempts;
+            LeaveCriticalSection(&m_cs);
+
+            wchar_t szLog[256] = {};
+            swprintf_s(szLog, ARRAYSIZE(szLog),
+                L"Authentication failure (%s): attempt %d of %d (detail: %s)",
+                (result.state == PeekIPCState::AUTH_FAILED) ? L"AUTH_FAILED" : L"TIMEOUT",
+                attempts, kMaxRetryCycles, result.detail.c_str());
+            Logger::LogInfo(szLog);
+
+            if (attempts >= kMaxRetryCycles)
+            {
+                Logger::LogInfo(L"Retry limit reached. Stopping session and displaying PIN/password prompt.");
+                m_pipeClient.Cancel();
+                m_animator.SetState(PeekUiState::FAILURE);
+                ShowStatusText(L"Sign in with your PIN or password");
+            }
+            else
+            {
+                UpdateStatusText(L"Authentication failed. Retrying...");
+                m_animator.SetState(PeekUiState::FAILURE);
+                QueueRetry();
+            }
+        }
         break;
 
     case PeekIPCState::DISCONNECTED:
     case PeekIPCState::ERROR_STATE:
     default:
-        // Fail-open: calm failure icon, inform user to sign in with password/PIN
-        UpdateStatusText(L"Peek engine offline. Sign in with password or PIN.");
+        Logger::LogError(L"Engine offline or pipe disconnected: detail='" + result.detail + L"', reason='" + result.reasonCode + L"'");
         m_animator.SetState(PeekUiState::FAILURE);
+        ShowStatusText(L"Sign in with your PIN or password");
         break;
     }
 }
@@ -803,7 +952,7 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
 void PeekCredential::QueueRetry()
 {
     EnterCriticalSection(&m_cs);
-    bool canRetry = m_isSelected && !m_isAuthenticated;
+    bool canRetry = m_isSelected && !m_isAuthenticated && (m_consecutiveFailedAttempts < kMaxRetryCycles);
     LeaveCriticalSection(&m_cs);
     if (!canRetry) return;
 
@@ -835,7 +984,7 @@ void PeekCredential::RunRetrySequence()
     }
 
     EnterCriticalSection(&m_cs);
-    bool stillActive = m_isSelected && !m_isAuthenticated;
+    bool stillActive = m_isSelected && !m_isAuthenticated && (m_consecutiveFailedAttempts < kMaxRetryCycles);
     LeaveCriticalSection(&m_cs);
     if (!stillActive) return;
 
@@ -849,7 +998,7 @@ void PeekCredential::RunRetrySequence()
     }
 
     EnterCriticalSection(&m_cs);
-    stillActive = m_isSelected && !m_isAuthenticated;
+    stillActive = m_isSelected && !m_isAuthenticated && (m_consecutiveFailedAttempts < kMaxRetryCycles);
     LeaveCriticalSection(&m_cs);
     if (!stillActive) return;
 

@@ -2,7 +2,6 @@
 #pragma once
 
 #define IDI_PEEK_LOGO                   101
-#define IDB_PEEK_LOGO                   102
 
 // Phase 7 Lock-Screen Tile Animation PNG Frames
 #define IDR_PNG_FRAME_IDLE              201
