@@ -367,7 +367,7 @@ namespace PeekSetup.ViewModels
             ? "Automatic Windows Unlock Enabled"
             : "Face Recognition Only (PIN/Password fallback)";
 
-        public string UnlockBadgeText => IsPasswordLinked ? "Password Linked" : "Face Only (Password Skipped)";
+        public string UnlockBadgeText => IsPasswordLinked ? "Password Linked" : "Password Required";
         public string UnlockBadgeColor => IsPasswordLinked ? "#10B981" : "#F59E0B";
 
         // Commands
@@ -376,7 +376,6 @@ namespace PeekSetup.ViewModels
         public ICommand RetryConnectionCommand { get; }
         public ICommand RetryEnrollmentCommand { get; }
         public ICommand BackToWelcomeCommand { get; }
-        public ICommand SkipPasswordCommand { get; }
         public ICommand FinishCommand { get; }
         public ICommand ReEnrollCommand { get; }
         public ICommand GoToPasswordLinkCommand { get; }
@@ -411,7 +410,6 @@ namespace PeekSetup.ViewModels
             RetryConnectionCommand = new AsyncRelayCommand(StartEnrollmentFlowAsync);
             RetryEnrollmentCommand = new AsyncRelayCommand(StartEnrollmentFlowAsync);
             BackToWelcomeCommand = new RelayCommand(GoBackToWelcome);
-            SkipPasswordCommand = new RelayCommand(SkipPasswordLinking);
             FinishCommand = new RelayCommand(FinishSetup);
             ReEnrollCommand = new AsyncRelayCommand(StartEnrollmentFlowAsync);
             GoToPasswordLinkCommand = new RelayCommand(GoToPasswordLink);
@@ -591,7 +589,7 @@ namespace PeekSetup.ViewModels
 
                 case 1:
                     HasPasswordError = true;
-                    PasswordErrorMessage = "Password linking was cancelled.";
+                    PasswordErrorMessage = "Password linking was cancelled. Windows password linking is required to complete setup.";
                     break;
 
                 case 2:
@@ -606,7 +604,7 @@ namespace PeekSetup.ViewModels
 
                 case 4:
                     HasPasswordError = true;
-                    PasswordErrorMessage = "Administrator permission (UAC) was declined. Windows LSA requires elevation.";
+                    PasswordErrorMessage = "Administrator permission (UAC) was declined. Windows LSA requires elevation to link password.";
                     break;
 
                 default:
@@ -614,12 +612,6 @@ namespace PeekSetup.ViewModels
                     PasswordErrorMessage = $"Password linking exited with code {exitCode}.";
                     break;
             }
-        }
-
-        public void SkipPasswordLinking()
-        {
-            IsPasswordLinked = false;
-            CurrentStep = SetupStep.Done;
         }
 
         public void FinishSetup()

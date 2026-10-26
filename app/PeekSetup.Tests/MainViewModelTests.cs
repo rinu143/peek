@@ -225,18 +225,23 @@ namespace PeekSetup.Tests
         }
 
         [Fact]
-        public void SkipPassword_AdvancesToDoneWithPasswordUnlinked()
+        public void PasswordLinkStep_IsMandatory_CannotAdvanceWithoutLinking()
         {
             var vm = new MainViewModel(new MockEnrollmentPipeClient(), new MockPasswordLinker());
             vm.CurrentStep = SetupStep.PasswordLink;
-            vm.EnrolledProfileId = "p_skip";
+            vm.EnrolledProfileId = "p_mandatory";
 
-            vm.SkipPasswordLinking();
+            // Simulating user cancelling elevated password linking (exit code 1)
+            vm.HandleLinkExitCode(1);
 
-            Assert.Equal(SetupStep.Done, vm.CurrentStep);
-            Assert.True(vm.IsDoneStep);
+            // Must remain on PasswordLink step and cannot advance to Done
+            Assert.Equal(SetupStep.PasswordLink, vm.CurrentStep);
+            Assert.True(vm.IsPasswordLinkStep);
+            Assert.False(vm.IsDoneStep);
             Assert.False(vm.IsPasswordLinked);
-            Assert.Equal("Face Only (Password Skipped)", vm.UnlockBadgeText);
+            Assert.True(vm.HasPasswordError);
+            Assert.Contains("cancelled", vm.PasswordErrorMessage, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("required", vm.PasswordErrorMessage, StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]

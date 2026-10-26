@@ -5,116 +5,107 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="clr-namespace:PeekSetup.ViewModels"
         mc:Ignorable="d"
-        Title="Peek — Face Setup"
-        Height="730" Width="780"
-        MinHeight="700" MinWidth="750"
+        Title="Face Recognition Setup"
+        Height="690" Width="720"
+        MinHeight="640" MinWidth="680"
         WindowStartupLocation="CenterScreen"
-        Background="{StaticResource BgDarkBrush}"
-        Foreground="{StaticResource TextPrimaryBrush}"
-        FontFamily="Segoe UI Variable Display, Segoe UI, sans-serif">
+        Background="{DynamicResource BgDarkBrush}"
+        Foreground="{DynamicResource TextPrimaryBrush}"
+        FontFamily="Segoe UI Variable Display, Segoe UI Variable Text, Segoe UI, -apple-system, sans-serif">
 
     <Window.DataContext>
         <vm:MainViewModel />
     </Window.DataContext>
 
-    <Grid Margin="32,24,32,24">
+    <Grid Margin="36,24,36,24">
         <Grid.RowDefinitions>
-            <!-- Top Header & Step Progress -->
+            <!-- Minimal System Header & Progress Dots -->
             <RowDefinition Height="Auto" />
-            <!-- Main Content Area -->
+            <!-- Centered Stage Area -->
             <RowDefinition Height="*" />
-            <!-- Bottom Footer / Action Bar -->
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- HEADER BAR -->
-        <Grid Grid.Row="0" Margin="0,0,0,24">
+        <!-- ============================================================== -->
+        <!-- MINIMAL SYSTEM HEADER & PAGINATION DOTS                        -->
+        <!-- ============================================================== -->
+        <Grid Grid.Row="0" Margin="0,0,0,20">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <!-- Brand Logo -->
+            <!-- Brand Identity (Quiet & Clean) -->
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <Border Width="36" Height="36" CornerRadius="8" Background="{StaticResource AccentBrush}" Margin="0,0,12,0">
-                    <!-- Stylized Eye / Peek Glyphs -->
-                    <Path Data="M 7,18 C 11,10 25,10 29,18 C 25,26 11,26 7,18 Z M 18,14 C 15.8,14 14,15.8 14,18 C 14,20.2 15.8,22 18,22 C 20.2,22 22,20.2 22,18 C 22,15.8 20.2,14 18,14 Z"
-                          Fill="#FFFFFF" Stretch="Uniform" Margin="7" />
-                </Border>
-                <StackPanel VerticalAlignment="Center">
-                    <TextBlock Text="Peek" FontSize="20" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
-                    <TextBlock Text="Facial Recognition Setup" FontSize="12" Foreground="{StaticResource TextMutedBrush}" />
-                </StackPanel>
+                <Path Data="{StaticResource GeoEye}" Fill="{DynamicResource TextPrimaryBrush}" Stretch="Uniform" Width="18" Height="18" VerticalAlignment="Center" Margin="0,0,8,0" />
+                <TextBlock Text="Peek" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
             </StackPanel>
 
-            <!-- Step Wizard Indicator -->
-            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                <!-- Existing Active Profile Badge -->
-                <Border CornerRadius="12" Padding="12,5" Margin="0,0,6,0"
-                        Background="#064E3B"
-                        Visibility="{Binding IsAlreadyEnrolledStep, Converter={StaticResource BoolToVis}}">
-                    <TextBlock Text="Active Profile" FontSize="12" FontWeight="SemiBold" Foreground="#34D399" />
-                </Border>
-
-                <!-- Step 1 Indicator -->
-                <Border x:Name="PillStep1" CornerRadius="12" Padding="12,5" Margin="0,0,6,0">
-                    <Border.Style>
-                        <Style TargetType="Border">
-                            <Setter Property="Background" Value="#1C1C22" />
+            <!-- Apple-Style Step Indicator (4 Quiet Dots) -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"
+                        Visibility="{Binding IsAlreadyEnrolledStep, Converter={StaticResource BoolToVis}, ConverterParameter=Invert}">
+                <!-- Dot 1: Welcome -->
+                <Ellipse Width="7" Height="7" Margin="0,0,6,0">
+                    <Ellipse.Style>
+                        <Style TargetType="Ellipse">
+                            <Setter Property="Fill" Value="{DynamicResource TextMutedBrush}" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsWelcomeStep}" Value="True">
-                                    <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                    <Setter Property="Fill" Value="{DynamicResource TextPrimaryBrush}" />
+                                    <Setter Property="Width" Value="8" />
+                                    <Setter Property="Height" Value="8" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
-                    </Border.Style>
-                    <TextBlock Text="1. Welcome" FontSize="12" FontWeight="SemiBold" Foreground="#FFFFFF" />
-                </Border>
+                    </Ellipse.Style>
+                </Ellipse>
 
-                <!-- Step 2 Indicator -->
-                <Border x:Name="PillStep2" CornerRadius="12" Padding="12,5" Margin="0,0,6,0">
-                    <Border.Style>
-                        <Style TargetType="Border">
-                            <Setter Property="Background" Value="#1C1C22" />
+                <!-- Dot 2: Face Scan -->
+                <Ellipse Width="7" Height="7" Margin="0,0,6,0">
+                    <Ellipse.Style>
+                        <Style TargetType="Ellipse">
+                            <Setter Property="Fill" Value="{DynamicResource TextMutedBrush}" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsEnrollmentStep}" Value="True">
-                                    <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                    <Setter Property="Fill" Value="{DynamicResource TextPrimaryBrush}" />
+                                    <Setter Property="Width" Value="8" />
+                                    <Setter Property="Height" Value="8" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
-                    </Border.Style>
-                    <TextBlock Text="2. Face Scan" FontSize="12" FontWeight="SemiBold" Foreground="#FFFFFF" />
-                </Border>
+                    </Ellipse.Style>
+                </Ellipse>
 
-                <!-- Step 3 Indicator -->
-                <Border x:Name="PillStep3" CornerRadius="12" Padding="12,5" Margin="0,0,6,0">
-                    <Border.Style>
-                        <Style TargetType="Border">
-                            <Setter Property="Background" Value="#1C1C22" />
+                <!-- Dot 3: Password Link -->
+                <Ellipse Width="7" Height="7" Margin="0,0,6,0">
+                    <Ellipse.Style>
+                        <Style TargetType="Ellipse">
+                            <Setter Property="Fill" Value="{DynamicResource TextMutedBrush}" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsPasswordLinkStep}" Value="True">
-                                    <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                    <Setter Property="Fill" Value="{DynamicResource TextPrimaryBrush}" />
+                                    <Setter Property="Width" Value="8" />
+                                    <Setter Property="Height" Value="8" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
-                    </Border.Style>
-                    <TextBlock Text="3. Password" FontSize="12" FontWeight="SemiBold" Foreground="#FFFFFF" />
-                </Border>
+                    </Ellipse.Style>
+                </Ellipse>
 
-                <!-- Step 4 Indicator -->
-                <Border x:Name="PillStep4" CornerRadius="12" Padding="12,5">
-                    <Border.Style>
-                        <Style TargetType="Border">
-                            <Setter Property="Background" Value="#1C1C22" />
+                <!-- Dot 4: Done -->
+                <Ellipse Width="7" Height="7">
+                    <Ellipse.Style>
+                        <Style TargetType="Ellipse">
+                            <Setter Property="Fill" Value="{DynamicResource TextMutedBrush}" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsDoneStep}" Value="True">
-                                    <Setter Property="Background" Value="{StaticResource SuccessBrush}" />
+                                    <Setter Property="Fill" Value="{DynamicResource SuccessBrush}" />
+                                    <Setter Property="Width" Value="8" />
+                                    <Setter Property="Height" Value="8" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
-                    </Border.Style>
-                    <TextBlock Text="4. Complete" FontSize="12" FontWeight="SemiBold" Foreground="#FFFFFF" />
-                </Border>
+                    </Ellipse.Style>
+                </Ellipse>
             </StackPanel>
         </Grid>
 
@@ -123,488 +114,347 @@
         <!-- ============================================================== -->
         <Grid Grid.Row="1">
 
-            <!-- STARTUP: CHECKING STATUS -->
+            <!-- ========================================================== -->
+            <!-- STATE: CHECKING CONFIGURATION                              -->
+            <!-- ========================================================== -->
             <Grid Visibility="{Binding IsCheckingStatus, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center">
                 <StackPanel HorizontalAlignment="Center">
-                    <ProgressBar IsIndeterminate="True" Width="200" Height="4" Style="{StaticResource ModernProgressBarStyle}" Margin="0,0,0,20" />
-                    <TextBlock Text="Checking existing profile..." FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" />
-                    <TextBlock Text="Connecting to Peek engine..." FontSize="13" Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Center" Margin="0,6,0,0" />
+                    <ProgressBar IsIndeterminate="True" Width="180" Height="3" Style="{StaticResource ModernProgressBarStyle}" Margin="0,0,0,20" />
+                    <TextBlock Text="Checking configuration..." FontSize="14" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Center" />
                 </StackPanel>
             </Grid>
 
-            <!-- SCREEN: ALREADY ENROLLED -->
+            <!-- ========================================================== -->
+            <!-- SCREEN: ALREADY ENROLLED (ACTIVE PROFILE MANAGEMENT)       -->
+            <!-- ========================================================== -->
             <Grid Visibility="{Binding IsAlreadyEnrolledStep, Converter={StaticResource BoolToVis}}">
-                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="560">
-                    <!-- Icon badge -->
-                    <Border Width="64" Height="64" CornerRadius="32" Background="#064E3B" HorizontalAlignment="Center" Margin="0,0,0,20">
-                        <TextBlock Text="✓" FontSize="32" Foreground="#34D399" HorizontalAlignment="Center" VerticalAlignment="Center" FontWeight="Bold" />
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440">
+                    <!-- Clean Face ID Glyph -->
+                    <Border Width="60" Height="60" CornerRadius="30" Background="{DynamicResource PillBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,20">
+                        <Path Data="{StaticResource GeoFaceID}" Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="28" Height="28" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
 
-                    <TextBlock Text="{Binding AlreadyEnrolledTitle}" FontSize="26" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,0,0,8" TextAlignment="Center" />
-                    <TextBlock Text="Your face profile is currently enrolled and active for lock-screen authentication."
-                               FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,28" LineHeight="20" />
+                    <TextBlock Text="Face Recognition" FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,6" Foreground="{DynamicResource TextPrimaryBrush}" />
+                    <TextBlock Text="{Binding AlreadyEnrolledTitle}"
+                               FontSize="14" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,24" LineHeight="20" />
 
-                    <!-- Profile Info Card -->
-                    <Border Background="{StaticResource CardBgBrush}" BorderBrush="{StaticResource CardBorderBrush}"
-                            BorderThickness="1" CornerRadius="10" Padding="20" Margin="0,0,0,28">
+                    <!-- Minimal Status Card -->
+                    <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1" CornerRadius="16" Padding="20" Margin="0,0,0,26">
                         <StackPanel>
                             <Grid Margin="0,0,0,12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="Active User:" FontSize="13" Foreground="{StaticResource TextMutedBrush}" Width="120" />
-                                <TextBlock Grid.Column="1" Text="{Binding ExistingProfileName}" FontWeight="SemiBold" FontSize="14" />
-                            </Grid>
-                            <Grid Margin="0,0,0,12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="Profile ID:" FontSize="13" Foreground="{StaticResource TextMutedBrush}" Width="120" />
-                                <TextBlock Grid.Column="1" Text="{Binding ExistingProfileId}" FontFamily="Consolas, monospace" FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" />
+                                <TextBlock Text="User" FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                <TextBlock Text="{Binding ExistingProfileName}" FontWeight="Medium" FontSize="13" Foreground="{DynamicResource TextPrimaryBrush}" HorizontalAlignment="Right" />
                             </Grid>
                             <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="Security Status:" FontSize="13" Foreground="{StaticResource TextMutedBrush}" Width="120" />
-                                <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                    <Border Background="#064E3B" CornerRadius="4" Padding="6,2" Margin="0,0,8,0">
-                                        <TextBlock Text="DPAPI Protected" FontSize="11" FontWeight="SemiBold" Foreground="#34D399" />
-                                    </Border>
-                                    <Border Background="#1E1B4B" CornerRadius="4" Padding="6,2">
-                                        <TextBlock Text="Ready to Unlock" FontSize="11" FontWeight="SemiBold" Foreground="#818CF8" />
-                                    </Border>
+                                <TextBlock Text="Status" FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Ellipse Width="7" Height="7" Fill="{DynamicResource SuccessBrush}" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                    <TextBlock Text="Active for Lock Screen" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
                                 </StackPanel>
                             </Grid>
                         </StackPanel>
                     </Border>
 
-                    <!-- Options Actions Buttons -->
+                    <!-- Actions -->
                     <StackPanel>
-                        <!-- Option 1: Re-enroll Face (replaces current profile) -->
                         <Button Style="{StaticResource PrimaryButtonStyle}"
                                 Command="{Binding ReEnrollCommand}"
-                                Height="46" FontSize="15" Margin="0,0,0,12">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="🔄" Margin="0,0,8,0" FontSize="15" />
-                                <TextBlock Text="Re-enroll Face (replaces current profile)" FontWeight="SemiBold" />
-                            </StackPanel>
-                        </Button>
+                                Content="Set Up Face Again"
+                                Height="44" FontSize="14" Margin="0,0,0,10" />
 
-                        <!-- Option 2: Link/replace password -->
                         <Button Style="{StaticResource SecondaryButtonStyle}"
                                 Command="{Binding GoToPasswordLinkCommand}"
-                                Height="44" FontSize="14" Margin="0,0,0,12">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="🔑" Margin="0,0,8,0" FontSize="14" />
-                                <TextBlock Text="Link or Replace Windows Password" FontWeight="SemiBold" />
-                            </StackPanel>
-                        </Button>
+                                Content="Link Windows Password"
+                                Height="44" FontSize="14" Margin="0,0,0,10" />
 
-                        <!-- Option 3: Exit -->
                         <Button Style="{StaticResource SecondaryButtonStyle}"
                                 Command="{Binding ExitCommand}"
-                                Content="Exit Peek Setup"
-                                Height="40" FontSize="13" Foreground="{StaticResource TextMutedBrush}" />
+                                Content="Done"
+                                Height="40" FontSize="13" Background="Transparent" BorderBrush="Transparent" Foreground="{DynamicResource TextSecondaryBrush}" />
                     </StackPanel>
                 </StackPanel>
             </Grid>
 
-            <!-- STEP 1: WELCOME & DETAILS -->
+            <!-- ========================================================== -->
+            <!-- STEP 1: WELCOME & NAME (NON-AIGENIC, APPLE-MINIMAL)        -->
+            <!-- ========================================================== -->
             <Grid Visibility="{Binding IsWelcomeStep, Converter={StaticResource BoolToVis}}">
-                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="560">
-                    <TextBlock Text="Welcome to Peek" FontSize="28" FontWeight="Bold" Margin="0,0,0,8" />
-                    <TextBlock Text="Guided facial enrollment allows you to securely sign in to your PC in milliseconds without typing passwords or PINs."
-                               FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,0,0,24" LineHeight="20" />
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440">
+                    <!-- Clean Face ID Glyph -->
+                    <Border Width="64" Height="64" CornerRadius="32" Background="{DynamicResource PillBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,20">
+                        <Path Data="{StaticResource GeoFaceID}" Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="30" Height="30" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
 
-                    <!-- Feature Highlights Card -->
-                    <Border Background="{StaticResource CardBgBrush}" BorderBrush="{StaticResource CardBorderBrush}"
-                            BorderThickness="1" CornerRadius="10" Padding="20" Margin="0,0,0,28">
+                    <TextBlock Text="Set Up Face Recognition" FontSize="26" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,8" Foreground="{DynamicResource TextPrimaryBrush}" />
+                    <TextBlock Text="Position your face in front of the camera to unlock your PC quickly and securely."
+                               FontSize="14" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,28" LineHeight="20" />
+
+                    <!-- Display Name Field -->
+                    <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1" CornerRadius="16" Padding="18,16" Margin="0,0,0,28">
                         <StackPanel>
-                            <!-- Feature 1 -->
-                            <Grid Margin="0,0,0,16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="32" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="⚡" FontSize="18" VerticalAlignment="Top" />
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="Instant Biometric Unlock" FontWeight="SemiBold" FontSize="14" />
-                                    <TextBlock Text="Look at the webcam at your lock screen to immediately authenticate." FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                                </StackPanel>
-                            </Grid>
-
-                            <!-- Feature 2 -->
-                            <Grid Margin="0,0,0,16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="32" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🛡️" FontSize="18" VerticalAlignment="Top" />
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="Protected Local Storage" FontWeight="SemiBold" FontSize="14" />
-                                    <TextBlock Text="Face templates are encrypted with Windows DPAPI and never leave this PC." FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                                </StackPanel>
-                            </Grid>
-
-                            <!-- Feature 3 -->
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="32" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="🔑" FontSize="18" VerticalAlignment="Top" />
-                                <StackPanel Grid.Column="1">
-                                    <TextBlock Text="Full Fallback Assurance" FontWeight="SemiBold" FontSize="14" />
-                                    <TextBlock Text="Your standard Windows password and PIN will always remain functional." FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
-                                </StackPanel>
-                            </Grid>
+                            <TextBlock Text="Your Name" FontSize="12" FontWeight="Medium" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,6" />
+                            <TextBox Style="{StaticResource ModernTextBoxStyle}"
+                                     Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}"
+                                     FontSize="14" />
+                            <TextBlock Text="How Peek will address you at sign-in." FontSize="11" Foreground="{DynamicResource TextMutedBrush}" Margin="2,6,0,0" />
                         </StackPanel>
                     </Border>
 
-                    <!-- Details Input -->
-                    <StackPanel Margin="0,0,0,28">
-                        <TextBlock Text="Your Display Name" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8" />
-                        <TextBox Style="{StaticResource ModernTextBoxStyle}"
-                                 Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}"
-                                 FontSize="15" />
-                        <TextBlock Text="Pre-filled with your Windows account name. You can customize how Peek addresses you."
-                                   FontSize="12" Foreground="{StaticResource TextMutedBrush}" Margin="2,6,0,0" />
-                    </StackPanel>
-
-                    <!-- Begin Enrollment Button -->
+                    <!-- Primary Pill Action Button -->
                     <Button Style="{StaticResource PrimaryButtonStyle}"
                             Command="{Binding BeginEnrollmentCommand}"
-                            Content="Begin Face Enrollment"
-                            Height="44" FontSize="15" />
+                            Content="Get Started"
+                            Height="46" FontSize="15" />
                 </StackPanel>
             </Grid>
 
-            <!-- STEP 2: FACE ENROLLMENT -->
+            <!-- ========================================================== -->
+            <!-- STEP 2: FACE ENROLLMENT (APPLE CIRCULAR APERTURE)          -->
+            <!-- ========================================================== -->
             <Grid Visibility="{Binding IsEnrollmentStep, Converter={StaticResource BoolToVis}}">
 
                 <!-- 2A. Connecting State -->
                 <Grid Visibility="{Binding IsConnecting, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center">
                     <StackPanel HorizontalAlignment="Center">
-                        <ProgressBar IsIndeterminate="True" Width="200" Height="4" Style="{StaticResource ModernProgressBarStyle}" Margin="0,0,0,20" />
-                        <TextBlock Text="Connecting to Peek camera engine..." FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" />
-                        <TextBlock Text="Acquiring camera and preparing 9-pose guidance stream..." FontSize="13" Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Center" Margin="0,6,0,0" />
+                        <ProgressBar IsIndeterminate="True" Width="180" Height="3" Style="{StaticResource ModernProgressBarStyle}" Margin="0,0,0,20" />
+                        <TextBlock Text="Starting camera..." FontSize="15" FontWeight="Medium" HorizontalAlignment="Center" Foreground="{DynamicResource TextPrimaryBrush}" />
                     </StackPanel>
                 </Grid>
 
                 <!-- 2B. Engine Unavailable State -->
-                <Grid Visibility="{Binding IsEngineUnavailable, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="520">
-                    <Border Background="{StaticResource CardBgBrush}" BorderBrush="{StaticResource CardBorderBrush}"
-                            BorderThickness="1" CornerRadius="12" Padding="28">
+                <Grid Visibility="{Binding IsEngineUnavailable, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440">
+                    <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1" CornerRadius="20" Padding="28">
                         <StackPanel>
-                            <Border Width="48" Height="48" CornerRadius="24" Background="#311F0B" HorizontalAlignment="Center" Margin="0,0,0,16">
-                                <TextBlock Text="⚠️" FontSize="22" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <Border Width="48" Height="48" CornerRadius="24" Background="{DynamicResource WarningBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,16">
+                                <Path Data="{StaticResource GeoWarning}" Stroke="{DynamicResource WarningBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="20" Height="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Border>
 
-                            <TextBlock Text="Peek Engine Is Not Running" FontSize="20" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,0,0,8" />
-                            <TextBlock Text="Peek couldn't connect to \\.\pipe\PeekEnrollment. The background face engine service needs to be active for guided enrollment."
-                                       FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center" LineHeight="18" Margin="0,0,0,16" />
-
-                            <!-- Actionable hint box -->
-                            <Border Background="#141418" BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="12,10" Margin="0,0,0,24">
-                                <StackPanel>
-                                    <TextBlock Text="To start the engine service, run this in a terminal:" FontSize="12" Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,4" />
-                                    <TextBlock Text="python scripts/run_engine_service.py" FontFamily="Consolas, monospace" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
-                                </StackPanel>
-                            </Border>
+                            <TextBlock Text="Engine Not Running" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,6" Foreground="{DynamicResource TextPrimaryBrush}" />
+                            <TextBlock Text="Peek couldn't connect to the local background service. Start it and try again."
+                                       FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center" LineHeight="18" Margin="0,0,0,22" />
 
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="10" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
                                 <Button Grid.Column="0" Style="{StaticResource SecondaryButtonStyle}"
-                                        Command="{Binding BackToWelcomeCommand}" Content="Back to Welcome" Height="40" />
+                                        Command="{Binding BackToWelcomeCommand}" Content="Back" Height="42" />
                                 <Button Grid.Column="2" Style="{StaticResource PrimaryButtonStyle}"
-                                        Command="{Binding RetryConnectionCommand}" Content="Retry Connection" Height="40" />
+                                        Command="{Binding RetryConnectionCommand}" Content="Retry" Height="42" />
                             </Grid>
                         </StackPanel>
                     </Border>
                 </Grid>
 
                 <!-- 2C. Failed State -->
-                <Grid Visibility="{Binding IsEnrollmentFailed, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="500">
-                    <Border Background="{StaticResource CardBgBrush}" BorderBrush="{StaticResource CardBorderBrush}"
-                            BorderThickness="1" CornerRadius="12" Padding="28">
+                <Grid Visibility="{Binding IsEnrollmentFailed, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440">
+                    <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1" CornerRadius="20" Padding="28">
                         <StackPanel>
-                            <Border Width="48" Height="48" CornerRadius="24" Background="#311313" HorizontalAlignment="Center" Margin="0,0,0,16">
-                                <TextBlock Text="❌" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <Border Width="48" Height="48" CornerRadius="24" Background="{DynamicResource DangerBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,16">
+                                <Path Data="{StaticResource GeoError}" Stroke="{DynamicResource DangerBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="20" Height="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Border>
 
-                            <TextBlock Text="Enrollment Incomplete" FontSize="20" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,0,0,8" />
+                            <TextBlock Text="Enrollment Incomplete" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,6" Foreground="{DynamicResource TextPrimaryBrush}" />
                             <TextBlock Text="{Binding EngineErrorMessage}"
-                                       FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,0,0,24" />
+                                       FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,0,0,22" />
 
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="10" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
                                 <Button Grid.Column="0" Style="{StaticResource SecondaryButtonStyle}"
-                                        Command="{Binding BackToWelcomeCommand}" Content="Back" Height="40" />
+                                        Command="{Binding BackToWelcomeCommand}" Content="Back" Height="42" />
                                 <Button Grid.Column="2" Style="{StaticResource PrimaryButtonStyle}"
-                                        Command="{Binding RetryEnrollmentCommand}" Content="Try Again" Height="40" />
+                                        Command="{Binding RetryEnrollmentCommand}" Content="Try Again" Height="42" />
                             </Grid>
                         </StackPanel>
                     </Border>
                 </Grid>
 
-                <!-- 2D. Active Enrollment View -->
+                <!-- 2D. Active Apple Face ID Viewport View (Circular, Calm, Pure Apple) -->
                 <Grid Visibility="{Binding IsEnrolling, Converter={StaticResource BoolToVis}}">
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
 
-                        <!-- Main Camera Container -->
-                        <Border Width="560" Height="380" CornerRadius="12" Background="#0A0A0C"
-                                BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="1"
-                                SnapsToDevicePixels="True" ClipToBounds="True">
-                            <Grid>
-                                <!-- Camera Feed Image -->
-                                <Image Source="{Binding PreviewImage}" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <!-- Apple Face ID Circular Aperture -->
+                        <Grid HorizontalAlignment="Center" Width="310" Height="310">
+                            <!-- Outer subtle guiding ring -->
+                            <Ellipse Stroke="{DynamicResource CardBorderBrush}" StrokeThickness="3" Width="310" Height="310" />
 
-                                <!-- Placeholder when waiting for first frame -->
-                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
-                                            Visibility="{Binding PreviewImage, Converter={StaticResource BoolToVis}}">
-                                    <StackPanel.Style>
-                                        <Style TargetType="StackPanel">
-                                            <Setter Property="Visibility" Value="Collapsed" />
+                            <!-- Camera frame clipped into clean circle -->
+                            <Border Width="296" Height="296" CornerRadius="148" Background="#000000"
+                                    SnapsToDevicePixels="True" ClipToBounds="True" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Grid>
+                                    <Image Source="{Binding PreviewImage}" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" />
+
+                                    <!-- Placeholder while camera starts -->
+                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
+                                                Visibility="{Binding PreviewImage, Converter={StaticResource BoolToVis}}">
+                                        <StackPanel.Style>
+                                            <Style TargetType="StackPanel">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding PreviewImage}" Value="{x:Null}">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </StackPanel.Style>
+                                        <Path Data="{StaticResource GeoCamera}" Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="32" Height="32" HorizontalAlignment="Center" Margin="0,0,0,10" />
+                                        <TextBlock Text="Starting camera..." FontSize="13" Foreground="{DynamicResource TextMutedBrush}" HorizontalAlignment="Center" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </Grid>
+
+                        <!-- Centered Guidance Instruction (Apple Style) -->
+                        <StackPanel HorizontalAlignment="Center" Margin="0,22,0,0">
+                            <TextBlock Text="{Binding GuidanceText}" FontSize="16" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" HorizontalAlignment="Center" TextAlignment="Center" />
+                            
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6,0,0">
+                                <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center">
+                                    <Ellipse.Style>
+                                        <Style TargetType="Ellipse">
+                                            <Setter Property="Fill" Value="{DynamicResource SuccessBrush}" />
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding PreviewImage}" Value="{x:Null}">
-                                                    <Setter Property="Visibility" Value="Visible" />
+                                                <DataTrigger Binding="{Binding IsQualityPassed}" Value="False">
+                                                    <Setter Property="Fill" Value="{DynamicResource WarningBrush}" />
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
-                                    </StackPanel.Style>
-                                    <TextBlock Text="📷" FontSize="36" HorizontalAlignment="Center" Margin="0,0,0,12" />
-                                    <TextBlock Text="Streaming camera feed..." FontSize="14" Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Center" />
-                                </StackPanel>
+                                    </Ellipse.Style>
+                                </Ellipse>
+                                <TextBlock Text="{Binding TargetPoseName}" FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                <TextBlock Text=" • " FontSize="13" Foreground="{DynamicResource TextMutedBrush}" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding PoseStepCounterText}" FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </StackPanel>
 
-                                <!-- Top Overlay: Target Pose Pill -->
-                                <Border HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,16,0,0"
-                                        CornerRadius="20" Background="#CC111116" BorderBrush="#40FFFFFF" BorderThickness="1"
-                                        Padding="16,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding PoseStepCounterText}" FontSize="13" FontWeight="Bold" Foreground="{StaticResource AccentBrush}" Margin="0,0,8,0" />
-                                        <TextBlock Text="•" FontSize="13" Foreground="{StaticResource TextMutedBrush}" Margin="0,0,8,0" />
-                                        <TextBlock Text="{Binding TargetPoseName}" FontSize="13" FontWeight="SemiBold" Foreground="#FFFFFF" />
-                                    </StackPanel>
-                                </Border>
-
-                                <!-- Bottom Overlay: Guidance Text & Quality Pill -->
-                                <Border HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,16"
-                                        CornerRadius="16" Background="#DD111116" BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="1"
-                                        Padding="16,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <!-- Quality Dot -->
-                                        <Ellipse Width="8" Height="8" Margin="0,0,8,0">
-                                            <Ellipse.Style>
-                                                <Style TargetType="Ellipse">
-                                                    <Setter Property="Fill" Value="{StaticResource SuccessBrush}" />
+                        <!-- Apple-Style 9-Pose Segmented Progress Track -->
+                        <StackPanel Width="280" HorizontalAlignment="Center" Margin="0,20,0,0">
+                            <!-- 9 Pose Track Items -->
+                            <ItemsControl ItemsSource="{Binding Poses}" HorizontalAlignment="Center" Margin="0,0,0,10">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Orientation="Horizontal" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Width="24" Height="4" CornerRadius="2" Margin="0,0,4,0">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="{DynamicResource PillBgBrush}" />
                                                     <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsQualityPassed}" Value="False">
-                                                            <Setter Property="Fill" Value="{StaticResource WarningBrush}" />
+                                                        <DataTrigger Binding="{Binding IsCompleted}" Value="True">
+                                                            <Setter Property="Background" Value="{DynamicResource SuccessBrush}" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
-                                            </Ellipse.Style>
-                                        </Ellipse>
-                                        <TextBlock Text="{Binding GuidanceText}" FontSize="13" FontWeight="SemiBold" Foreground="#FFFFFF" />
-                                    </StackPanel>
-                                </Border>
-                            </Grid>
-                        </Border>
+                                            </Border.Style>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
 
-                        <!-- Progress Bar & 9-Pose Step Indicator -->
-                        <Grid Width="560" Margin="0,16,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-
-                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                <!-- 9 Pose Dots Container -->
-                                <ItemsControl ItemsSource="{Binding Poses}" Margin="0,0,0,8">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" />
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Border Width="50" Height="6" CornerRadius="3" Margin="0,0,6,0">
-                                                <Border.Style>
-                                                    <Style TargetType="Border">
-                                                        <Setter Property="Background" Value="#25252D" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsCompleted}" Value="True">
-                                                                <Setter Property="Background" Value="{StaticResource SuccessBrush}" />
-                                                            </DataTrigger>
-                                                            <DataTrigger Binding="{Binding IsActive}" Value="True">
-                                                                <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Border.Style>
-                                            </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-
-                                <ProgressBar Value="{Binding ProgressPercentage, Mode=OneWay}"
-                                             Maximum="100" Style="{StaticResource ModernProgressBarStyle}" Height="4" />
-                            </StackPanel>
-
-                            <!-- Progress Percent -->
-                            <TextBlock Grid.Column="1" Text="{Binding ProgressPercentageText}" FontSize="13" FontWeight="Bold"
-                                       Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" Margin="12,0,0,0" />
-                        </Grid>
+                            <ProgressBar Value="{Binding ProgressPercentage, Mode=OneWay}"
+                                         Maximum="100" Style="{StaticResource ModernProgressBarStyle}" Height="3" />
+                        </StackPanel>
 
                         <!-- Cancel Button -->
-                        <Button Style="{StaticResource DangerButtonStyle}"
+                        <Button Style="{StaticResource SecondaryButtonStyle}"
                                 Command="{Binding CancelEnrollmentCommand}"
-                                Content="Cancel Enrollment"
+                                Content="Cancel"
                                 HorizontalAlignment="Center"
-                                Margin="0,20,0,0" Width="180" Height="36" />
+                                Margin="0,24,0,0" Width="140" Height="38" Background="Transparent" BorderBrush="Transparent" Foreground="{DynamicResource TextSecondaryBrush}" />
                     </StackPanel>
                 </Grid>
             </Grid>
 
-            <!-- STEP 3: OPTIONAL PASSWORD LINKING -->
+            <!-- ========================================================== -->
+            <!-- STEP 3: MANDATORY PASSWORD LINKING                         -->
+            <!-- ========================================================== -->
             <Grid Visibility="{Binding IsPasswordLinkStep, Converter={StaticResource BoolToVis}}">
-                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="540">
-                    <TextBlock Text="Link Windows Password" FontSize="26" FontWeight="Bold" Margin="0,0,0,6" />
-                    <TextBlock Text="Enable seamless, zero-interaction unlock at the Windows lock screen"
-                               FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,20" />
-
-                    <!-- Plain Language Explanation Card -->
-                    <Border Background="{StaticResource CardBgBrush}" BorderBrush="{StaticResource CardBorderBrush}"
-                            BorderThickness="1" CornerRadius="10" Padding="18" Margin="0,0,0,20">
-                        <StackPanel>
-                            <TextBlock Text="Why link your password?" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,6" />
-                            <TextBlock Text="When your face is recognized, Windows requires a credential to complete login. Linking your password allows Peek to supply it automatically, unlocking your desktop the instant you look at the camera."
-                                       FontSize="13" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" LineHeight="18" Margin="0,0,0,12" />
-
-                            <Border Background="#141418" BorderBrush="#25252C" BorderThickness="1" CornerRadius="6" Padding="12,10" Margin="0,0,0,10">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="🛡️" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Top" />
-                                    <TextBlock Text="Saved password is protected by Windows LSA and readable only by SYSTEM and administrators."
-                                               FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </Border>
-
-                            <Border Background="#1A1829" BorderBrush="{StaticResource AccentBrush}" BorderThickness="1" CornerRadius="6" Padding="12,10">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="🔐" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Top" />
-                                    <TextBlock Text="A Windows security (UAC) prompt will appear to verify administrator permissions for LSA credential storage."
-                                               FontSize="12" Foreground="{StaticResource TextPrimaryBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440">
+                    <!-- Key Glyph -->
+                    <Border Width="60" Height="60" CornerRadius="30" Background="{DynamicResource PillBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,20">
+                        <Path Data="{StaticResource GeoKey}" Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="28" Height="28" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
 
-                    <!-- Error Message if verification / UAC failed -->
-                    <Border Background="#311313" BorderBrush="{StaticResource DangerBrush}" BorderThickness="1"
-                            CornerRadius="6" Padding="12,8" Margin="0,0,0,16"
+                    <TextBlock Text="Link Windows Password" FontSize="26" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,8" Foreground="{DynamicResource TextPrimaryBrush}" />
+                    <TextBlock Text="Link your Windows password so your PC unlocks automatically the instant your face is recognized. Password linking is required to complete setup."
+                               FontSize="14" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,24" LineHeight="20" />
+
+                    <!-- Security Note Card -->
+                    <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1" CornerRadius="16" Padding="18" Margin="0,0,0,20">
+                        <TextBlock Text="Your password is encrypted using Windows Local Security Authority (LSA) and readable only by system security. Your regular Windows password and PIN will always remain available."
+                                   FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" LineHeight="17" />
+                    </Border>
+
+                    <!-- Error Message Banner (if any) -->
+                    <Border Background="{DynamicResource DangerBgBrush}" BorderBrush="{DynamicResource DangerBorderBrush}" BorderThickness="1"
+                            CornerRadius="10" Padding="12,8" Margin="0,0,0,16"
                             Visibility="{Binding HasPasswordError, Converter={StaticResource BoolToVis}}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="⚠️" Margin="0,0,8,0" VerticalAlignment="Center" />
-                            <TextBlock Text="{Binding PasswordErrorMessage}" FontSize="12" Foreground="#FFAAAA" TextWrapping="Wrap" VerticalAlignment="Center" />
-                        </StackPanel>
+                        <TextBlock Text="{Binding PasswordErrorMessage}" FontSize="12" Foreground="{DynamicResource DangerBrush}" TextWrapping="Wrap" />
                     </Border>
 
-                    <!-- Action Buttons -->
-                    <Grid Margin="0,4,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="12" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-
-                        <!-- Skip Option -->
-                        <Button Grid.Column="0" Style="{StaticResource SecondaryButtonStyle}"
-                                Command="{Binding SkipPasswordCommand}"
-                                Content="Skip for Now" Height="44" />
-
-                        <!-- Link Option -->
-                        <Button Grid.Column="2" Style="{StaticResource PrimaryButtonStyle}"
-                                Command="{Binding LinkPasswordElevatedCommand}"
-                                IsEnabled="{Binding CanLinkPassword}"
-                                Content="Link Windows Password" Height="44" />
-                    </Grid>
-
-                    <TextBlock Text="Skipping leaves your face profile active. Windows will simply prompt for your PIN or password after recognizing you."
-                               FontSize="12" Foreground="{StaticResource TextMutedBrush}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,16,0,0" />
+                    <!-- Primary Action Button (Mandatory) -->
+                    <Button Style="{StaticResource PrimaryButtonStyle}"
+                            Command="{Binding LinkPasswordElevatedCommand}"
+                            IsEnabled="{Binding CanLinkPassword}"
+                            Content="Link Password"
+                            Height="46" FontSize="14" />
                 </StackPanel>
             </Grid>
 
-            <!-- STEP 4: SETUP COMPLETE -->
+            <!-- ========================================================== -->
+            <!-- STEP 4: COMPLETE                                           -->
+            <!-- ========================================================== -->
             <Grid Visibility="{Binding IsDoneStep, Converter={StaticResource BoolToVis}}">
-                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="520">
-                    <!-- Success Badge -->
-                    <Border Width="64" Height="64" CornerRadius="32" Background="#113324"
-                            BorderBrush="{StaticResource SuccessBrush}" BorderThickness="2"
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440">
+                    <!-- Clean Emerald Checkmark Circle -->
+                    <Border Width="64" Height="64" CornerRadius="32" Background="{DynamicResource SuccessBgBrush}"
+                            BorderBrush="{DynamicResource SuccessBorderBrush}" BorderThickness="1.5"
                             HorizontalAlignment="Center" Margin="0,0,0,20">
-                        <TextBlock Text="✓" FontSize="32" FontWeight="Bold" Foreground="{StaticResource SuccessBrush}"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <Path Data="{StaticResource GeoCheck}" Stroke="{DynamicResource SuccessBrush}" StrokeThickness="2" Stretch="Uniform" Width="26" Height="26" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
 
-                    <TextBlock Text="Setup Complete!" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,0,0,8" />
-                    <TextBlock Text="Your Peek biometric face profile is ready to use."
-                               FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" HorizontalAlignment="Center" Margin="0,0,0,28" />
+                    <TextBlock Text="Face Recognition Is Ready" FontSize="26" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,8" Foreground="{DynamicResource TextPrimaryBrush}" />
+                    <TextBlock Text="You can now use your face to unlock this PC at the lock screen."
+                               FontSize="14" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,26" />
 
-                    <!-- Profile Details Summary Card -->
-                    <Border Background="{StaticResource CardBgBrush}" BorderBrush="{StaticResource CardBorderBrush}"
-                            BorderThickness="1" CornerRadius="10" Padding="20" Margin="0,0,0,24">
+                    <!-- Quiet Summary Card -->
+                    <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1" CornerRadius="16" Padding="20" Margin="0,0,0,26">
                         <StackPanel>
-                            <!-- Name -->
                             <Grid Margin="0,0,0,12">
-                                <TextBlock Text="Profile Name" FontSize="13" Foreground="{StaticResource TextMutedBrush}" />
-                                <TextBlock Text="{Binding EnrolledDisplayName}" FontWeight="SemiBold" FontSize="14" HorizontalAlignment="Right" />
+                                <TextBlock Text="Account" FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                <TextBlock Text="{Binding EnrolledDisplayName}" FontWeight="Medium" FontSize="13" Foreground="{DynamicResource TextPrimaryBrush}" HorizontalAlignment="Right" />
                             </Grid>
-
-                            <Separator Background="{StaticResource CardBorderBrush}" Margin="0,0,0,12" />
-
-                            <!-- Face Enrollment -->
-                            <Grid Margin="0,0,0,12">
-                                <TextBlock Text="Biometrics" FontSize="13" Foreground="{StaticResource TextMutedBrush}" />
-                                <TextBlock Text="Enrolled (9 Poses Secured)" FontWeight="SemiBold" FontSize="14" Foreground="{StaticResource SuccessBrush}" HorizontalAlignment="Right" />
-                            </Grid>
-
-                            <Separator Background="{StaticResource CardBorderBrush}" Margin="0,0,0,12" />
-
-                            <!-- Unlock Mode -->
+                            <Separator Background="{DynamicResource CardBorderBrush}" Margin="0,0,0,12" />
                             <Grid>
-                                <TextBlock Text="Lock Screen Mode" FontSize="13" Foreground="{StaticResource TextMutedBrush}" />
-                                <Border CornerRadius="4" Padding="8,3" HorizontalAlignment="Right"
-                                        Background="#1E293B">
-                                    <TextBlock Text="{Binding UnlockBadgeText}" FontSize="12" FontWeight="SemiBold" Foreground="{Binding UnlockBadgeColor}" />
-                                </Border>
+                                <TextBlock Text="Sign-in Mode" FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                <TextBlock Text="{Binding UnlockBadgeText}" FontWeight="Medium" FontSize="13" Foreground="{DynamicResource TextPrimaryBrush}" HorizontalAlignment="Right" />
                             </Grid>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Fallback Notice Card -->
-                    <Border Background="#141418" BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,28">
-                        <StackPanel>
-                            <TextBlock Text="Fallback Assurance" FontWeight="SemiBold" FontSize="13" Margin="0,0,0,4" />
-                            <TextBlock Text="Your regular Windows sign-in options (PIN and password) remain fully active. You can switch to them at any time from the lock screen."
-                                       FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" LineHeight="16" />
                         </StackPanel>
                     </Border>
 
                     <!-- Finish Button -->
                     <Button Style="{StaticResource PrimaryButtonStyle}"
                             Command="{Binding FinishCommand}"
-                            Content="Finish &amp; Close" Height="44" FontSize="15" />
+                            Content="Done"
+                            Height="46" FontSize="15" />
                 </StackPanel>
             </Grid>
 

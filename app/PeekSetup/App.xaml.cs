@@ -13,6 +13,9 @@ namespace PeekSetup
         {
             base.OnStartup(e);
 
+            // Initialize dynamic theme based on user's Windows system preference (Light / Dark)
+            ThemeManager.InitializeTheme();
+
             string[] args = e.Args;
 
             // Check for --unlink --sid <SID>
