@@ -140,7 +140,14 @@ private:
 class MockCredentialEvents : public ICredentialProviderCredentialEvents
 {
 public:
-    MockCredentialEvents() : m_ref(1), m_fieldState(CPFS_HIDDEN), m_fieldString(L""), m_hbmp(NULL), m_bitmapCallCount(0) {}
+    MockCredentialEvents()
+        : m_ref(1)
+        , m_fieldState(CPFS_HIDDEN)
+        , m_fieldString(L"")
+        , m_stringCallCount(0)
+        , m_hbmp(NULL)
+        , m_bitmapCallCount(0)
+    {}
     virtual ~MockCredentialEvents() { if (m_hbmp) DeleteObject(m_hbmp); }
 
     // IUnknown
@@ -171,7 +178,12 @@ public:
     IFACEMETHODIMP SetFieldInteractiveState(ICredentialProviderCredential*, DWORD, CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE) override { return S_OK; }
     IFACEMETHODIMP SetFieldString(ICredentialProviderCredential*, DWORD dwFieldID, LPCWSTR psz) override
     {
-        if (dwFieldID == PFI_STATUS_TEXT && psz) m_fieldString = psz;
+        if (dwFieldID == PFI_STATUS_TEXT && psz)
+        {
+            m_fieldString = psz;
+            m_stringCallCount++;
+            m_stringHistory.push_back(psz);
+        }
         return S_OK;
     }
     IFACEMETHODIMP SetFieldCheckbox(ICredentialProviderCredential*, DWORD, BOOL, LPCWSTR) override { return S_OK; }
@@ -191,9 +203,21 @@ public:
     IFACEMETHODIMP SetFieldSubmitButton(ICredentialProviderCredential*, DWORD, DWORD) override { return S_OK; }
     IFACEMETHODIMP OnCreatingWindow(HWND*) override { return S_OK; }
 
+    std::wstring GetLastString() const { return m_fieldString; }
+    int GetStringCallCount() const { return m_stringCallCount; }
+    std::vector<std::wstring> GetStringHistory() const { return m_stringHistory; }
+    void ClearHistory()
+    {
+        m_stringCallCount = 0;
+        m_stringHistory.clear();
+        m_fieldString.clear();
+    }
+
     LONG m_ref;
     CREDENTIAL_PROVIDER_FIELD_STATE m_fieldState;
     std::wstring m_fieldString;
+    int m_stringCallCount;
+    std::vector<std::wstring> m_stringHistory;
     HBITMAP m_hbmp;
     int m_bitmapCallCount;
 };
@@ -1537,11 +1561,12 @@ int main()
 
 
     // -------------------------------------------------------------
-    // Test 26: Testing PFI_STATUS_TEXT visibility rules (hidden while searching/verifying, visible only for offline, retry-limit, success)
+    // Test 26: Testing PFI_STATUS_TEXT plain text visibility and state transitions
     // -------------------------------------------------------------
-    std::wcout << L"[Test 26] Testing PFI_STATUS_TEXT visibility rules...\n";
+    std::wcout << L"[Test 26] Testing PFI_STATUS_TEXT plain text visibility and state transitions...\n";
     {
         PeekCredential cred;
+        cred.TestSetDisablePipe(true);
         CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR rgcpfd[PFI_COUNT] = {
             { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
             { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"PEEK"),   CPFG_CREDENTIAL_PROVIDER_LABEL },
@@ -1556,32 +1581,62 @@ int main()
         CREDENTIAL_PROVIDER_FIELD_STATE state = CPFS_HIDDEN;
         CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE istate;
 
-        // 1. Initially hidden
+        // 1. Initially IDLE -> hidden, text is empty
         cred.GetFieldState(PFI_STATUS_TEXT, &state, &istate);
         bool initHidden = (state == CPFS_HIDDEN);
+        PWSTR pszInit = nullptr;
+        cred.GetStringValue(PFI_STATUS_TEXT, &pszInit);
+        bool initEmpty = (pszInit == nullptr || wcslen(pszInit) == 0);
+        if (pszInit) CoTaskMemFree(pszInit);
 
-        // 2. SEARCHING state -> stays hidden
-        PeekAuthResult resSearching = {};
-        resSearching.state = PeekIPCState::SEARCHING;
-        cred.TestOnEngineStateUpdate(resSearching);
+        // 2. Select tile -> SEARCHING state, visible, text is "Looking for face..."
+        BOOL autoLogon = FALSE;
+        cred.SetSelected(&autoLogon);
         cred.GetFieldState(PFI_STATUS_TEXT, &state, &istate);
-        bool searchHidden = (state == CPFS_HIDDEN);
+        bool searchVisible = (state == CPFS_DISPLAY_IN_SELECTED_TILE);
+        PWSTR pszSearch = nullptr;
+        cred.GetStringValue(PFI_STATUS_TEXT, &pszSearch);
+        std::wstring searchStr = pszSearch ? pszSearch : L"";
+        if (pszSearch) CoTaskMemFree(pszSearch);
+        bool searchOk = (searchStr == PeekStatusStrings::kSearching);
 
-        // 3. VERIFYING state -> stays hidden
+        // 3. FACE_FOUND state -> stays visible, text is "Found match"
+        PeekAuthResult resFound = {};
+        resFound.state = PeekIPCState::FACE_FOUND;
+        cred.TestOnEngineStateUpdate(resFound);
+        cred.GetFieldState(PFI_STATUS_TEXT, &state, &istate);
+        bool foundVisible = (state == CPFS_DISPLAY_IN_SELECTED_TILE);
+        PWSTR pszFound = nullptr;
+        cred.GetStringValue(PFI_STATUS_TEXT, &pszFound);
+        std::wstring foundStr = pszFound ? pszFound : L"";
+        if (pszFound) CoTaskMemFree(pszFound);
+        bool foundOk = (foundStr == PeekStatusStrings::kFaceFound);
+
+        // 4. VERIFYING state -> stays visible, text is "Verifying..."
         PeekAuthResult resVerifying = {};
         resVerifying.state = PeekIPCState::VERIFYING;
         cred.TestOnEngineStateUpdate(resVerifying);
         cred.GetFieldState(PFI_STATUS_TEXT, &state, &istate);
-        bool verifyHidden = (state == CPFS_HIDDEN);
+        bool verifyVisible = (state == CPFS_DISPLAY_IN_SELECTED_TILE);
+        PWSTR pszVerify = nullptr;
+        cred.GetStringValue(PFI_STATUS_TEXT, &pszVerify);
+        std::wstring verifyStr = pszVerify ? pszVerify : L"";
+        if (pszVerify) CoTaskMemFree(pszVerify);
+        bool verifyOk = (verifyStr == PeekStatusStrings::kVerifying);
 
-        // 4. LIVENESS state -> stays hidden
+        // 5. LIVENESS state -> stays visible, text is "Verifying..."
         PeekAuthResult resLiveness = {};
         resLiveness.state = PeekIPCState::LIVENESS_CHECK;
         cred.TestOnEngineStateUpdate(resLiveness);
         cred.GetFieldState(PFI_STATUS_TEXT, &state, &istate);
-        bool liveHidden = (state == CPFS_HIDDEN);
+        bool liveVisible = (state == CPFS_DISPLAY_IN_SELECTED_TILE);
+        PWSTR pszLive = nullptr;
+        cred.GetStringValue(PFI_STATUS_TEXT, &pszLive);
+        std::wstring liveStr = pszLive ? pszLive : L"";
+        if (pszLive) CoTaskMemFree(pszLive);
+        bool liveOk = (liveStr == PeekStatusStrings::kLiveness);
 
-        // 5. SUCCESS state -> becomes visible with greeting
+        // 6. SUCCESS state -> stays visible with greeting "Hello, Alice!"
         PeekAuthResult resSuccess = {};
         resSuccess.state = PeekIPCState::AUTHENTICATED;
         resSuccess.isAuthorizedToUnlock = true;
@@ -1589,40 +1644,49 @@ int main()
         cred.TestOnEngineStateUpdate(resSuccess);
         cred.GetFieldState(PFI_STATUS_TEXT, &state, &istate);
         bool successVisible = (state == CPFS_DISPLAY_IN_SELECTED_TILE);
-        PWSTR pszText = nullptr;
-        cred.GetStringValue(PFI_STATUS_TEXT, &pszText);
-        std::wstring successText = pszText ? pszText : L"";
-        if (pszText) CoTaskMemFree(pszText);
+        PWSTR pszSuccess = nullptr;
+        cred.GetStringValue(PFI_STATUS_TEXT, &pszSuccess);
+        std::wstring successText = pszSuccess ? pszSuccess : L"";
+        if (pszSuccess) CoTaskMemFree(pszSuccess);
         bool successTextOk = (successText == L"Hello, Alice!");
 
-        // 6. Reset via SetSelected -> starts hidden again
-        BOOL autoLogon = FALSE;
-        cred.SetSelected(&autoLogon);
+        // 7. Deselect -> returns to IDLE (hidden and empty)
+        cred.SetDeselected();
         cred.GetFieldState(PFI_STATUS_TEXT, &state, &istate);
-        bool resetHidden = (state == CPFS_HIDDEN);
+        bool deselectHidden = (state == CPFS_HIDDEN);
+        PWSTR pszDeselect = nullptr;
+        cred.GetStringValue(PFI_STATUS_TEXT, &pszDeselect);
+        bool deselectEmpty = (pszDeselect == nullptr || wcslen(pszDeselect) == 0);
+        if (pszDeselect) CoTaskMemFree(pszDeselect);
 
         cred.UnAdvise();
 
-        if (initHidden && searchHidden && verifyHidden && liveHidden && successVisible && successTextOk && resetHidden)
+        if (initHidden && initEmpty && searchVisible && searchOk && foundVisible && foundOk &&
+            verifyVisible && verifyOk && liveVisible && liveOk && successVisible && successTextOk &&
+            deselectHidden && deselectEmpty)
         {
-            std::wcout << L"  PASS: PFI_STATUS_TEXT strictly hidden during scanning and shown on success greeting\n";
+            std::wcout << L"  PASS: PFI_STATUS_TEXT plain text visibility and state transitions validated\n";
         }
         else
         {
-            std::wcout << L"  FAIL: PFI_STATUS_TEXT visibility error: init=" << initHidden 
-                       << L", search=" << searchHidden << L", verify=" << verifyHidden 
-                       << L", live=" << liveHidden << L", successVisible=" << successVisible 
-                       << L", text='" << successText << L"', reset=" << resetHidden << L"\n";
+            std::wcout << L"  FAIL: PFI_STATUS_TEXT state error: init=" << initHidden << L"/" << initEmpty
+                       << L", search=" << searchVisible << L"/" << searchOk
+                       << L", found=" << foundVisible << L"/" << foundOk
+                       << L", verify=" << verifyVisible << L"/" << verifyOk
+                       << L", live=" << liveVisible << L"/" << liveOk
+                       << L", success=" << successVisible << L"/" << successTextOk
+                       << L", deselect=" << deselectHidden << L"/" << deselectEmpty << L"\n";
             failed++;
         }
     }
 
     // -------------------------------------------------------------
-    // Test 27: Testing retry counter limit (kMaxRetryCycles = 3) and reset on SetSelected
+    // Test 27: Testing retry counter limit (kMaxRetryCycles = 3), failure messages, and reset
     // -------------------------------------------------------------
     std::wcout << L"[Test 27] Testing retry counter limit (kMaxRetryCycles = 3) and reset on SetSelected...\n";
     {
         PeekCredential cred;
+        cred.TestSetDisablePipe(true);
         CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR rgcpfd[PFI_COUNT] = {
             { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
             { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"PEEK"),   CPFG_CREDENTIAL_PROVIDER_LABEL },
@@ -1631,60 +1695,83 @@ int main()
         };
         cred.Initialize(CPUS_UNLOCK_WORKSTATION, rgcpfd, PFI_COUNT, L"TestUser", L"TestDomain", L"S-1-5-21-123", true);
 
+        MockCredentialEvents events;
+        cred.Advise(&events);
+
+        BOOL autoLogon = FALSE;
+        cred.SetSelected(&autoLogon);
+
         CREDENTIAL_PROVIDER_FIELD_STATE state = CPFS_HIDDEN;
         CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE istate;
 
-        // Attempt 1: AUTH_FAILED
+        // Attempt 1: AUTH_FAILED -> shows "Face not recognized"
         PeekAuthResult fail1 = {};
         fail1.state = PeekIPCState::AUTH_FAILED;
         fail1.detail = L"Face not recognized";
         cred.TestOnEngineStateUpdate(fail1);
         cred.GetFieldState(PFI_STATUS_TEXT, &state, &istate);
         bool att1CountOk = (cred.TestGetConsecutiveFailedAttempts() == 1);
-        bool att1Hidden = (state == CPFS_HIDDEN); // Hidden within retry limit
+        bool att1Visible = (state == CPFS_DISPLAY_IN_SELECTED_TILE);
+        PWSTR pszAtt1 = nullptr;
+        cred.GetStringValue(PFI_STATUS_TEXT, &pszAtt1);
+        std::wstring att1Text = pszAtt1 ? pszAtt1 : L"";
+        if (pszAtt1) CoTaskMemFree(pszAtt1);
+        bool att1TextOk = (att1Text == PeekStatusStrings::kFailure);
 
-        // Attempt 2: TIMEOUT
+        // Attempt 2: AUTH_FAILED -> shows "Face not recognized"
         PeekAuthResult fail2 = {};
-        fail2.state = PeekIPCState::TIMEOUT;
-        fail2.detail = L"Session timed out";
+        fail2.state = PeekIPCState::AUTH_FAILED;
+        fail2.detail = L"Face not recognized";
         cred.TestOnEngineStateUpdate(fail2);
         cred.GetFieldState(PFI_STATUS_TEXT, &state, &istate);
         bool att2CountOk = (cred.TestGetConsecutiveFailedAttempts() == 2);
-        bool att2Hidden = (state == CPFS_HIDDEN); // Still hidden within retry limit
+        bool att2Visible = (state == CPFS_DISPLAY_IN_SELECTED_TILE);
+        PWSTR pszAtt2 = nullptr;
+        cred.GetStringValue(PFI_STATUS_TEXT, &pszAtt2);
+        std::wstring att2Text = pszAtt2 ? pszAtt2 : L"";
+        if (pszAtt2) CoTaskMemFree(pszAtt2);
+        bool att2TextOk = (att2Text == PeekStatusStrings::kFailure);
 
-        // Attempt 3: AUTH_FAILED -> reaches kMaxRetryCycles (3)
+        // Attempt 3: AUTH_FAILED -> reaches kMaxRetryCycles (3) -> shows "Sign in with your PIN or password"
         PeekAuthResult fail3 = {};
         fail3.state = PeekIPCState::AUTH_FAILED;
         fail3.detail = L"Impostor detected";
         cred.TestOnEngineStateUpdate(fail3);
         cred.GetFieldState(PFI_STATUS_TEXT, &state, &istate);
         bool att3CountOk = (cred.TestGetConsecutiveFailedAttempts() == 3);
-        bool att3Visible = (state == CPFS_DISPLAY_IN_SELECTED_TILE); // Now visible!
-        PWSTR pszText = nullptr;
-        cred.GetStringValue(PFI_STATUS_TEXT, &pszText);
-        std::wstring limitText = pszText ? pszText : L"";
-        if (pszText) CoTaskMemFree(pszText);
-        bool limitTextOk = (limitText == L"Sign in with your PIN or password");
+        bool att3Visible = (state == CPFS_DISPLAY_IN_SELECTED_TILE);
+        PWSTR pszAtt3 = nullptr;
+        cred.GetStringValue(PFI_STATUS_TEXT, &pszAtt3);
+        std::wstring limitText = pszAtt3 ? pszAtt3 : L"";
+        if (pszAtt3) CoTaskMemFree(pszAtt3);
+        bool limitTextOk = (limitText == PeekStatusStrings::kFallback);
 
-        // Now test SetSelected reset:
-        BOOL autoLogon = FALSE;
+        // Reset on SetSelected -> counter resets to 0, shows "Looking for face..."
         cred.SetSelected(&autoLogon);
         bool resetCountOk = (cred.TestGetConsecutiveFailedAttempts() == 0);
         cred.GetFieldState(PFI_STATUS_TEXT, &state, &istate);
-        bool resetHidden = (state == CPFS_HIDDEN);
+        bool resetVisible = (state == CPFS_DISPLAY_IN_SELECTED_TILE);
+        PWSTR pszReset = nullptr;
+        cred.GetStringValue(PFI_STATUS_TEXT, &pszReset);
+        std::wstring resetText = pszReset ? pszReset : L"";
+        if (pszReset) CoTaskMemFree(pszReset);
+        bool resetTextOk = (resetText == PeekStatusStrings::kSearching);
 
         cred.UnAdvise();
 
-        if (att1CountOk && att1Hidden && att2CountOk && att2Hidden && att3CountOk && att3Visible && limitTextOk && resetCountOk && resetHidden)
+        if (att1CountOk && att1Visible && att1TextOk &&
+            att2CountOk && att2Visible && att2TextOk &&
+            att3CountOk && att3Visible && limitTextOk &&
+            resetCountOk && resetVisible && resetTextOk)
         {
             std::wcout << L"  PASS: Retry counter accurately reaches 3, shows PIN/password fallback, and resets on SetSelected\n";
         }
         else
         {
-            std::wcout << L"  FAIL: Retry counter behavior mismatch: att1Count=" << att1CountOk << L", att1Hidden=" << att1Hidden 
-                       << L", att2Count=" << att2CountOk << L", att2Hidden=" << att2Hidden 
-                       << L", att3Count=" << att3CountOk << L", att3Visible=" << att3Visible 
-                       << L", text='" << limitText << L"', resetCount=" << resetCountOk << L", resetHidden=" << resetHidden << L"\n";
+            std::wcout << L"  FAIL: Retry counter behavior mismatch: att1=" << att1CountOk << L"/" << att1TextOk
+                       << L", att2=" << att2CountOk << L"/" << att2TextOk
+                       << L", att3=" << att3CountOk << L"/" << limitTextOk
+                       << L", reset=" << resetCountOk << L"/" << resetTextOk << L"\n";
             failed++;
         }
     }
@@ -1768,6 +1855,206 @@ int main()
             std::wcout << L"  FAIL: Bitmap check failed: hrOk=" << hrOk << L", distinct=" << distinctHandle 
                        << L", 32bpp=" << bppOk << L", a(0,0)=" << retrievedAlpha00 
                        << L", aCenter=" << retrievedAlphaCenter << L"\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 29: Testing plain text status line mapping, duplicate skipping, offline fallback, and security invariants
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 29] Testing plain text status line mapping, duplicate skipping, and fallbacks...\n";
+    {
+        bool allPassed = true;
+
+        // Subtest 29.1: Constant table string mapping
+        {
+            bool tableOk = (wcscmp(PeekStatusStrings::kSearching, L"Looking for face...") == 0 &&
+                            wcscmp(PeekStatusStrings::kFaceFound, L"Found match") == 0 &&
+                            wcscmp(PeekStatusStrings::kVerifying, L"Verifying...") == 0 &&
+                            wcscmp(PeekStatusStrings::kLiveness, L"Verifying...") == 0 &&
+                            wcscmp(PeekStatusStrings::kRetry, L"Retrying...") == 0 &&
+                            wcscmp(PeekStatusStrings::kFailure, L"Face not recognized") == 0 &&
+                            wcscmp(PeekStatusStrings::kFallback, L"Sign in with your PIN or password") == 0 &&
+                            wcscmp(PeekStatusStrings::kWelcomeBack, L"Welcome back") == 0 &&
+                            wcscmp(PeekStatusStrings::kIdle, L"") == 0);
+
+            if (tableOk)
+            {
+                std::wcout << L"  PASS: Constant strings table strictly matches required plain text specification\n";
+            }
+            else
+            {
+                std::wcout << L"  FAIL: Constant strings table content mismatch\n";
+                allPassed = false;
+            }
+        }
+
+        // Subtest 29.2: Redundant SetFieldString skipping (LIVENESS after VERIFYING)
+        {
+            PeekCredential cred;
+            cred.TestSetDisablePipe(true);
+            CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR rgcpfd[PFI_COUNT] = {
+                { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
+                { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"PEEK"),   CPFG_CREDENTIAL_PROVIDER_LABEL },
+                { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User"),   GUID_NULL },
+                { PFI_STATUS_TEXT,  CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status"), GUID_NULL },
+            };
+            cred.Initialize(CPUS_UNLOCK_WORKSTATION, rgcpfd, PFI_COUNT, L"TestUser", L"TestDomain", L"S-1-5-21-123", true);
+
+            MockCredentialEvents events;
+            cred.Advise(&events);
+
+            BOOL autoLogon = FALSE;
+            cred.SetSelected(&autoLogon); // sets "Looking for face..."
+
+            // Update to VERIFYING ("Verifying...")
+            PeekAuthResult resVerify = {};
+            resVerify.state = PeekIPCState::VERIFYING;
+            cred.TestOnEngineStateUpdate(resVerify);
+
+            int callCountAfterVerify = events.GetStringCallCount();
+            std::wstring stringAfterVerify = events.GetLastString();
+
+            // Update to LIVENESS_CHECK ("Verifying...") -> unchanged!
+            PeekAuthResult resLive = {};
+            resLive.state = PeekIPCState::LIVENESS_CHECK;
+            cred.TestOnEngineStateUpdate(resLive);
+
+            int callCountAfterLive = events.GetStringCallCount();
+            std::wstring stringAfterLive = events.GetLastString();
+
+            bool stringMatched = (stringAfterVerify == L"Verifying..." && stringAfterLive == L"Verifying...");
+            bool skippedRedundant = (callCountAfterVerify == callCountAfterLive);
+
+            cred.UnAdvise();
+
+            if (stringMatched && skippedRedundant)
+            {
+                std::wcout << L"  PASS: Redundant SetFieldString calls skipped when status text is unchanged (LIVENESS after VERIFYING)\n";
+            }
+            else
+            {
+                std::wcout << L"  FAIL: Redundant call skipping failed: matched=" << stringMatched 
+                           << L", count1=" << callCountAfterVerify << L", count2=" << callCountAfterLive << L"\n";
+                allPassed = false;
+            }
+        }
+
+        // Subtest 29.3: SUCCESS greeting only after AUTHENTICATED with isAuthorizedToUnlock == true
+        {
+            PeekCredential cred;
+            cred.TestSetDisablePipe(true);
+            CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR rgcpfd[PFI_COUNT] = {
+                { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
+                { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"PEEK"),   CPFG_CREDENTIAL_PROVIDER_LABEL },
+                { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User"),   GUID_NULL },
+                { PFI_STATUS_TEXT,  CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status"), GUID_NULL },
+            };
+            cred.Initialize(CPUS_UNLOCK_WORKSTATION, rgcpfd, PFI_COUNT, L"TestUser", L"TestDomain", L"S-1-5-21-123", true);
+
+            MockCredentialEvents events;
+            cred.Advise(&events);
+
+            BOOL autoLogon = FALSE;
+            cred.SetSelected(&autoLogon);
+
+            // 1. FACE_FOUND shows "Found match" but does NOT authorize unlock
+            PeekAuthResult resFound = {};
+            resFound.state = PeekIPCState::FACE_FOUND;
+            cred.TestOnEngineStateUpdate(resFound);
+            bool authAfterFound = cred.IsAuthenticated();
+            bool textAfterFound = (events.GetLastString() == L"Found match");
+
+            // 2. AUTHENTICATED with isAuthorizedToUnlock == false does NOT show greeting or authorize
+            PeekAuthResult resUnauth = {};
+            resUnauth.state = PeekIPCState::AUTHENTICATED;
+            resUnauth.isAuthorizedToUnlock = false;
+            resUnauth.displayName = L"Bob";
+            cred.TestOnEngineStateUpdate(resUnauth);
+            bool authAfterUnauth = cred.IsAuthenticated();
+            bool textAfterUnauth = (events.GetLastString() == L"Found match"); // Greeting NOT sent
+
+            // 3. Genuine AUTHENTICATED with isAuthorizedToUnlock == true shows greeting and authorizes
+            PeekAuthResult resAuth = {};
+            resAuth.state = PeekIPCState::AUTHENTICATED;
+            resAuth.isAuthorizedToUnlock = true;
+            resAuth.displayName = L"Bob";
+            cred.TestOnEngineStateUpdate(resAuth);
+            bool authAfterAuth = cred.IsAuthenticated();
+            bool textAfterAuth = (events.GetLastString() == L"Hello, Bob!");
+
+            cred.UnAdvise();
+
+            if (!authAfterFound && textAfterFound && !authAfterUnauth && textAfterUnauth && authAfterAuth && textAfterAuth)
+            {
+                std::wcout << L"  PASS: Security invariant enforced: SUCCESS text displayed strictly after authorized unlock\n";
+            }
+            else
+            {
+                std::wcout << L"  FAIL: Security invariant check failed: authFound=" << authAfterFound 
+                           << L", textFound=" << textAfterFound << L", authUnauth=" << authAfterUnauth 
+                           << L", textUnauth=" << textAfterUnauth << L", auth=" << authAfterAuth 
+                           << L", text=" << textAfterAuth << L"\n";
+                allPassed = false;
+            }
+        }
+
+        // Subtest 29.4: Fallback message on TIMEOUT, retry limit reached, engine offline, and error states
+        {
+            PeekCredential cred;
+            cred.TestSetDisablePipe(true);
+            CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR rgcpfd[PFI_COUNT] = {
+                { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
+                { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"PEEK"),   CPFG_CREDENTIAL_PROVIDER_LABEL },
+                { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User"),   GUID_NULL },
+                { PFI_STATUS_TEXT,  CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status"), GUID_NULL },
+            };
+            cred.Initialize(CPUS_UNLOCK_WORKSTATION, rgcpfd, PFI_COUNT, L"TestUser", L"TestDomain", L"S-1-5-21-123", true);
+
+            MockCredentialEvents events;
+            cred.Advise(&events);
+
+            BOOL autoLogon = FALSE;
+            cred.SetSelected(&autoLogon);
+
+            // Offline / Disconnect
+            PeekAuthResult resDisc = {};
+            resDisc.state = PeekIPCState::DISCONNECTED;
+            cred.TestOnEngineStateUpdate(resDisc);
+            bool discFallback = (events.GetLastString() == PeekStatusStrings::kFallback);
+
+            // Error
+            PeekAuthResult resErr = {};
+            resErr.state = PeekIPCState::ERROR_STATE;
+            cred.TestOnEngineStateUpdate(resErr);
+            bool errFallback = (events.GetLastString() == PeekStatusStrings::kFallback);
+
+            // Timeout
+            PeekAuthResult resTimeout = {};
+            resTimeout.state = PeekIPCState::TIMEOUT;
+            cred.TestOnEngineStateUpdate(resTimeout);
+            bool timeoutFallback = (events.GetLastString() == PeekStatusStrings::kFallback);
+
+            cred.UnAdvise();
+
+            if (discFallback && errFallback && timeoutFallback)
+            {
+                std::wcout << L"  PASS: Fallback message 'Sign in with your PIN or password' correctly appears for offline, error, and timeout\n";
+            }
+            else
+            {
+                std::wcout << L"  FAIL: Fallback message check failed: disc=" << discFallback 
+                           << L", err=" << errFallback << L", timeout=" << timeoutFallback << L"\n";
+                allPassed = false;
+            }
+        }
+
+        if (allPassed)
+        {
+            std::wcout << L"  PASS: All plain text status line requirements validated successfully\n";
+        }
+        else
+        {
             failed++;
         }
     }

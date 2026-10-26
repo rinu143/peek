@@ -6,15 +6,45 @@
 #include "PeekPipeClient.h"
 #include "TileAnimator.h"
 #include <set>
+#include <string>
 
 // Forward declaration of provider class
 class PeekProvider;
+
+// Constant table for all plain text status messages (Requirement 1)
+struct PeekStatusStrings
+{
+    static constexpr const wchar_t* kSearching    = L"Looking for face...";
+    static constexpr const wchar_t* kFaceFound    = L"Found match";
+    static constexpr const wchar_t* kVerifying    = L"Verifying...";
+    static constexpr const wchar_t* kLiveness    = L"Verifying...";
+    static constexpr const wchar_t* kRetry        = L"Retrying...";
+    static constexpr const wchar_t* kFailure      = L"Face not recognized";
+    static constexpr const wchar_t* kFallback     = L"Sign in with your PIN or password";
+    static constexpr const wchar_t* kWelcomeBack  = L"Welcome back";
+    static constexpr const wchar_t* kIdle         = L"";
+
+    static const wchar_t* GetTextForState(PeekUiState state)
+    {
+        switch (state)
+        {
+        case PeekUiState::SEARCHING:  return kSearching;
+        case PeekUiState::FACE_FOUND: return kFaceFound;
+        case PeekUiState::VERIFYING:  return kVerifying;
+        case PeekUiState::LIVENESS:   return kLiveness;
+        case PeekUiState::RETRY:      return kRetry;
+        case PeekUiState::FAILURE:    return kFailure;
+        case PeekUiState::IDLE:
+        default:                      return kIdle;
+        }
+    }
+};
 
 class PeekCredential : public ICredentialProviderCredential2
 {
 public:
     static constexpr bool kShowSuccessGreeting = true;
-    static constexpr int kMaxRetryCycles = 5;
+    static constexpr int kMaxRetryCycles = 3;
 
     PeekCredential();
     virtual ~PeekCredential();
@@ -58,6 +88,8 @@ public:
         return attempts;
     }
     TileAnimator& TestGetAnimator() { return m_animator; }
+    void TestCancelPipe() { m_pipeClient.Cancel(); }
+    void TestSetDisablePipe(bool disable) { m_testDisablePipe = disable; }
 #endif
 
     // Provider linkage for logon notifications
@@ -103,7 +135,7 @@ public:
 
 private:
     void OnEngineStateUpdate(const PeekAuthResult& result);
-    void UpdateStatusText(const std::wstring& newText);
+    void SetStatusText(const std::wstring& text);
     void ShowStatusText(const std::wstring& text);
     void HideStatusText();
     void NotifyCredentialsReady();
@@ -129,4 +161,7 @@ private:
     TileAnimator m_animator;
     HANDLE m_hRetryCancelEvent;
     CRITICAL_SECTION m_cs;
+#ifdef PEEK_TEST_BUILD
+    bool m_testDisablePipe = false;
+#endif
 };

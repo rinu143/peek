@@ -341,12 +341,18 @@ HRESULT PeekCredential::SetSelected(BOOL* pbAutoLogon)
     }
     LeaveCriticalSection(&m_cs);
 
-    // Hide status text initially per requirement 6
-    HideStatusText();
-
-    // Initial state presentation: searching animation (no status text shown)
+    // Initial state presentation: searching animation and "Looking for face..." status text
     m_animator.StartAnimationThread();
     m_animator.SetState(PeekUiState::SEARCHING);
+    SetStatusText(PeekStatusStrings::kSearching);
+
+#ifdef PEEK_TEST_BUILD
+    if (m_testDisablePipe)
+    {
+        Logger::LogInfo("PeekCredential::SetSelected: pipe client disabled for test");
+        return S_OK;
+    }
+#endif
 
     // Launch background asynchronous pipe authentication
     Logger::LogInfo("PeekCredential::SetSelected: starting background authentication via StartAuthAsync");
@@ -756,45 +762,70 @@ HRESULT PeekCredential::GetUserSid(PWSTR* ppszSid)
     return S_FALSE;
 }
 
-void PeekCredential::UpdateStatusText(const std::wstring& newText)
+void PeekCredential::SetStatusText(const std::wstring& text)
 {
     EnterCriticalSection(&m_cs);
-    m_statusText = newText;
-    LeaveCriticalSection(&m_cs);
-    Logger::LogInfo(L"UpdateStatusText (internal log): " + newText);
-}
+    // Requirement 2: Skip SetFieldString call when text is unchanged and already visible
+    if (m_statusTextVisible && m_statusText == text)
+    {
+        LeaveCriticalSection(&m_cs);
+        return;
+    }
 
-void PeekCredential::ShowStatusText(const std::wstring& text)
-{
-    EnterCriticalSection(&m_cs);
     m_statusText = text;
+    bool wasVisible = m_statusTextVisible;
     m_statusTextVisible = true;
     ICredentialProviderCredentialEvents* pcpce = m_pcpce;
     if (pcpce) pcpce->AddRef();
     LeaveCriticalSection(&m_cs);
 
-    Logger::LogInfo(L"ShowStatusText (visible): " + text);
+    Logger::LogInfo(L"SetStatusText: " + text);
 
     if (pcpce)
     {
-        pcpce->SetFieldString(this, PFI_STATUS_TEXT, text.c_str());
-        pcpce->SetFieldState(this, PFI_STATUS_TEXT, CPFS_DISPLAY_IN_SELECTED_TILE);
+        if (!wasVisible)
+        {
+            pcpce->SetFieldState(this, PFI_STATUS_TEXT, CPFS_DISPLAY_IN_SELECTED_TILE);
+        }
+        HRESULT hr = pcpce->SetFieldString(this, PFI_STATUS_TEXT, text.c_str());
+
+        // Requirement 4: Log first 20 text updates (text + HRESULT) in credential_provider.log
+        static std::atomic<int> s_textUpdateCount{ 0 };
+        int count = ++s_textUpdateCount;
+        if (count <= 20)
+        {
+            wchar_t szLog[256] = {};
+            swprintf_s(szLog, ARRAYSIZE(szLog),
+                L"SetFieldString update #%d: text='%s', hr=0x%08X",
+                count, text.c_str(), hr);
+            Logger::LogInfo(szLog);
+        }
+
         pcpce->Release();
     }
+}
+
+void PeekCredential::ShowStatusText(const std::wstring& text)
+{
+    SetStatusText(text);
 }
 
 void PeekCredential::HideStatusText()
 {
     EnterCriticalSection(&m_cs);
+    m_statusText = PeekStatusStrings::kIdle;
     bool wasVisible = m_statusTextVisible;
     m_statusTextVisible = false;
     ICredentialProviderCredentialEvents* pcpce = m_pcpce;
     if (pcpce) pcpce->AddRef();
     LeaveCriticalSection(&m_cs);
 
+    Logger::LogInfo("HideStatusText: status text hidden");
+
     if (pcpce && wasVisible)
     {
         pcpce->SetFieldState(this, PFI_STATUS_TEXT, CPFS_HIDDEN);
+        pcpce->SetFieldString(this, PFI_STATUS_TEXT, L"");
         pcpce->Release();
     }
 }
@@ -816,41 +847,26 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
     switch (result.state)
     {
     case PeekIPCState::CONNECTING:
-        UpdateStatusText(L"Connecting to Peek Face Engine...");
-        m_animator.SetState(PeekUiState::IDLE);
-        break;
-
     case PeekIPCState::ENGINE_READY:
     case PeekIPCState::CAMERA_STARTING:
-        UpdateStatusText(L"Acquiring camera device...");
-        m_animator.SetState(PeekUiState::SEARCHING);
-        break;
-
     case PeekIPCState::SEARCHING:
-        UpdateStatusText(L"Looking for face...");
         m_animator.SetState(PeekUiState::SEARCHING);
+        SetStatusText(PeekStatusStrings::kSearching);
         break;
 
     case PeekIPCState::FACE_FOUND:
-        UpdateStatusText(L"Face detected — verifying...");
         m_animator.SetState(PeekUiState::FACE_FOUND);
+        SetStatusText(PeekStatusStrings::kFaceFound);
         break;
 
     case PeekIPCState::VERIFYING:
-        UpdateStatusText(result.detail.empty() ? L"Verifying biometric match..." : result.detail);
         m_animator.SetState(PeekUiState::VERIFYING);
+        SetStatusText(PeekStatusStrings::kVerifying);
         break;
 
     case PeekIPCState::LIVENESS_CHECK:
-        if (!result.promptText.empty())
-        {
-            UpdateStatusText(L"Action Required: " + result.promptText);
-        }
-        else
-        {
-            UpdateStatusText(L"Checking liveness...");
-        }
         m_animator.SetState(PeekUiState::LIVENESS);
+        SetStatusText(PeekStatusStrings::kLiveness);
         break;
 
     case PeekIPCState::AUTHENTICATED:
@@ -877,13 +893,12 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
             }
             else
             {
-                greeting = L"Welcome back";
+                greeting = PeekStatusStrings::kWelcomeBack;
             }
 
-            UpdateStatusText(greeting);
             if (kShowSuccessGreeting)
             {
-                ShowStatusText(greeting);
+                SetStatusText(greeting);
             }
             m_animator.SetState(PeekUiState::SUCCESS);
 
@@ -909,6 +924,34 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
         break;
 
     case PeekIPCState::AUTH_FAILED:
+        {
+            EnterCriticalSection(&m_cs);
+            m_consecutiveFailedAttempts++;
+            int attempts = m_consecutiveFailedAttempts;
+            LeaveCriticalSection(&m_cs);
+
+            wchar_t szLog[256] = {};
+            swprintf_s(szLog, ARRAYSIZE(szLog),
+                L"Authentication failure (AUTH_FAILED): attempt %d of %d (detail: %s)",
+                attempts, kMaxRetryCycles, result.detail.c_str());
+            Logger::LogInfo(szLog);
+
+            if (attempts >= kMaxRetryCycles)
+            {
+                Logger::LogInfo(L"Retry limit reached. Stopping session and displaying PIN/password prompt.");
+                m_pipeClient.Cancel();
+                m_animator.SetState(PeekUiState::FAILURE);
+                SetStatusText(PeekStatusStrings::kFallback);
+            }
+            else
+            {
+                m_animator.SetState(PeekUiState::FAILURE);
+                SetStatusText(PeekStatusStrings::kFailure);
+                QueueRetry();
+            }
+        }
+        break;
+
     case PeekIPCState::TIMEOUT:
         {
             EnterCriticalSection(&m_cs);
@@ -918,24 +961,14 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
 
             wchar_t szLog[256] = {};
             swprintf_s(szLog, ARRAYSIZE(szLog),
-                L"Authentication failure (%s): attempt %d of %d (detail: %s)",
-                (result.state == PeekIPCState::AUTH_FAILED) ? L"AUTH_FAILED" : L"TIMEOUT",
+                L"Authentication timeout (TIMEOUT): attempt %d of %d (detail: %s)",
                 attempts, kMaxRetryCycles, result.detail.c_str());
             Logger::LogInfo(szLog);
 
-            if (attempts >= kMaxRetryCycles)
-            {
-                Logger::LogInfo(L"Retry limit reached. Stopping session and displaying PIN/password prompt.");
-                m_pipeClient.Cancel();
-                m_animator.SetState(PeekUiState::FAILURE);
-                ShowStatusText(L"Sign in with your PIN or password");
-            }
-            else
-            {
-                UpdateStatusText(L"Authentication failed. Retrying...");
-                m_animator.SetState(PeekUiState::FAILURE);
-                QueueRetry();
-            }
+            // Requirement 1: TIMEOUT -> "Sign in with your PIN or password"
+            m_pipeClient.Cancel();
+            m_animator.SetState(PeekUiState::FAILURE);
+            SetStatusText(PeekStatusStrings::kFallback);
         }
         break;
 
@@ -944,7 +977,7 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
     default:
         Logger::LogError(L"Engine offline or pipe disconnected: detail='" + result.detail + L"', reason='" + result.reasonCode + L"'");
         m_animator.SetState(PeekUiState::FAILURE);
-        ShowStatusText(L"Sign in with your PIN or password");
+        SetStatusText(PeekStatusStrings::kFallback);
         break;
     }
 }
@@ -977,7 +1010,7 @@ void PeekCredential::QueueRetry()
 
 void PeekCredential::RunRetrySequence()
 {
-    // 1. Hold calm failure presentation for cooldown period (~1200ms)
+    // 1. Hold calm failure presentation for cooldown period (~1200ms) with "Face not recognized"
     if (WaitForSingleObject(m_hRetryCancelEvent, 1200) != WAIT_TIMEOUT)
     {
         return; // cancelled or deselected
@@ -989,8 +1022,8 @@ void PeekCredential::RunRetrySequence()
     if (!stillActive) return;
 
     // 2. Explicit RETRY beat between FAILURE and resetting to SEARCHING
-    UpdateStatusText(L"Try again...");
     m_animator.SetState(PeekUiState::RETRY);
+    SetStatusText(PeekStatusStrings::kRetry);
 
     if (WaitForSingleObject(m_hRetryCancelEvent, 600) != WAIT_TIMEOUT)
     {
@@ -1003,10 +1036,10 @@ void PeekCredential::RunRetrySequence()
     if (!stillActive) return;
 
     // 3. Return to SEARCHING state and restart pipe authentication
-    UpdateStatusText(L"Looking for face...");
     m_animator.SetState(PeekUiState::SEARCHING);
+    SetStatusText(PeekStatusStrings::kSearching);
 
     m_pipeClient.StartAuthAsync([this](const PeekAuthResult& res) {
         this->OnEngineStateUpdate(res);
-    }, 12.0f);
+    }, m_sid, 12.0f);
 }

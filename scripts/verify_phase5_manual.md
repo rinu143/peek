@@ -41,18 +41,23 @@ Follow this step-by-step checklist to validate the native C++ Credential Provide
     - Center pixel alpha `> 0` (opaque/semi-transparent icon glyph)
     - First 20 callback invocations log running count and `HRESULT` (S_OK).
 
-### 3. Icon Animation & State Progression (No Status Text While Searching)
-- [ ] **Animation While Searching**:
-  - Upon selecting the PEEK tile, `SEARCHING` state begins cycling frames 1..3 in ping-pong order: `1 -> 2 -> 3 -> 2` at ~150ms interval (~6.67 fps, within the <= 8 calls/second rate limit).
-  - The animation timer thread runs smoothly while active and stops immediately when the tile is deselected or on `UnAdvise`.
-- [ ] **No Text While Searching**:
-  - `PFI_STATUS_TEXT` remains completely hidden (`CPFS_HIDDEN`) during `SEARCHING`, `FACE_FOUND`, `VERIFYING`, and `LIVENESS`.
-  - The icon animation is the **sole visual feedback** provided to the user.
-- [ ] **State Frame Synchrony**:
-  - `FACE_FOUND` displays `frame_face_found.png`.
-  - `VERIFYING` displays `frame_verifying.png`.
-  - `LIVENESS` displays `frame_liveness.png`.
-  - State transitions immediately update the icon with zero lag.
+### 3. Plain Text Status Line & Icon Animation Progression
+- [ ] **Plain Text Status Line Cycle**:
+  - Upon selecting the PEEK tile, `PFI_STATUS_TEXT` becomes visible (`CPFS_DISPLAY_IN_SELECTED_TILE`) and displays plain text driven by engine state:
+    - `SEARCHING`: **"Looking for face..."**
+    - `FACE_FOUND`: **"Found match"**
+    - `VERIFYING`: **"Verifying..."**
+    - `LIVENESS`: **"Verifying..."** (unchanged text skips redundant updates)
+    - `AUTH_FAILED`: **"Face not recognized"**
+    - `RETRY`: **"Retrying..."**
+    - `SUCCESS`: **"Hello, [Enrolled Name]!"** (or **"Welcome back"**)
+    - `TIMEOUT`, retry limit reached, or engine offline: **"Sign in with your PIN or password"**
+    - `IDLE`: hidden and empty.
+  - On failure, line cycles: **"Face not recognized"** -> **"Retrying..."** -> **"Looking for face..."**.
+- [ ] **Icon Animation Synchronization**:
+  - `TileAnimator` icon animation remains active alongside status line plain text.
+  - `SEARCHING` cycles icon frames 1..3 in ping-pong order: `1 -> 2 -> 3 -> 2`.
+  - Icon state transitions occur in sync: `FACE_FOUND` (`frame_face_found.png`), `VERIFYING` (`frame_verifying.png`), `LIVENESS` (`frame_liveness.png`).
 
 ### 4. Text Policy & Failure / Fallback Handling
 - [ ] **Engine Offline / Camera Failure**:
@@ -61,15 +66,15 @@ Follow this step-by-step checklist to validate the native C++ Credential Provide
     - Status text reads: **"Sign in with your PIN or password"**.
     - Detailed technical reason is recorded in the log file only, never shown to the user.
 - [ ] **Retry Limit (Max 3 Cycles)**:
-  - When authentication fails or times out (`AUTH_FAILED` or `TIMEOUT`):
-    - **Cycle 1 & 2**: Tile shows calm `frame_failure.png` followed by `frame_retry.png` and resumes searching. Status text **remains hidden**.
-    - **Cycle 3 (Max Reached)**: Consecutive failure count reaches 3 (`kMaxRetryCycles = 3`).
+  - When authentication fails (`AUTH_FAILED`):
+    - **Cycle 1 & 2**: Status line displays **"Face not recognized"** (failure icon), transitions to **"Retrying..."** (retry icon), then resumes **"Looking for face..."** (searching pulse).
+    - **Cycle 3 (Max Reached)**: Consecutive failure count reaches 3 (`kMaxRetryCycles = 3`):
       - Scanning session stops immediately.
+      - Status text displays: **"Sign in with your PIN or password"**.
       - Icon displays `frame_failure.png`.
-      - Status text becomes visible displaying: **"Sign in with your PIN or password"**.
       - Engine stops retrying automatically.
   - **Tile Re-selection**:
-    - Clicking away from the tile and re-selecting it (`SetSelected`) resets the consecutive failure counter to 0, hides the status text, and begins a fresh scanning cycle.
+    - Clicking away from the tile and re-selecting it (`SetSelected`) resets the consecutive failure counter to 0, resets status text to **"Looking for face..."**, and begins a fresh scanning cycle.
 
 ### 5. Success Greeting & Desktop Unlock
 - [ ] **Success Presentation**:
