@@ -435,5 +435,87 @@ namespace PeekSetup.Tests
                 Assert.Equal(iconData, itemVm.IconData);
             }
         }
+
+        [Fact]
+        public void FaceIdTicks_Initialized_HasWhiteTicksAndNoGreenTicks()
+        {
+            var vm = new MainViewModel();
+
+            Assert.False(string.IsNullOrWhiteSpace(vm.FaceIdWhiteTicksData));
+            Assert.Equal(string.Empty, vm.FaceIdGreenTicksData);
+        }
+
+        [Theory]
+        [InlineData("UP", 0.0)]
+        [InlineData("UPPER_RIGHT", 45.0)]
+        [InlineData("RIGHT", 90.0)]
+        [InlineData("LOWER_RIGHT", 135.0)]
+        [InlineData("DOWN", 180.0)]
+        [InlineData("LOWER_LEFT", 225.0)]
+        [InlineData("LEFT", 270.0)]
+        [InlineData("UPPER_LEFT", 315.0)]
+        [InlineData("CENTER", 0.0)]
+        public void DirectionArrowAngle_MapsPosesAccurately(string poseKey, double expectedAngle)
+        {
+            double angle = MainViewModel.GetDirectionArrowAngle(poseKey);
+            Assert.Equal(expectedAngle, angle);
+        }
+
+        [Fact]
+        public void FaceIdTicks_WhenLookingUp_IlluminatesTopSectorBlue()
+        {
+            var vm = new MainViewModel();
+            vm.EnrollmentMode = EnrollmentViewMode.Enrolling;
+
+            // Overlay with user tilting up (pitch = -0.22)
+            string json = """
+            {
+                "face": {
+                    "found": true,
+                    "bbox": [0.2, 0.2, 0.8, 0.8],
+                    "yaw": 0.0,
+                    "pitch": -0.22
+                },
+                "pose_matched": true,
+                "quality_passed": true,
+                "target": {
+                    "pose": "UP",
+                    "yaw": 0.0,
+                    "pitch": -1.0
+                },
+                "samples": { "collected": 1, "target": 2 },
+                "poses_completed": 3
+            }
+            """;
+
+            using var doc = JsonDocument.Parse(json);
+            var overlay = EnrollmentProtocol.ParseOverlay(doc.RootElement);
+            Assert.NotNull(overlay);
+
+            vm.ApplyOverlay(overlay);
+
+            // Blue ticks must be non-empty (Sector 6 at top illuminated)
+            Assert.False(string.IsNullOrWhiteSpace(vm.FaceIdBlueTicksData));
+            // Top tick line coordinates M 185.0,30.0 L 185.0,10.0 must be in blue ticks
+            Assert.Contains("185.0,30.0", vm.FaceIdBlueTicksData);
+            Assert.Contains("185.0,10.0", vm.FaceIdBlueTicksData);
+
+            // Arrow must point UP (0 degrees) and be visible
+            Assert.Equal(0.0, vm.DirectionArrowAngle);
+            Assert.True(vm.IsDirectionArrowVisible);
+        }
+
+        [Fact]
+        public void FaceIdTicks_WhenEnrollmentComplete_TurnsAllTicksGreen()
+        {
+            var vm = new MainViewModel();
+            vm.EnrollmentMode = EnrollmentViewMode.Enrolling;
+            vm.IsEnrollmentCompleteRing = true;
+
+            Assert.False(string.IsNullOrWhiteSpace(vm.FaceIdGreenTicksData));
+            Assert.Equal(string.Empty, vm.FaceIdBlueTicksData);
+            Assert.Equal(string.Empty, vm.FaceIdWhiteTicksData);
+            Assert.False(vm.IsDirectionArrowVisible);
+        }
     }
 }

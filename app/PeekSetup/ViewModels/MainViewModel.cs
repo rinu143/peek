@@ -85,6 +85,15 @@ namespace PeekSetup.ViewModels
         private int _samplesCollected;
         private int _samplesTarget = 2;
 
+        // Apple Face ID Radial Ticks & Directional Double Chevron Arrow
+        private static readonly (double x1, double y1, double x2, double y2)[] TickCoordinates = InitializeTickCoordinates();
+        private string _faceIdWhiteTicksData = string.Empty;
+        private string _faceIdBlueTicksData = string.Empty;
+        private string _faceIdGreenTicksData = string.Empty;
+        private double _directionArrowAngle = 0.0;
+        private double _lastUserPitch = 0.0;
+        private double _lastUserYaw = 0.0;
+
         // Password linking state
         private string _enrolledProfileId = string.Empty;
         private string _enrolledDisplayName = string.Empty;
@@ -198,6 +207,8 @@ namespace PeekSetup.ViewModels
                     OnPropertyChanged(nameof(IsEnrolling));
                     OnPropertyChanged(nameof(IsEngineUnavailable));
                     OnPropertyChanged(nameof(IsEnrollmentFailed));
+                    OnPropertyChanged(nameof(IsDirectionArrowVisible));
+                    UpdateFaceIdTicks();
                 }
             }
         }
@@ -557,6 +568,8 @@ namespace PeekSetup.ViewModels
                     _isEnrollmentCompleteRing = value;
                     OnPropertyChanged();
                     OnPropertyChanged(nameof(SampleProgressRingData));
+                    OnPropertyChanged(nameof(IsDirectionArrowVisible));
+                    UpdateFaceIdTicks();
                 }
             }
         }
@@ -606,10 +619,13 @@ namespace PeekSetup.ViewModels
                 if (_targetPoseKey != value)
                 {
                     _targetPoseKey = value;
+                    DirectionArrowAngle = GetDirectionArrowAngle(value);
                     OnPropertyChanged();
                     OnPropertyChanged(nameof(IsCenterTarget));
                     OnPropertyChanged(nameof(IsDirectionalTarget));
+                    OnPropertyChanged(nameof(IsDirectionArrowVisible));
                     OnPropertyChanged(nameof(CurrentPoseIconData));
+                    UpdateFaceIdTicks();
                 }
             }
         }
@@ -625,6 +641,77 @@ namespace PeekSetup.ViewModels
                 if (Math.Abs(_targetAngleDegrees - value) > 0.5)
                 {
                     _targetAngleDegrees = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public double DirectionArrowAngle
+        {
+            get => _directionArrowAngle;
+            private set
+            {
+                if (Math.Abs(_directionArrowAngle - value) > 0.5)
+                {
+                    _directionArrowAngle = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public bool IsDirectionArrowVisible =>
+            IsEnrolling &&
+            !IsEnrollmentCompleteRing &&
+            !string.IsNullOrEmpty(TargetPoseKey) &&
+            !string.Equals(TargetPoseKey, EnrollmentProtocol.PoseCenter, StringComparison.OrdinalIgnoreCase);
+
+        public static double GetDirectionArrowAngle(string? poseKey) => poseKey?.ToUpperInvariant() switch
+        {
+            EnrollmentProtocol.PoseUp => 0.0,
+            EnrollmentProtocol.PoseUpperRight => 45.0,
+            EnrollmentProtocol.PoseRight => 90.0,
+            EnrollmentProtocol.PoseLowerRight => 135.0,
+            EnrollmentProtocol.PoseDown => 180.0,
+            EnrollmentProtocol.PoseLowerLeft => 225.0,
+            EnrollmentProtocol.PoseLeft => 270.0,
+            EnrollmentProtocol.PoseUpperLeft => 315.0,
+            _ => 0.0
+        };
+
+        public string FaceIdWhiteTicksData
+        {
+            get => _faceIdWhiteTicksData;
+            private set
+            {
+                if (_faceIdWhiteTicksData != value)
+                {
+                    _faceIdWhiteTicksData = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public string FaceIdBlueTicksData
+        {
+            get => _faceIdBlueTicksData;
+            private set
+            {
+                if (_faceIdBlueTicksData != value)
+                {
+                    _faceIdBlueTicksData = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public string FaceIdGreenTicksData
+        {
+            get => _faceIdGreenTicksData;
+            private set
+            {
+                if (_faceIdGreenTicksData != value)
+                {
+                    _faceIdGreenTicksData = value;
                     OnPropertyChanged();
                 }
             }
@@ -897,6 +984,7 @@ namespace PeekSetup.ViewModels
             _linkLauncher = linkLauncher ?? new PasswordLinkLauncher();
 
             InitializePoses();
+            UpdateFaceIdTicks();
 
             _pipeClient.PreviewFrameReceived += OnPreviewFrameReceived;
             _pipeClient.PoseCompleted += OnPoseCompleted;
@@ -943,6 +1031,11 @@ namespace PeekSetup.ViewModels
             IsQualityPassed = true;
             TargetPoseKey = EnrollmentProtocol.PoseCenter;
             SamplesCollected = 0;
+            _lastUserPitch = 0.0;
+            _lastUserYaw = 0.0;
+            DirectionArrowAngle = GetDirectionArrowAngle(TargetPoseKey);
+            OnPropertyChanged(nameof(IsDirectionArrowVisible));
+            UpdateFaceIdTicks();
         }
 
         public async Task StartEnrollmentFlowAsync()
@@ -1336,6 +1429,12 @@ namespace PeekSetup.ViewModels
             {
                 IsTargetDotVisible = false;
             }
+
+            _lastUserPitch = (overlay.Face != null && overlay.Face.Found) ? overlay.Face.Pitch : 0.0;
+            _lastUserYaw = (overlay.Face != null && overlay.Face.Found) ? overlay.Face.Yaw : 0.0;
+            DirectionArrowAngle = GetDirectionArrowAngle(TargetPoseKey);
+            OnPropertyChanged(nameof(IsDirectionArrowVisible));
+            UpdateFaceIdTicks();
         }
 
         public void ClearOverlay()
@@ -1355,9 +1454,13 @@ namespace PeekSetup.ViewModels
             TargetBeaconY = 155.0;
             CenterReticleX = 155.0;
             CenterReticleY = 155.0;
+            _lastUserPitch = 0.0;
+            _lastUserYaw = 0.0;
             OnPropertyChanged(nameof(SampleBeadsVisible));
             OnPropertyChanged(nameof(IsDirectionalTarget));
             OnPropertyChanged(nameof(IsCenterFocusAligned));
+            OnPropertyChanged(nameof(IsDirectionArrowVisible));
+            UpdateFaceIdTicks();
         }
 
         // IPC Event Handlers
@@ -1432,7 +1535,9 @@ namespace PeekSetup.ViewModels
                 {
                     Poses[nextIdx].State = PoseState.Active;
                     TargetPoseName = Poses[nextIdx].Label;
+                    TargetPoseKey = Poses[nextIdx].PoseKey;
                 }
+                UpdateFaceIdTicks();
             });
         }
 
@@ -1450,6 +1555,7 @@ namespace PeekSetup.ViewModels
                 ProgressPercentage = 100.0;
                 IsEnrollmentCompleteRing = true;
                 IsPoseCheckActive = true;
+                UpdateFaceIdTicks();
             });
 
             if (!IsReducedMotion && EnrollmentCompleteDelayMs > 0)
@@ -1520,6 +1626,159 @@ namespace PeekSetup.ViewModels
                     EngineErrorMessage = "Connection to Peek engine was lost.";
                 }
             });
+        }
+
+        // Apple Face ID Radial Ticks Implementation
+        private static (double x1, double y1, double x2, double y2)[] InitializeTickCoordinates()
+        {
+            var coords = new (double, double, double, double)[64];
+            double cx = 185.0;
+            double cy = 185.0;
+            double rIn = 155.0;
+            double rOut = 175.0;
+
+            for (int i = 0; i < 64; i++)
+            {
+                double angleDeg = i * (360.0 / 64.0);
+                double rad = angleDeg * Math.PI / 180.0;
+                double cos = Math.Cos(rad);
+                double sin = Math.Sin(rad);
+
+                coords[i] = (
+                    Math.Round(cx + rIn * cos, 2),
+                    Math.Round(cy + rIn * sin, 2),
+                    Math.Round(cx + rOut * cos, 2),
+                    Math.Round(cy + rOut * sin, 2)
+                );
+            }
+            return coords;
+        }
+
+        public void UpdateFaceIdTicks()
+        {
+            if (IsEnrollmentCompleteRing)
+            {
+                var allMask = new bool[64];
+                Array.Fill(allMask, true);
+                FaceIdGreenTicksData = BuildTicksPath(allMask);
+                FaceIdBlueTicksData = string.Empty;
+                FaceIdWhiteTicksData = string.Empty;
+                return;
+            }
+
+            FaceIdGreenTicksData = string.Empty;
+            var blueMask = new bool[64];
+
+            // 1. Mark completed pose sectors
+            for (int p = 0; p < Poses.Count; p++)
+            {
+                if (Poses[p].IsCompleted)
+                {
+                    int? sector = GetSectorForPose(Poses[p].PoseKey);
+                    if (sector.HasValue)
+                    {
+                        MarkSectorTicks(blueMask, sector.Value);
+                    }
+                }
+            }
+
+            // 2. Mark active target pose sector
+            int? activeSector = GetSectorForPose(TargetPoseKey);
+            if (activeSector.HasValue)
+            {
+                MarkSectorTicks(blueMask, activeSector.Value);
+            }
+
+            // 3. Mark dynamic head motion direction (e.g. user tilting up, down, left, right)
+            if (_lastUserPitch < -0.10)
+            {
+                // Tilting UP -> Sector 6 (top / 12 o'clock)
+                MarkSectorTicks(blueMask, 6);
+            }
+            else if (_lastUserPitch > 0.10)
+            {
+                // Tilting DOWN -> Sector 2 (bottom / 6 o'clock)
+                MarkSectorTicks(blueMask, 2);
+            }
+
+            if (_lastUserYaw < -0.12)
+            {
+                // Turning LEFT -> Sector 4 (left / 9 o'clock)
+                MarkSectorTicks(blueMask, 4);
+            }
+            else if (_lastUserYaw > 0.12)
+            {
+                // Turning RIGHT -> Sector 0 (right / 3 o'clock)
+                MarkSectorTicks(blueMask, 0);
+            }
+
+            var whiteMask = new bool[64];
+            for (int i = 0; i < 64; i++)
+            {
+                whiteMask[i] = !blueMask[i];
+            }
+
+            FaceIdBlueTicksData = BuildTicksPath(blueMask);
+            FaceIdWhiteTicksData = BuildTicksPath(whiteMask);
+        }
+
+        private static int? GetSectorForPose(string? poseKey) => poseKey?.ToUpperInvariant() switch
+        {
+            EnrollmentProtocol.PoseRight => 0,
+            EnrollmentProtocol.PoseLowerRight => 1,
+            EnrollmentProtocol.PoseDown => 2,
+            EnrollmentProtocol.PoseLowerLeft => 3,
+            EnrollmentProtocol.PoseLeft => 4,
+            EnrollmentProtocol.PoseUpperLeft => 5,
+            EnrollmentProtocol.PoseUp => 6,
+            EnrollmentProtocol.PoseUpperRight => 7,
+            _ => null
+        };
+
+        private static void MarkSectorTicks(bool[] mask, int sector)
+        {
+            switch (sector)
+            {
+                case 0: // Right (0 deg)
+                    for (int i = 60; i < 64; i++) mask[i] = true;
+                    for (int i = 0; i < 4; i++) mask[i] = true;
+                    break;
+                case 1: // Lower-Right (45 deg)
+                    for (int i = 4; i < 12; i++) mask[i] = true;
+                    break;
+                case 2: // Down (90 deg)
+                    for (int i = 12; i < 20; i++) mask[i] = true;
+                    break;
+                case 3: // Lower-Left (135 deg)
+                    for (int i = 20; i < 28; i++) mask[i] = true;
+                    break;
+                case 4: // Left (180 deg)
+                    for (int i = 28; i < 36; i++) mask[i] = true;
+                    break;
+                case 5: // Upper-Left (225 deg)
+                    for (int i = 36; i < 44; i++) mask[i] = true;
+                    break;
+                case 6: // Up (270 deg)
+                    for (int i = 44; i < 52; i++) mask[i] = true;
+                    break;
+                case 7: // Upper-Right (315 deg)
+                    for (int i = 52; i < 60; i++) mask[i] = true;
+                    break;
+            }
+        }
+
+        private static string BuildTicksPath(bool[] mask)
+        {
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < 64; i++)
+            {
+                if (mask[i])
+                {
+                    var (x1, y1, x2, y2) = TickCoordinates[i];
+                    sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"M {x1:F1},{y1:F1} L {x2:F1},{y2:F1} ");
+                }
+            }
+            return sb.ToString().TrimEnd();
         }
 
         private static void RunOnUi(Action action)

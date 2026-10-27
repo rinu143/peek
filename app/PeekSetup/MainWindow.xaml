@@ -190,6 +190,20 @@
                 <!-- STEP 2: FACE ENROLLMENT (NATIVE APPLE-STYLE CIRCULAR APERTURE) -->
                 <Grid Visibility="{Binding IsEnrollmentStep, Converter={StaticResource BoolToVis}}">
 
+                    <!-- Top-Right Apple Face ID Dismiss '✕' Button -->
+                    <Button Style="{StaticResource MinimalCloseButtonStyle}"
+                            Command="{Binding CancelEnrollmentCommand}"
+                            HorizontalAlignment="Right" VerticalAlignment="Top"
+                            Width="32" Height="32" Margin="0,-4,-4,0"
+                            ToolTip="Cancel Face Setup"
+                            AutomationProperties.Name="Cancel Face Setup"
+                            Panel.ZIndex="10">
+                        <Path Data="M 8,8 L 16,16 M 16,8 L 8,16"
+                              Stroke="{DynamicResource TextSecondaryBrush}"
+                              StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                              HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Button>
+
                     <!-- 2A. Connecting State -->
                     <Grid Visibility="{Binding IsConnecting, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center">
                         <StackPanel HorizontalAlignment="Center">
@@ -274,33 +288,36 @@
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
 
                             <!-- Viewbox wraps aperture so it never clips and smoothly shrinks down on small windows/high DPI -->
-                            <Viewbox MaxWidth="310" MaxHeight="310" Stretch="Uniform" StretchDirection="DownOnly" HorizontalAlignment="Center">
-                                <Grid Width="310" Height="310">
-                                    <!-- 1. Outer subtle guiding circular track -->
-                                    <Ellipse Width="296" Height="296" Stroke="{DynamicResource CardBorderBrush}" StrokeThickness="2.5" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <Viewbox MaxWidth="340" MaxHeight="340" Stretch="Uniform" StretchDirection="DownOnly" HorizontalAlignment="Center">
+                                <Grid Width="370" Height="370">
 
-                                    <!-- 2. Eight-Point Optical Compass Lens Ticks (Precision Biometric Gauge) -->
-                                    <Path Data="M 155,3 L 155,9 M 262.5,47.5 L 258.2,51.8 M 307,155 L 301,155 M 262.5,262.5 L 258.2,258.2 M 155,307 L 155,301 M 47.5,262.5 L 51.8,258.2 M 3,155 L 9,155 M 47.5,47.5 L 51.8,51.8"
-                                          Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.5" Opacity="0.55"
-                                          HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
+                                    <!-- 1. Apple Face ID Radial Ticks: Inactive/White Ticks (64 Radial Ticks) -->
+                                    <Path Data="{Binding FaceIdWhiteTicksData}"
+                                          Stroke="#FFFFFF" Opacity="0.85" StrokeThickness="3"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          IsHitTestVisible="False" />
 
-                                    <!-- 3. Native Outer Sample Progress Ring (Animated & Dynamic Hue) -->
-                                    <Path Data="{Binding SampleProgressRingData}"
-                                          StrokeThickness="3.5"
-                                          StrokeEndLineCap="Round"
-                                          StrokeStartLineCap="Round"
-                                          HorizontalAlignment="Center"
-                                          VerticalAlignment="Center">
-                                        <Path.Style>
-                                            <Style TargetType="Path">
-                                                <Setter Property="Stroke" Value="{DynamicResource AccentBrush}" />
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsEnrollmentCompleteRing}" Value="True">
-                                                        <Setter Property="Stroke" Value="{DynamicResource SuccessBrush}" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Path.Style>
+                                    <!-- 2. Apple Face ID Radial Ticks: Active/Illuminated Blue Ticks (Glow DropShadow) -->
+                                    <Path Data="{Binding FaceIdBlueTicksData}"
+                                          Stroke="#007AFF" StrokeThickness="3.5"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          IsHitTestVisible="False">
+                                        <Path.Effect>
+                                            <DropShadowEffect Color="#38BDF8" BlurRadius="12" ShadowDepth="0" Opacity="0.95" />
+                                        </Path.Effect>
+                                    </Path>
+
+                                    <!-- 3. Apple Face ID Radial Ticks: Completed Green Ticks (All 64 glowing emerald) -->
+                                    <Path Data="{Binding FaceIdGreenTicksData}"
+                                          Stroke="#10B981" StrokeThickness="3.5"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          IsHitTestVisible="False">
+                                        <Path.Effect>
+                                            <DropShadowEffect Color="#10B981" BlurRadius="14" ShadowDepth="0" Opacity="0.95" />
+                                        </Path.Effect>
                                     </Path>
 
                                     <!-- 4. Clean Camera Circular Aperture (No OpenCV drawings) -->
@@ -374,6 +391,60 @@
                                                     </Path.Style>
                                                 </Path>
                                             </Canvas>
+
+                                            <!-- Apple Face ID Directional Double Chevron Arrow (Centered Over Face in Camera Window) -->
+                                            <Grid Width="64" Height="64" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                  Margin="0,0,0,32"
+                                                  Visibility="{Binding IsDirectionArrowVisible, Converter={StaticResource BoolToVis}}"
+                                                  RenderTransformOrigin="0.5,0.5" IsHitTestVisible="False">
+                                                <Grid.Effect>
+                                                    <DropShadowEffect BlurRadius="8" ShadowDepth="2" Direction="270" Color="#000000" Opacity="0.75" />
+                                                </Grid.Effect>
+                                                <Grid.RenderTransform>
+                                                    <TransformGroup>
+                                                        <TranslateTransform x:Name="DirectionArrowTranslate" Y="0" />
+                                                        <RotateTransform Angle="{Binding DirectionArrowAngle}" />
+                                                    </TransformGroup>
+                                                </Grid.RenderTransform>
+                                                <Grid.Style>
+                                                    <Style TargetType="Grid">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsReducedMotion}" Value="False">
+                                                                <DataTrigger.EnterActions>
+                                                                    <BeginStoryboard>
+                                                                        <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                                                            <DoubleAnimation Storyboard.TargetProperty="(RenderTransform).(TransformGroup.Children)[0].(TranslateTransform.Y)"
+                                                                                             From="0" To="-7" Duration="0:0:0.65">
+                                                                                <DoubleAnimation.EasingFunction>
+                                                                                    <QuadraticEase EasingMode="EaseInOut" />
+                                                                                </DoubleAnimation.EasingFunction>
+                                                                            </DoubleAnimation>
+                                                                        </Storyboard>
+                                                                    </BeginStoryboard>
+                                                                </DataTrigger.EnterActions>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Grid.Style>
+                                                <Path Data="M 14,24 L 32,8 L 50,24 M 14,40 L 32,24 L 50,40"
+                                                      StrokeThickness="5"
+                                                      StrokeStartLineCap="Round"
+                                                      StrokeEndLineCap="Round"
+                                                      StrokeLineJoin="Round">
+                                                    <Path.Style>
+                                                        <Style TargetType="Path">
+                                                            <Setter Property="Stroke" Value="#FFFFFF" />
+                                                            <Setter Property="Opacity" Value="0.95" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsPoseMatched}" Value="True">
+                                                                    <Setter Property="Stroke" Value="{DynamicResource SuccessBrush}" />
+                                                                    <Setter Property="Opacity" Value="0.35" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Path.Style>
+                                                </Path>
+                                            </Grid>
 
                                             <!-- Pose Completion Flash Overlay -->
                                             <Rectangle Width="296" Height="296" Fill="#FFFFFF" Opacity="0.55" IsHitTestVisible="False"
@@ -497,166 +568,116 @@
                                 </Grid>
                             </Viewbox>
 
-                            <!-- Dynamic Island / Glassmorphic Pose Guidance & Acquisition Card -->
-                            <Border MaxWidth="350" CornerRadius="16" Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1" Padding="14,12" Margin="0,18,0,0" HorizontalAlignment="Center">
-                                <StackPanel>
-                                    <!-- Top Row: Directional Pose Icon + Guidance Text + Alignment Status Pill -->
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
+                            <!-- Apple Face ID Centered Live Guidance Typography -->
+                            <TextBlock Text="{Binding GuidanceText}"
+                                       FontSize="22" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       HorizontalAlignment="Center" TextAlignment="Center"
+                                       TextWrapping="Wrap" MaxWidth="460"
+                                       Margin="0,22,0,10"
+                                       AutomationProperties.LiveSetting="Polite" />
 
-                                        <!-- Circular Pose Icon Badge -->
-                                        <Border Grid.Column="0" Width="34" Height="34" CornerRadius="17" Background="{DynamicResource PillBgBrush}" Margin="0,0,10,0" VerticalAlignment="Center">
-                                            <Path Data="{Binding CurrentPoseIconData}" Fill="{DynamicResource AccentBrush}" Stretch="Uniform" Width="16" Height="16" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                        </Border>
+                            <!-- Sleek Secondary Status Pill & Frame Acquisition Beads -->
+                            <Border CornerRadius="14" Background="{DynamicResource PillBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1" Padding="14,6" Margin="0,0,0,16" HorizontalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <!-- Directional Pose Mini-Icon -->
+                                    <Path Data="{Binding CurrentPoseIconData}" Fill="{DynamicResource AccentBrush}" Stretch="Uniform" Width="12" Height="12" Margin="0,0,8,0" VerticalAlignment="Center" />
 
-                                        <!-- Title and Live Guidance -->
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding TargetPoseName}" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" />
-                                            <TextBlock Text="{Binding GuidanceText}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,0" TextWrapping="Wrap" />
-                                        </StackPanel>
+                                    <!-- Pose Friendly Name -->
+                                    <TextBlock Text="{Binding TargetPoseName}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" Margin="0,0,12,0" />
 
-                                        <!-- Alignment Status Badge -->
-                                        <Border Grid.Column="2" CornerRadius="10" Padding="8,4" Margin="10,0,0,0" VerticalAlignment="Center">
+                                    <!-- Discrete Multi-Frame Acquisition Indicator (Frame 1 & Frame 2) -->
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
+                                        <Border CornerRadius="6" Padding="6,2" Margin="0,0,4,0">
                                             <Border.Style>
                                                 <Style TargetType="Border">
-                                                    <Setter Property="Background" Value="{DynamicResource PillBgBrush}" />
-                                                    <Setter Property="BorderThickness" Value="1" />
-                                                    <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
+                                                    <Setter Property="Background" Value="{DynamicResource CardBgBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsSample1Captured}" Value="True">
+                                                            <Setter Property="Background" Value="{DynamicResource SuccessBgBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Ellipse Width="5" Height="5" Margin="0,0,4,0" VerticalAlignment="Center">
+                                                    <Ellipse.Style>
+                                                        <Style TargetType="Ellipse">
+                                                            <Setter Property="Fill" Value="{DynamicResource TextMutedBrush}" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsSample1Captured}" Value="True">
+                                                                    <Setter Property="Fill" Value="{DynamicResource SuccessBrush}" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Ellipse.Style>
+                                                </Ellipse>
+                                                <TextBlock Text="Frame 1" FontSize="10" FontWeight="Medium" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                            </StackPanel>
+                                        </Border>
+
+                                        <Border CornerRadius="6" Padding="6,2">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="{DynamicResource CardBgBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsSample2Captured}" Value="True">
+                                                            <Setter Property="Background" Value="{DynamicResource SuccessBgBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Ellipse Width="5" Height="5" Margin="0,0,4,0" VerticalAlignment="Center">
+                                                    <Ellipse.Style>
+                                                        <Style TargetType="Ellipse">
+                                                            <Setter Property="Fill" Value="{DynamicResource TextMutedBrush}" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsSample2Captured}" Value="True">
+                                                                    <Setter Property="Fill" Value="{DynamicResource SuccessBrush}" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Ellipse.Style>
+                                                </Ellipse>
+                                                <TextBlock Text="Frame 2" FontSize="10" FontWeight="Medium" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+
+                                    <!-- Alignment Status Badge -->
+                                    <Border CornerRadius="8" Padding="6,2" VerticalAlignment="Center">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="{DynamicResource CardBgBrush}" />
+                                                <Style.Triggers>
+                                                    <MultiDataTrigger>
+                                                        <MultiDataTrigger.Conditions>
+                                                            <Condition Binding="{Binding IsPoseMatched}" Value="True" />
+                                                            <Condition Binding="{Binding IsQualityPassed}" Value="True" />
+                                                        </MultiDataTrigger.Conditions>
+                                                        <Setter Property="Background" Value="{DynamicResource SuccessBgBrush}" />
+                                                    </MultiDataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <TextBlock Text="{Binding PoseStatusBadgeText}" FontSize="10" FontWeight="SemiBold">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
                                                     <Style.Triggers>
                                                         <MultiDataTrigger>
                                                             <MultiDataTrigger.Conditions>
                                                                 <Condition Binding="{Binding IsPoseMatched}" Value="True" />
                                                                 <Condition Binding="{Binding IsQualityPassed}" Value="True" />
                                                             </MultiDataTrigger.Conditions>
-                                                            <Setter Property="Background" Value="{DynamicResource SuccessBgBrush}" />
-                                                            <Setter Property="BorderBrush" Value="{DynamicResource SuccessBorderBrush}" />
+                                                            <Setter Property="Foreground" Value="{DynamicResource SuccessBrush}" />
                                                         </MultiDataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
-                                            </Border.Style>
-                                            <TextBlock Text="{Binding PoseStatusBadgeText}" FontSize="11" FontWeight="SemiBold">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-                                                        <Style.Triggers>
-                                                            <MultiDataTrigger>
-                                                                <MultiDataTrigger.Conditions>
-                                                                    <Condition Binding="{Binding IsPoseMatched}" Value="True" />
-                                                                    <Condition Binding="{Binding IsQualityPassed}" Value="True" />
-                                                                </MultiDataTrigger.Conditions>
-                                                                <Setter Property="Foreground" Value="{DynamicResource SuccessBrush}" />
-                                                            </MultiDataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
-                                        </Border>
-                                    </Grid>
-
-                                    <!-- Divider -->
-                                    <Rectangle Height="1" Fill="{DynamicResource CardBorderBrush}" Margin="0,10,0,8" Opacity="0.6" />
-
-                                    <!-- Bottom Row: Discrete Sample Acquisition (Frame 1 & Frame 2) + Pose Counter -->
-                                    <Grid>
-                                        <!-- Discrete Multi-Frame Acquisition Indicator -->
-                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <TextBlock Text="Acquiring:" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextMutedBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
-
-                                            <!-- Frame 1 -->
-                                            <Border CornerRadius="6" Padding="7,3" Margin="0,0,6,0">
-                                                <Border.Style>
-                                                    <Style TargetType="Border">
-                                                        <Setter Property="Background" Value="{DynamicResource PillBgBrush}" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsSample1Captured}" Value="True">
-                                                                <Setter Property="Background" Value="{DynamicResource SuccessBgBrush}" />
-                                                                <Setter Property="BorderBrush" Value="{DynamicResource SuccessBorderBrush}" />
-                                                                <Setter Property="BorderThickness" Value="1" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Border.Style>
-                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                    <Ellipse Width="6" Height="6" Margin="0,0,5,0" VerticalAlignment="Center">
-                                                        <Ellipse.Style>
-                                                            <Style TargetType="Ellipse">
-                                                                <Setter Property="Fill" Value="{DynamicResource TextMutedBrush}" />
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding IsSample1Captured}" Value="True">
-                                                                        <Setter Property="Fill" Value="{DynamicResource SuccessBrush}" />
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </Ellipse.Style>
-                                                    </Ellipse>
-                                                    <TextBlock Text="Frame 1" FontSize="11" FontWeight="Medium">
-                                                        <TextBlock.Style>
-                                                            <Style TargetType="TextBlock">
-                                                                <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding IsSample1Captured}" Value="True">
-                                                                        <Setter Property="Foreground" Value="{DynamicResource SuccessBrush}" />
-                                                                        <Setter Property="FontWeight" Value="SemiBold" />
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </TextBlock.Style>
-                                                    </TextBlock>
-                                                </StackPanel>
-                                            </Border>
-
-                                            <!-- Frame 2 -->
-                                            <Border CornerRadius="6" Padding="7,3">
-                                                <Border.Style>
-                                                    <Style TargetType="Border">
-                                                        <Setter Property="Background" Value="{DynamicResource PillBgBrush}" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsSample2Captured}" Value="True">
-                                                                <Setter Property="Background" Value="{DynamicResource SuccessBgBrush}" />
-                                                                <Setter Property="BorderBrush" Value="{DynamicResource SuccessBorderBrush}" />
-                                                                <Setter Property="BorderThickness" Value="1" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Border.Style>
-                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                    <Ellipse Width="6" Height="6" Margin="0,0,5,0" VerticalAlignment="Center">
-                                                        <Ellipse.Style>
-                                                            <Style TargetType="Ellipse">
-                                                                <Setter Property="Fill" Value="{DynamicResource TextMutedBrush}" />
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding IsSample2Captured}" Value="True">
-                                                                        <Setter Property="Fill" Value="{DynamicResource SuccessBrush}" />
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </Ellipse.Style>
-                                                    </Ellipse>
-                                                    <TextBlock Text="Frame 2" FontSize="11" FontWeight="Medium">
-                                                        <TextBlock.Style>
-                                                            <Style TargetType="TextBlock">
-                                                                <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding IsSample2Captured}" Value="True">
-                                                                        <Setter Property="Foreground" Value="{DynamicResource SuccessBrush}" />
-                                                                        <Setter Property="FontWeight" Value="SemiBold" />
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </TextBlock.Style>
-                                                    </TextBlock>
-                                                </StackPanel>
-                                            </Border>
-                                        </StackPanel>
-
-                                        <!-- Pose Counter -->
-                                        <TextBlock Text="{Binding PoseStepCounterText}" FontSize="11" FontWeight="SemiBold"
-                                                   Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
-                                    </Grid>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Border>
                                 </StackPanel>
                             </Border>
 
