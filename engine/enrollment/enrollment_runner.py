@@ -71,15 +71,17 @@ POSE_FRIENDLY_NAMES = {
 # Distance & Centering Hint Constants (Normalized 0..1 Preview Coordinates)
 HINT_WIDTH_MIN = 0.30
 HINT_WIDTH_MAX = 0.65
-HINT_CENTER_MAX = 0.15
+HINT_CENTER_ENTER = 0.20
+HINT_CENTER_EXIT = 0.12
+HINT_CENTER_MAX = HINT_CENTER_ENTER  # Backward compatibility alias
 
 
-def compute_distance_centering_hint(bbox: Optional[List[float]]) -> str:
+def compute_distance_centering_hint(bbox: Optional[List[float]], prev_hint: str = "none") -> str:
     """
     Computes distance and centering hint from normalized bounding box [x1, y1, x2, y2].
     - width fraction < 0.30 -> 'closer'
     - width fraction > 0.65 -> 'back'
-    - center offset > 0.15 -> 'center'
+    - center offset with hysteresis (enter > 0.20, exit < 0.12) -> 'center'
     - otherwise -> 'none'
     """
     if not bbox or len(bbox) < 4:
@@ -95,7 +97,8 @@ def compute_distance_centering_hint(bbox: Optional[List[float]]) -> str:
     cx = float(bx1 + bx2) / 2.0
     cy = float(by1 + by2) / 2.0
     center_offset = math.hypot(cx - 0.5, cy - 0.5)
-    if center_offset > HINT_CENTER_MAX:
+    center_threshold = HINT_CENTER_EXIT if prev_hint == "center" else HINT_CENTER_ENTER
+    if center_offset > center_threshold:
         return "center"
     return "none"
 
@@ -268,6 +271,7 @@ class EnrollmentRunner:
         self._advance_requested = False
         self.saved_profile: Optional[PeekProfile] = None
         self._last_progress: Optional[EnrollmentProgress] = None
+        self._last_hint: str = "none"
         self._prev_pose_idx = 0
 
     def _create_default_session(self) -> EnrollmentSession:
@@ -409,7 +413,7 @@ class EnrollmentRunner:
         prev_pose = self.session.current_pose
 
         # Process frame through enrollment session (runs detector once)
-        progress = self.session.process_frame(mirrored, mirrored=True)
+        progress = self.session.process_frame(mirrored, mirrored=False)
         self._last_progress = progress
 
         # Check if pose just completed
@@ -426,12 +430,12 @@ class EnrollmentRunner:
             det = session_dets[0]
             pose_est = getattr(self.session, "last_pose_estimate", None)
             if pose_est is not None:
-                user_yaw = -pose_est.yaw  # Mirrored
+                user_yaw = pose_est.yaw
                 user_pitch = pose_est.pitch
             elif hasattr(self.session, "pose_estimator") and self.session.pose_estimator:
                 try:
                     pe = self.session.pose_estimator.estimate(det.landmarks)
-                    user_yaw = -pe.yaw
+                    user_yaw = pe.yaw
                     user_pitch = pe.pitch
                 except Exception:
                     pass
@@ -477,7 +481,8 @@ class EnrollmentRunner:
 
         tdx, tdy = POSE_DIAL_COORDS.get(progress.current_pose, (0.0, 0.0))
         poses_completed = 9 if self.session.is_complete else int(self.session.current_pose_idx)
-        hint = compute_distance_centering_hint(face_data["bbox"]) if face_data["found"] else "none"
+        hint = compute_distance_centering_hint(face_data["bbox"], self._last_hint) if face_data["found"] else "none"
+        self._last_hint = hint
         overlay_dict = {
             "face": face_data,
             "pose_matched": bool(progress.pose_matched),

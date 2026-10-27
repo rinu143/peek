@@ -618,5 +618,27 @@ namespace PeekSetup.Tests
             vm.ShowDebugOverlay = true;
             Assert.True(vm.ShowDebugOverlay);
         }
+
+        [Theory]
+        [InlineData(0.05, 0.35, 0.35, 0.65, 90.0)]   // Face on left (cx=0.20) -> arrow points right (90 deg)
+        [InlineData(0.65, 0.95, 0.35, 0.65, 270.0)]  // Face on right (cx=0.80) -> arrow points left (270 deg)
+        [InlineData(0.35, 0.65, 0.05, 0.35, 180.0)]  // Face on top (cy=0.20) -> arrow points down (180 deg)
+        [InlineData(0.35, 0.65, 0.65, 0.95, 0.0)]    // Face on bottom (cy=0.80) -> arrow points up (0 deg)
+        public void CenterCorrectionAngle_PointsTowardCenterDisplacement(
+            double bx1, double bx2, double by1, double by2, double expectedAngle)
+        {
+            var vm = new MainViewModel();
+            vm.EnrollmentMode = EnrollmentViewMode.Enrolling;
+            vm.TargetPoseKey = EnrollmentProtocol.PoseCenter;
+
+            var face = new FaceOverlayData(true, new double[] { bx1, by1, bx2, by2 }, Array.Empty<double[]>(), 0.0, 0.0);
+            var overlay = new EnrollmentOverlayData(face, false, true, null, null, 0, "center");
+
+            vm.ApplyOverlay(overlay);
+
+            Assert.Equal("center", vm.OverlayHint);
+            Assert.True(vm.IsDirectionArrowVisible);
+            Assert.InRange(Math.Abs(vm.DirectionArrowAngle - expectedAngle), 0.0, 1.0);
+        }
     }
 }

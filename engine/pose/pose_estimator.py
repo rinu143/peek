@@ -36,6 +36,22 @@ ORDERED_ENROLLMENT_POSES = [
     HeadPose.LOWER_RIGHT,
 ]
 
+
+def mirror_pose(pose: HeadPose) -> HeadPose:
+    """
+    Mirrors horizontal pose components (LEFT <-> RIGHT).
+    Used to translate between user selfie perspective and raw sensor coordinates.
+    """
+    mapping = {
+        HeadPose.LEFT: HeadPose.RIGHT,
+        HeadPose.RIGHT: HeadPose.LEFT,
+        HeadPose.UPPER_LEFT: HeadPose.UPPER_RIGHT,
+        HeadPose.UPPER_RIGHT: HeadPose.UPPER_LEFT,
+        HeadPose.LOWER_LEFT: HeadPose.LOWER_RIGHT,
+        HeadPose.LOWER_RIGHT: HeadPose.LOWER_LEFT,
+    }
+    return mapping.get(pose, pose)
+
 @dataclass
 class PoseEstimate:
     pose: HeadPose

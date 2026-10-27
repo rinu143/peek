@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="peekBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1C1C1E" />
+      <stop offset="100%" stop-color="#0A0A0C" />
+    </linearGradient>
+    <linearGradient id="peekIris" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0A84FF" />
+      <stop offset="100%" stop-color="#0062CC" />
+    </linearGradient>
+  </defs>
+  <!-- Background Squircle -->
+  <rect x="10" y="10" width="236" height="236" rx="52" fill="url(#peekBg)" stroke="#2C2C2E" stroke-width="2.5" />
+  <!-- Eye Outer Contour -->
+  <path d="M 28,128 C 56,66 200,66 228,128 C 200,190 56,190 28,128 Z" fill="#0F172A" stroke="#FFFFFF" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" />
+  <!-- Iris -->
+  <circle cx="128" cy="128" r="42" fill="url(#peekIris)" stroke="#FFFFFF" stroke-width="5" />
+  <!-- Pupil -->
+  <circle cx="128" cy="128" r="19" fill="#FFFFFF" />
+  <!-- Lens Highlight -->
+  <circle cx="141" cy="115" r="7" fill="#FFFFFF" opacity="0.85" />
+</svg>

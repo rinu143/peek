@@ -22,7 +22,7 @@ from typing import List, Optional, Tuple, Dict
 from engine.detection.scrfd_detector import SCRFDDetector, FaceDetection
 from engine.alignment.aligner import FaceAligner
 from engine.embedding.arcface_embedder import ArcFaceEmbedder
-from engine.pose.pose_estimator import HeadPose, HeadPoseEstimator, ORDERED_ENROLLMENT_POSES
+from engine.pose.pose_estimator import HeadPose, HeadPoseEstimator, ORDERED_ENROLLMENT_POSES, mirror_pose
 from engine.quality.quality_checker import FaceQualityChecker, QualityCheckResult
 from storage.template_store import SecureProfileStore, PeekProfile, PeekTemplate
 
@@ -232,10 +232,13 @@ class EnrollmentSession:
         selected = self.candidate_buffer[:self.keep_best_per_pose]
 
         for i, cand in enumerate(selected):
+            # Store template with pose_label in raw-camera-image coordinates (mirrored from user selfie view)
+            # so saved templates match what FaceEngine computes from raw un-flipped frames at authentication.
+            stored_pose_label = mirror_pose(self.current_pose).value
             tmpl = PeekTemplate(
                 template_id=f"tmpl_{self.current_pose.value.lower()}_{i+1}_{int(time.time()*1000)}",
                 embedding=cand.embedding.tolist(),
-                pose_label=self.current_pose.value,
+                pose_label=stored_pose_label,
                 quality_score=cand.composite_score,
                 captured_at=time.time()
             )

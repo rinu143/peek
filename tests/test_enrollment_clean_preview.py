@@ -221,12 +221,13 @@ class TestEnrollmentCleanPreview(unittest.TestCase):
         self.assertEqual(parsed["overlay"], {"face": {"found": True}})
 
     def test_distance_centering_hint_computation(self):
-        """Validates closer, back, center, and none hint determination from bounding boxes."""
+        """Validates closer, back, center, and none hint determination from bounding boxes with hysteresis."""
         from engine.enrollment.enrollment_runner import (
             compute_distance_centering_hint,
             HINT_WIDTH_MIN,
             HINT_WIDTH_MAX,
-            HINT_CENTER_MAX,
+            HINT_CENTER_ENTER,
+            HINT_CENTER_EXIT,
         )
 
         # 1. Closer: width fraction < 0.30 (e.g. width = 0.20)
@@ -235,11 +236,19 @@ class TestEnrollmentCleanPreview(unittest.TestCase):
         # 2. Back: width fraction > 0.65 (e.g. width = 0.72)
         self.assertEqual(compute_distance_centering_hint([0.14, 0.14, 0.86, 0.86]), "back")
 
-        # 3. Center: width normal (0.45), but face shifted right (cx = 0.725, offset = 0.225 > 0.15)
+        # 3. Center: width normal (0.45), but face shifted right (cx = 0.725, offset = 0.225 > 0.20)
         self.assertEqual(compute_distance_centering_hint([0.50, 0.25, 0.95, 0.75]), "center")
 
-        # 4. Center: width normal (0.45), but face shifted down (cy = 0.725, offset = 0.225 > 0.15)
-        self.assertEqual(compute_distance_centering_hint([0.275, 0.50, 0.725, 0.95]), "center")
+        # 4. Hysteresis test:
+        # Face moves to offset = 0.16 (cx = 0.66, dx = 0.16).
+        # If prev_hint was "none", 0.16 < 0.20 -> "none"
+        box_mid = [0.435, 0.275, 0.885, 0.725]  # cx = 0.66, cy = 0.50 -> offset = 0.16
+        self.assertEqual(compute_distance_centering_hint(box_mid, prev_hint="none"), "none")
+        # If prev_hint was "center", 0.16 > 0.12 -> remains "center"
+        self.assertEqual(compute_distance_centering_hint(box_mid, prev_hint="center"), "center")
+        # Face moves to offset = 0.10 (cx = 0.60, dx = 0.10 < 0.12) -> clears to "none"
+        box_centered = [0.375, 0.275, 0.825, 0.725] # cx = 0.60, cy = 0.50 -> offset = 0.10
+        self.assertEqual(compute_distance_centering_hint(box_centered, prev_hint="center"), "none")
 
         # 5. None: well-centered and normal distance
         self.assertEqual(compute_distance_centering_hint([0.275, 0.275, 0.725, 0.725]), "none")
@@ -247,6 +256,43 @@ class TestEnrollmentCleanPreview(unittest.TestCase):
         # 6. None: empty or None bbox
         self.assertEqual(compute_distance_centering_hint(None), "none")
         self.assertEqual(compute_distance_centering_hint([]), "none")
+
+    def test_mirror_pose(self):
+        """Validates mirror_pose bidirectional mapping between user selfie view and raw sensor coordinates."""
+        from engine.pose.pose_estimator import HeadPose, mirror_pose
+
+        self.assertEqual(mirror_pose(HeadPose.LEFT), HeadPose.RIGHT)
+        self.assertEqual(mirror_pose(HeadPose.RIGHT), HeadPose.LEFT)
+        self.assertEqual(mirror_pose(HeadPose.UPPER_LEFT), HeadPose.UPPER_RIGHT)
+        self.assertEqual(mirror_pose(HeadPose.UPPER_RIGHT), HeadPose.UPPER_LEFT)
+        self.assertEqual(mirror_pose(HeadPose.LOWER_LEFT), HeadPose.LOWER_RIGHT)
+        self.assertEqual(mirror_pose(HeadPose.LOWER_RIGHT), HeadPose.LOWER_LEFT)
+        self.assertEqual(mirror_pose(HeadPose.CENTER), HeadPose.CENTER)
+        self.assertEqual(mirror_pose(HeadPose.UP), HeadPose.UP)
+        self.assertEqual(mirror_pose(HeadPose.DOWN), HeadPose.DOWN)
+
+    def test_enrollment_session_stores_mirrored_pose_labels(self):
+        """Validates that templates finalized by EnrollmentSession store pose_label in raw camera coords."""
+        from engine.pose.pose_estimator import HeadPose
+        from engine.enrollment.enrollment_session import EnrollmentSession, PoseCandidate
+
+        session = EnrollmentSession(detector=MagicMock(), aligner=MagicMock(), embedder=MagicMock(), profile_store=MagicMock())
+        session.current_pose_idx = 1 # HeadPose.LEFT
+        self.assertEqual(session.current_pose, HeadPose.LEFT)
+
+        # Inject fake candidate
+        fake_emb = np.zeros(512, dtype=np.float32)
+        session.candidate_buffer.append(PoseCandidate(
+            embedding=fake_emb,
+            quality_score=0.9,
+            pose_score=0.9,
+            composite_score=0.9
+        ))
+        session._finalize_current_pose()
+
+        # The stored template for user's LEFT pose must be labeled "RIGHT" (raw camera sensor frame)
+        self.assertEqual(len(session.final_templates), 1)
+        self.assertEqual(session.final_templates[0].pose_label, "RIGHT")
 
 
 if __name__ == "__main__":

@@ -46,6 +46,7 @@ if (-not $SkipBuild) {
         "--add-data", "engine\models\*.onnx;engine\models",
         "--collect-all", "onnxruntime",
         "--collect-all", "cv2",
+        "--icon", "assets\peek.ico",
         "--noconfirm",
         "scripts\run_engine_service.py"
     )
@@ -125,6 +126,13 @@ Copy-Item -Path (Join-Path $packagingSrcDir "uninstall.ps1") -Destination $Stagi
 Copy-Item -Path (Join-Path $packagingSrcDir "uninstall.bat") -Destination $StagingDir -Force
 Copy-Item -Path (Join-Path $packagingSrcDir "README.txt") -Destination $StagingDir -Force
 Copy-Item -Path (Join-Path $packagingSrcDir "README.md") -Destination $StagingDir -Force
+
+$assetsSrcDir = Join-Path $RepoRoot "assets"
+if (Test-Path $assetsSrcDir) {
+    $assetsDstDir = Join-Path $StagingDir "assets"
+    if (-not (Test-Path $assetsDstDir)) { New-Item -ItemType Directory -Path $assetsDstDir -Force | Out-Null }
+    Copy-Item -Path (Join-Path $assetsSrcDir "*") -Destination $assetsDstDir -Recurse -Force
+}
 
 Write-Host "      [OK] All components staged successfully." -ForegroundColor Green
 

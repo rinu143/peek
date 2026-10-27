@@ -709,13 +709,31 @@ namespace PeekSetup.ViewModels
             }
         }
 
+        private double _centerCorrectionAngle = 0.0;
+        public double CenterCorrectionAngle
+        {
+            get => _centerCorrectionAngle;
+            set
+            {
+                if (Math.Abs(_centerCorrectionAngle - value) > 0.5)
+                {
+                    _centerCorrectionAngle = value;
+                    OnPropertyChanged();
+                    if (string.Equals(OverlayHint, "center", StringComparison.OrdinalIgnoreCase))
+                    {
+                        OnPropertyChanged(nameof(DirectionArrowAngle));
+                    }
+                }
+            }
+        }
+
         public double DirectionArrowAngle
         {
             get
             {
                 if (string.Equals(OverlayHint, "closer", StringComparison.OrdinalIgnoreCase)) return 0.0;
                 if (string.Equals(OverlayHint, "back", StringComparison.OrdinalIgnoreCase)) return 180.0;
-                if (string.Equals(OverlayHint, "center", StringComparison.OrdinalIgnoreCase)) return 0.0;
+                if (string.Equals(OverlayHint, "center", StringComparison.OrdinalIgnoreCase)) return CenterCorrectionAngle;
                 return _directionArrowAngle;
             }
             private set
@@ -1390,6 +1408,18 @@ namespace PeekSetup.ViewModels
                 double by1 = overlay.Face.Bbox[1];
                 double bx2 = overlay.Face.Bbox[2];
                 double by2 = overlay.Face.Bbox[3];
+
+                double cx = (bx1 + bx2) / 2.0;
+                double cy = (by1 + by2) / 2.0;
+                double dx = 0.5 - cx;
+                double dy = 0.5 - cy;
+                double angleDeg = 0.0;
+                if (Math.Abs(dx) > 0.01 || Math.Abs(dy) > 0.01)
+                {
+                    angleDeg = Math.Atan2(dx, -dy) * (180.0 / Math.PI);
+                    if (angleDeg < 0) angleDeg += 360.0;
+                }
+                CenterCorrectionAngle = angleDeg;
 
                 double left = Math.Clamp(bx1 * 296.0, 0, 296.0);
                 double top = Math.Clamp(by1 * 296.0, 0, 296.0);

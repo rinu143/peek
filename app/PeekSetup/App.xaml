@@ -101,9 +101,9 @@
             M 9,16 C 10,17.2 14,17.2 15,16
         </StreamGeometry>
 
-        <!-- Stylized Eye (24x24) -->
+        <!-- Stylized Eye (24x24) - Cleaned-up symmetric Peek Logo -->
         <StreamGeometry x:Key="GeoEye">
-            M 2,12 C 4.5,6.5 12,6.5 14.5,12 C 12,17.5 4.5,17.5 2,12 Z
+            M 2,12 C 5,6 19,6 22,12 C 19,18 5,18 2,12 Z
             M 12,8.5 A 3.5,3.5 0 1 0 12,15.5 A 3.5,3.5 0 1 0 12,8.5 Z
         </StreamGeometry>
 

@@ -6,6 +6,7 @@
         xmlns:vm="clr-namespace:PeekSetup.ViewModels"
         mc:Ignorable="d"
         Title="Face Recognition Setup"
+        Icon="assets/peek.ico"
         Height="690" Width="720"
         MinHeight="560" MinWidth="520"
         WindowStartupLocation="CenterScreen"
@@ -132,9 +133,9 @@
                 <!-- SCREEN: ALREADY ENROLLED (ACTIVE PROFILE MANAGEMENT) -->
                 <Grid Visibility="{Binding IsAlreadyEnrolledStep, Converter={StaticResource BoolToVis}}">
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440">
-                        <!-- Clean Face ID Glyph -->
+                        <!-- Peek Eye Brand Mark -->
                         <Border Width="60" Height="60" CornerRadius="30" Background="{DynamicResource PillBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,18">
-                            <Path Data="{StaticResource GeoFaceID}" Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="28" Height="28" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <Path Data="{StaticResource GeoEye}" Fill="{DynamicResource TextPrimaryBrush}" Stretch="Uniform" Width="30" Height="30" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
 
                         <TextBlock Text="Face Recognition" FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,6" Foreground="{DynamicResource TextPrimaryBrush}" />
@@ -143,15 +144,23 @@
 
                         <!-- Minimal Status Card -->
                         <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
-                                BorderThickness="1" CornerRadius="16" Padding="20">
+                                BorderThickness="1" CornerRadius="16" Padding="20" MinWidth="320" HorizontalAlignment="Stretch">
                             <StackPanel>
                                 <Grid Margin="0,0,0,12">
-                                    <TextBlock Text="User" FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" />
-                                    <TextBlock Text="{Binding ExistingProfileName}" FontWeight="Medium" FontSize="13" Foreground="{DynamicResource TextPrimaryBrush}" HorizontalAlignment="Right" />
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="User" FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="1" Text="{Binding ExistingProfileName}" FontWeight="Medium" FontSize="13" Foreground="{DynamicResource TextPrimaryBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
                                 </Grid>
                                 <Grid>
-                                    <TextBlock Text="Status" FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
-                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Status" FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                         <Ellipse Width="7" Height="7" Fill="{DynamicResource SuccessBrush}" Margin="0,0,6,0" VerticalAlignment="Center" />
                                         <TextBlock Text="Active for Lock Screen" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
                                     </StackPanel>
@@ -164,9 +173,9 @@
                 <!-- STEP 1: WELCOME & NAME -->
                 <Grid Visibility="{Binding IsWelcomeStep, Converter={StaticResource BoolToVis}}">
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440">
-                        <!-- Clean Face ID Glyph -->
+                        <!-- Peek Eye Brand Mark -->
                         <Border Width="64" Height="64" CornerRadius="32" Background="{DynamicResource PillBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,18">
-                            <Path Data="{StaticResource GeoFaceID}" Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="30" Height="30" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <Path Data="{StaticResource GeoEye}" Fill="{DynamicResource TextPrimaryBrush}" Stretch="Uniform" Width="32" Height="32" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
 
                         <TextBlock Text="Set Up Face Recognition" FontSize="26" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,8" Foreground="{DynamicResource TextPrimaryBrush}" />
@@ -317,6 +326,9 @@
                                                     Width="296" Height="296" CornerRadius="148" Background="#000000"
                                                     SnapsToDevicePixels="True" ClipToBounds="True">
                                                 <Grid Width="296" Height="296">
+                                                    <Grid.Clip>
+                                                        <EllipseGeometry Center="148,148" RadiusX="148" RadiusY="148" />
+                                                    </Grid.Clip>
                                                     <!-- Clean Camera Stream Frame -->
                                                     <Image Source="{Binding PreviewImage}" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" />
 
@@ -662,7 +674,7 @@
                 <Button Style="{StaticResource SecondaryButtonStyle}"
                         Command="{Binding ExitCommand}"
                         Content="Done"
-                        Height="36" FontSize="13" Background="Transparent" BorderBrush="Transparent" Foreground="{DynamicResource TextSecondaryBrush}"
+                        Height="38" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextPrimaryBrush}"
                         AutomationProperties.Name="Close setup" />
             </StackPanel>
 

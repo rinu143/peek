@@ -126,6 +126,13 @@ foreach ($file in $sourceMap.Keys) {
     Copy-Item -Path $src -Destination $dst -Force
 }
 
+$assetsSrc = Join-Path $SourceDir "assets"
+if (Test-Path $assetsSrc) {
+    $assetsDst = Join-Path $InstallDir "assets"
+    if (-not (Test-Path $assetsDst)) { New-Item -ItemType Directory -Path $assetsDst -Force | Out-Null }
+    Copy-Item -Path (Join-Path $assetsSrc "*") -Destination $assetsDst -Recurse -Force
+}
+
 # 5. Register Credential Provider DLL
 Write-Host "[3/5] Registering Credential Provider with Windows LogonUI..." -ForegroundColor Cyan
 $dllPath = Join-Path $InstallDir "PeekCredentialProvider.dll"
@@ -163,9 +170,10 @@ try {
         try { $currentUser = (whoami).Split('\')[-1] } catch {}
     }
     if ([string]::IsNullOrWhiteSpace($currentUser)) { $currentUser = "SYSTEM" }
+    $logonType = if ($currentUser -eq "SYSTEM") { "ServiceAccount" } else { "Interactive" }
     $action = New-ScheduledTaskAction -Execute $engineExe -WorkingDirectory $InstallDir
     $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Highest
+    $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType $logonType -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
     $null = Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop
     Write-Host "      [OK] Scheduled Task '$taskName' created (starts at logon)." -ForegroundColor Green
@@ -189,6 +197,8 @@ if (-not $taskCreated) {
     $shortcut.TargetPath = $engineExe
     $shortcut.WorkingDirectory = $InstallDir
     $shortcut.Description = "Peek Face Recognition Engine (Logon Startup)"
+    $iconCandidate = Join-Path $InstallDir "assets\peek.ico"
+    if (Test-Path $iconCandidate) { $shortcut.IconLocation = "$iconCandidate,0" }
     $shortcut.Save()
     [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shortcut) | Out-Null
     [System.Runtime.InteropServices.Marshal]::ReleaseComObject($wsh) | Out-Null
@@ -207,6 +217,8 @@ $setupShortcut = $wsh.CreateShortcut($setupShortcutPath)
 $setupShortcut.TargetPath = $setupExe
 $setupShortcut.WorkingDirectory = $InstallDir
 $setupShortcut.Description = "Peek Biometric Enrollment & Setup"
+$iconCandidate = Join-Path $InstallDir "assets\peek.ico"
+if (Test-Path $iconCandidate) { $setupShortcut.IconLocation = "$iconCandidate,0" } else { $setupShortcut.IconLocation = "$setupExe,0" }
 $setupShortcut.Save()
 [System.Runtime.InteropServices.Marshal]::ReleaseComObject($setupShortcut) | Out-Null
 [System.Runtime.InteropServices.Marshal]::ReleaseComObject($wsh) | Out-Null
