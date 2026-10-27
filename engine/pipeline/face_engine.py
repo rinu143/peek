@@ -58,9 +58,9 @@ class FaceEngine:
     temporal verification, and independent multi-cue liveness gating.
 
     require_active_challenge:
-        When True (default), unlock is withheld until ChallengeManager reports
-        passed=True, even if biometric match and passive liveness already pass.
-        Set False for low-friction / demo use (passive liveness only).
+        When False (default), unlock is granted immediately once biometric matching
+        and passive liveness pass, without issuing interactive head-turn/blink challenges.
+        Set True only if explicit interactive challenge-response is required.
     """
 
     def __init__(
@@ -73,7 +73,7 @@ class FaceEngine:
         temporal_min_matches: int = 5,
         liveness_min_frames: int = 8,
         liveness_threshold: float = 0.58,
-        require_active_challenge: bool = True,
+        require_active_challenge: bool = False,
         quality_checker: Optional[FaceQualityChecker] = None,
         challenge_escalation_score_band: Tuple[float, float] = (0.45, 0.75),
         challenge_escalation_bezel_threshold: float = 0.25,

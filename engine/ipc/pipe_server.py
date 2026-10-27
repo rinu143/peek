@@ -251,7 +251,7 @@ class PipeServer:
         """Lazily initializes FaceEngine if not provided in constructor."""
         if self.face_engine is None:
             logger.info("Initializing default FaceEngine instance for IPC server...")
-            self.face_engine = FaceEngine(match_threshold=0.48)
+            self.face_engine = FaceEngine(match_threshold=0.48, require_active_challenge=False)
         return self.face_engine
 
     def start(self):

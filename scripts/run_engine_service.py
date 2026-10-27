@@ -59,6 +59,12 @@ def main():
         action="store_true",
         help="Enable verbose debug logging"
     )
+    parser.add_argument(
+        "--require-challenge",
+        action="store_true",
+        default=False,
+        help="Require active interactive challenge gestures before unlocking (default: False)"
+    )
     args = parser.parse_args()
 
     setup_logging(args.debug)
@@ -80,7 +86,7 @@ def main():
     engine = FaceEngine(
         profile_store=profile_store,
         match_threshold=0.48,
-        require_active_challenge=True
+        require_active_challenge=args.require_challenge
     )
 
     coordinator = SessionCoordinator()

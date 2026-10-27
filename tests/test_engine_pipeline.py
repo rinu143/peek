@@ -508,6 +508,93 @@ class TestPeekFaceEngine(unittest.TestCase):
         self.assertTrue(risk_flag_fill, "Large face fill ratio should trigger escalation")
 
 
+    def test_instant_unlock_without_active_challenge(self):
+        """
+        Validates seamless instant unlock when active challenge is disabled (default):
+        1. Default FaceEngine has require_active_challenge=False.
+        2. _is_challenge_required() returns False.
+        3. Once biometric match and passive liveness are confirmed, unlock is authorized
+           immediately with challenge_result=None and without waiting for gesture prompts.
+        """
+        from unittest.mock import patch, MagicMock
+
+        engine = FaceEngine(
+            detector_model_path=self.det_model_path,
+            embedder_model_path=self.emb_model_path,
+            profile_store=self.profile_store,
+            match_threshold=0.48
+        )
+
+        self.assertFalse(engine.require_active_challenge)
+        self.assertFalse(engine._is_challenge_required())
+
+        # Set up an enrolled profile
+        test_embedding = np.random.rand(512).astype(np.float32)
+        test_embedding /= np.linalg.norm(test_embedding)
+        profile = PeekProfile(
+            profile_id="instant_user",
+            display_name="Instant User",
+            templates=[
+                PeekTemplate(
+                    template_id="tmpl_instant",
+                    embedding=test_embedding.tolist(),
+                    pose_label="CENTER",
+                    quality_score=0.98
+                )
+            ]
+        )
+        engine.set_active_profile(profile)
+
+        mock_detection = FaceDetection(
+            bbox=np.array([200.0, 100.0, 440.0, 380.0], dtype=np.float32),
+            confidence=0.95,
+            landmarks=np.array([
+                [270.0, 190.0],
+                [370.0, 190.0],
+                [320.0, 240.0],
+                [280.0, 300.0],
+                [360.0, 300.0]
+            ], dtype=np.float32)
+        )
+
+        mock_live_result = MagicMock(
+            is_live=True,
+            state="LIVE",
+            fused_score=0.92,
+            motion_score=0.88,
+            texture_score=0.95,
+            eye_score=0.90,
+            blink_count=1,
+            blink_detected=False,
+            spoof_reason=None,
+            bezel_confidence=0.0,
+            details="Passive multi-cue liveness confirmed"
+        )
+
+        mock_quality = MagicMock(passed=True, rejection_reason=None)
+        dummy_frame = np.full((480, 640, 3), 120, dtype=np.uint8)
+
+        with patch.object(engine.detector, 'detect', return_value=[mock_detection]), \
+             patch.object(engine.embedder, 'extract_embedding', return_value=test_embedding), \
+             patch.object(engine.quality_checker, 'evaluate', return_value=mock_quality), \
+             patch.object(engine.liveness_detector, 'update', return_value=mock_live_result):
+
+            authorized = False
+            last_result = None
+            for _ in range(10):
+                res = engine.process_frame(dummy_frame)
+                last_result = res
+                if res.is_authorized_to_unlock:
+                    authorized = True
+                    break
+
+            self.assertTrue(authorized, "User should be authorized to unlock immediately upon face match & passive liveness")
+            self.assertIsNotNone(last_result)
+            self.assertEqual(last_result.state_label, "SUCCESS")
+            self.assertIsNone(last_result.challenge_result, "No active challenge should be issued in default seamless mode")
+            self.assertFalse(engine.challenge_manager.is_active, "ChallengeManager must remain inactive")
+
+
 if __name__ == "__main__":
     unittest.main()
 
