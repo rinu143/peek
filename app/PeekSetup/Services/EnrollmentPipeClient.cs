@@ -93,7 +93,7 @@ namespace PeekSetup.Services
                 throw new InvalidOperationException("Not connected to Peek Enrollment Named Pipe.");
             }
 
-            string message = EnrollmentProtocol.CreateStartEnrollment(displayName, confirmed, password);
+            string message = EnrollmentProtocol.CreateStartEnrollment(displayName, confirmed, password, cleanPreview: true);
             await SendLineAsync(message, ct).ConfigureAwait(false);
         }
 
@@ -239,6 +239,16 @@ namespace PeekSetup.Services
             string guidanceText = root.TryGetProperty("guidance_text", out p) ? p.GetString() ?? "" : "";
             double timestamp = root.TryGetProperty("timestamp", out p) ? p.GetDouble() : 0.0;
 
+            EnrollmentOverlayData? overlay = null;
+            if (root.TryGetProperty("overlay", out var overlayEl) && overlayEl.ValueKind == JsonValueKind.Object)
+            {
+                overlay = EnrollmentProtocol.ParseOverlay(overlayEl);
+            }
+
+            string? frameKind = root.TryGetProperty("frame_kind", out var fkEl) && fkEl.ValueKind == JsonValueKind.String
+                ? fkEl.GetString()
+                : null;
+
             // SECURITY REQUIREMENT: Never write preview frames to disk
             // Decode directly in transient memory into a frozen BitmapImage
             BitmapSource bmp = DecodeBase64Jpeg(b64);
@@ -249,7 +259,9 @@ namespace PeekSetup.Services
                 qualityState,
                 progressPct,
                 guidanceText,
-                timestamp
+                timestamp,
+                overlay,
+                frameKind
             ));
         }
 

@@ -15,6 +15,17 @@ namespace PeekSetup
             InitializeComponent();
             Loaded += async (_, _) =>
             {
+                try
+                {
+                    var workArea = SystemParameters.WorkArea;
+                    if (Width > workArea.Width) Width = workArea.Width;
+                    if (Height > workArea.Height) Height = workArea.Height;
+                }
+                catch
+                {
+                    // Non-fatal fallback
+                }
+
                 if (DataContext is MainViewModel vm)
                 {
                     await vm.CheckExistingProfileAsync();

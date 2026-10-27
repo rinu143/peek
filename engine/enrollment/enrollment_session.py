@@ -117,6 +117,8 @@ class EnrollmentSession:
         self.candidate_buffer: List[PoseCandidate] = []
         self.final_templates: List[PeekTemplate] = []
         self.pose_transition_cooldown = 0.0
+        self.last_detections: List[FaceDetection] = []
+        self.last_pose_estimate: Optional[Any] = None
 
     def start(self):
         """Starts or restarts the 9-direction enrollment process."""
@@ -124,6 +126,8 @@ class EnrollmentSession:
         self.state = EnrollmentState.GUIDING_TO_POSE
         self.candidate_buffer.clear()
         self.final_templates.clear()
+        self.last_detections.clear()
+        self.last_pose_estimate = None
         self.pose_transition_cooldown = time.time() + 0.5
         logger.info("Enrollment session started. Target pose: %s", self.current_pose.value)
 
@@ -143,11 +147,24 @@ class EnrollmentSession:
         Evaluates face presence, quality, pose alignment, and accumulates candidates.
         """
         if self.state in (EnrollmentState.IDLE, EnrollmentState.COMPLETED):
+            self.last_detections = []
+            self.last_pose_estimate = None
             return self._build_progress(
                 guidance="Enrollment complete." if self.is_complete else "Session idle.",
                 quality_passed=False,
                 pose_matched=False
             )
+
+        # 1. Detect faces (single detector run per frame reused across runner)
+        detections = self.detector.detect(frame) if self.detector else []
+        self.last_detections = detections
+        if detections:
+            try:
+                self.last_pose_estimate = self.pose_estimator.estimate(detections[0].landmarks)
+            except Exception:
+                self.last_pose_estimate = None
+        else:
+            self.last_pose_estimate = None
 
         # Handle brief inter-pose transition cooldown
         if time.time() < self.pose_transition_cooldown:
@@ -157,8 +174,7 @@ class EnrollmentSession:
                 pose_matched=False
             )
 
-        # 1. Detect faces
-        detections = self.detector.detect(frame)
+        # 2. Quality gating
 
         # 2. Quality gating
         q_result = self.quality_checker.evaluate(frame, detections)

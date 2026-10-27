@@ -79,7 +79,7 @@ namespace PeekSetup.Models
             PropertyNamingPolicy = null
         };
 
-        public static string CreateStartEnrollment(string displayName, bool confirmed = false, string? password = null)
+        public static string CreateStartEnrollment(string displayName, bool confirmed = false, string? password = null, bool cleanPreview = true)
         {
             var msg = new
             {
@@ -87,10 +87,96 @@ namespace PeekSetup.Models
                 type = MsgStartEnrollment,
                 display_name = displayName,
                 confirmed = confirmed ? (bool?)true : null,
+                clean_preview = cleanPreview ? (bool?)true : null,
                 password = password,
                 timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
             };
             return JsonSerializer.Serialize(msg, JsonOptions);
+        }
+
+        public static EnrollmentOverlayData? ParseOverlay(JsonElement overlayElement)
+        {
+            if (overlayElement.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            try
+            {
+                FaceOverlayData? face = null;
+                if (overlayElement.TryGetProperty("face", out var faceEl) && faceEl.ValueKind == JsonValueKind.Object)
+                {
+                    bool found = faceEl.TryGetProperty("found", out var foundEl) && foundEl.ValueKind == JsonValueKind.True;
+                    
+                    double[] bbox = new double[4];
+                    if (faceEl.TryGetProperty("bbox", out var bboxEl) && bboxEl.ValueKind == JsonValueKind.Array)
+                    {
+                        int i = 0;
+                        foreach (var item in bboxEl.EnumerateArray())
+                        {
+                            if (i < 4 && item.ValueKind == JsonValueKind.Number && item.TryGetDouble(out double val))
+                            {
+                                bbox[i++] = val;
+                            }
+                        }
+                    }
+
+                    var landmarksList = new System.Collections.Generic.List<double[]>();
+                    if (faceEl.TryGetProperty("landmarks", out var lmEl) && lmEl.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var ptEl in lmEl.EnumerateArray())
+                        {
+                            if (ptEl.ValueKind == JsonValueKind.Array)
+                            {
+                                var pt = new double[2];
+                                int pi = 0;
+                                foreach (var c in ptEl.EnumerateArray())
+                                {
+                                    if (pi < 2 && c.ValueKind == JsonValueKind.Number && c.TryGetDouble(out double coord))
+                                    {
+                                        pt[pi++] = coord;
+                                    }
+                                }
+                                landmarksList.Add(pt);
+                            }
+                        }
+                    }
+
+                    double yaw = faceEl.TryGetProperty("yaw", out var yawEl) && yawEl.ValueKind == JsonValueKind.Number && yawEl.TryGetDouble(out double yv) ? yv : 0.0;
+                    double pitch = faceEl.TryGetProperty("pitch", out var pitchEl) && pitchEl.ValueKind == JsonValueKind.Number && pitchEl.TryGetDouble(out double pv) ? pv : 0.0;
+
+                    face = new FaceOverlayData(found, bbox, landmarksList.ToArray(), yaw, pitch);
+                }
+
+                bool poseMatched = overlayElement.TryGetProperty("pose_matched", out var pmEl) && pmEl.ValueKind == JsonValueKind.True;
+                bool qualityPassed = overlayElement.TryGetProperty("quality_passed", out var qpEl) && qpEl.ValueKind == JsonValueKind.True;
+
+                TargetPoseData? target = null;
+                if (overlayElement.TryGetProperty("target", out var tgtEl) && tgtEl.ValueKind == JsonValueKind.Object)
+                {
+                    string pose = tgtEl.TryGetProperty("pose", out var pEl) && pEl.ValueKind == JsonValueKind.String ? pEl.GetString() ?? "" : "";
+                    double ty = tgtEl.TryGetProperty("yaw", out var tyEl) && tyEl.ValueKind == JsonValueKind.Number && tyEl.TryGetDouble(out double tyv) ? tyv : 0.0;
+                    double tp = tgtEl.TryGetProperty("pitch", out var tpEl) && tpEl.ValueKind == JsonValueKind.Number && tpEl.TryGetDouble(out double tpv) ? tpv : 0.0;
+                    target = new TargetPoseData(pose, ty, tp);
+                }
+
+                SampleProgressData? samples = null;
+                if (overlayElement.TryGetProperty("samples", out var sampEl) && sampEl.ValueKind == JsonValueKind.Object)
+                {
+                    int collected = sampEl.TryGetProperty("collected", out var cEl) && cEl.ValueKind == JsonValueKind.Number && cEl.TryGetInt32(out int cv) ? cv : 0;
+                    int targetCand = sampEl.TryGetProperty("target", out var tEl) && tEl.ValueKind == JsonValueKind.Number && tEl.TryGetInt32(out int tv) ? tv : 1;
+                    samples = new SampleProgressData(collected, targetCand);
+                }
+
+                int posesCompleted = overlayElement.TryGetProperty("poses_completed", out var pcEl) && pcEl.ValueKind == JsonValueKind.Number && pcEl.TryGetInt32(out int pcv) ? pcv : 0;
+
+                return new EnrollmentOverlayData(face, poseMatched, qualityPassed, target, samples, posesCompleted);
+            }
+            catch
+            {
+                // Tolerant parsing: corrupt or malformed payload falls back softly
+                return null;
+            }
         }
 
         public static string CreateCancelEnrollment(string reason = "USER_CANCELLED")
@@ -128,13 +214,43 @@ namespace PeekSetup.Models
         }
     }
 
+    public record FaceOverlayData(
+        bool Found,
+        double[] Bbox,
+        double[][] Landmarks,
+        double Yaw,
+        double Pitch
+    );
+
+    public record TargetPoseData(
+        string Pose,
+        double Yaw,
+        double Pitch
+    );
+
+    public record SampleProgressData(
+        int Collected,
+        int Target
+    );
+
+    public record EnrollmentOverlayData(
+        FaceOverlayData? Face,
+        bool PoseMatched,
+        bool QualityPassed,
+        TargetPoseData? Target,
+        SampleProgressData? Samples,
+        int PosesCompleted
+    );
+
     public record PreviewFrameData(
         string FrameJpegB64,
         string TargetPose,
         string QualityState,
         double ProgressPercentage,
         string GuidanceText,
-        double Timestamp
+        double Timestamp,
+        EnrollmentOverlayData? Overlay = null,
+        string? FrameKind = null
     );
 
     public record PoseCompleteData(

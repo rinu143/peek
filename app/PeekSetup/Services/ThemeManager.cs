@@ -53,9 +53,9 @@ namespace PeekSetup.Services
             }
         }
 
-        public static void ApplyTheme(bool isDark)
+        public static void ApplyTheme(bool isDark, ResourceDictionary? targetResources = null)
         {
-            var res = Application.Current?.Resources;
+            var res = targetResources ?? Application.Current?.Resources;
             if (res == null) return;
 
             if (isDark)

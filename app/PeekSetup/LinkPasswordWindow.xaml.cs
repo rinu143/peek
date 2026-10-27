@@ -25,6 +25,7 @@ namespace PeekSetup
             _profileId = profileId;
             _linker = linker ?? new PasswordLinker();
 
+            MaxHeight = SystemParameters.WorkArea.Height * 0.90;
             TargetUserText.Text = $"Target Account: {_targetUser}";
             Loaded += (_, _) => PasswordInput.Focus();
         }

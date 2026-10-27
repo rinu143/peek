@@ -588,11 +588,14 @@ class EnrollmentPipeServer:
                             session.write_message(make_error(REASON_CONFIRMATION_REQUIRED, "Confirmation required to replace existing profile"))
                             continue
 
+                    clean_preview = bool(msg.get("clean_preview", False))
+
                     self._run_enrollment_session(
                         session,
                         display_name=display_name,
                         confirmed=confirmed,
-                        password=password
+                        password=password,
+                        clean_preview=clean_preview,
                     )
                 finally:
                     if self.coordinator is not None:
@@ -611,17 +614,18 @@ class EnrollmentPipeServer:
         session: EnrollmentPipeClientSession,
         display_name: str,
         confirmed: bool = False,
-        password: Optional[str] = None
+        password: Optional[str] = None,
+        clean_preview: bool = False,
     ):
         """
         Executes a live guided enrollment session:
         1. Verifies client process token SID before streaming frames.
         2. Initializes and starts EnrollmentRunner.
-        3. Encodes composited frame as transient base64 JPEG in memory.
+        3. Encodes composited or clean frame as transient base64 JPEG in memory.
         4. Streams PREVIEW_FRAME messages only to verified client.
         5. Emits POSE_COMPLETE and ENROLLMENT_COMPLETE.
         """
-        logger.info(f"Starting enrollment session for display_name='{display_name}'")
+        logger.info(f"Starting enrollment session for display_name='{display_name}' (clean_preview={clean_preview})")
 
         # Requirement 6: Verify client process SID matches enrolled user before streaming frames
         client_sid = get_client_process_sid(session.handle)
@@ -684,12 +688,24 @@ class EnrollmentPipeServer:
                     session.write_message(make_error(REASON_CAMERA_ERROR, "Camera feed lost"))
                     break
 
+                # Select frame and parameters based on clean_preview request
+                if clean_preview and getattr(step_result, "preview_frame", None) is not None:
+                    frame_to_encode = step_result.preview_frame
+                    jpeg_quality = 75
+                    overlay_payload = getattr(step_result, "overlay", None)
+                    frame_kind_val = "clean"
+                else:
+                    frame_to_encode = step_result.composited_frame
+                    jpeg_quality = 80
+                    overlay_payload = None
+                    frame_kind_val = None
+
                 # Transient in-memory JPEG compression (never written to disk)
                 success, buffer = cv2.imencode(
-                    ".jpg", step_result.composited_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+                    ".jpg", frame_to_encode, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
                 )
                 if not success:
-                    logger.error("Failed to JPEG-encode composited preview frame.")
+                    logger.error("Failed to JPEG-encode preview frame.")
                     session.write_message(make_error(REASON_INTERNAL_ERROR, "Failed to encode preview frame"))
                     break
 
@@ -709,6 +725,8 @@ class EnrollmentPipeServer:
                     quality_state=step_result.quality_state,
                     progress_pct=step_result.progress_pct,
                     guidance_text=step_result.guidance_text,
+                    overlay=overlay_payload,
+                    frame_kind=frame_kind_val,
                 )
                 if not session.write_message(preview_msg):
                     logger.info("Failed to send preview frame; client likely disconnected.")

@@ -214,9 +214,13 @@ namespace PeekSetup.Tests
         {
             var mockPipe = new MockEnrollmentPipeClient();
             var vm = new MainViewModel(mockPipe, new MockPasswordLinker());
+            vm.EnrollmentCompleteDelayMs = 10;
 
             await vm.StartEnrollmentFlowAsync();
             mockPipe.TriggerEnrollmentCompleted("prof_abc123", "Alice");
+
+            // Allow short 10ms animation delay to complete
+            await Task.Delay(50);
 
             Assert.Equal(SetupStep.PasswordLink, vm.CurrentStep);
             Assert.True(vm.IsPasswordLinkStep);
@@ -309,9 +313,13 @@ namespace PeekSetup.Tests
         {
             var mockPipe = new MockEnrollmentPipeClient();
             var vm = new MainViewModel(mockPipe, new MockPasswordLinker());
+            vm.PoseCompleteDelayMs = 10;
 
             await vm.StartEnrollmentFlowAsync();
             mockPipe.TriggerPoseCompleted("CENTER", 0);
+
+            // Allow short 10ms flash/check to finish before track advances
+            await Task.Delay(50);
 
             Assert.True(vm.Poses[0].IsCompleted);
             Assert.True(vm.Poses[1].IsActive);

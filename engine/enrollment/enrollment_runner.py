@@ -166,6 +166,8 @@ class EnrollmentStepResult:
         saved_profile: Optional[PeekProfile] = None,
         progress: Optional[EnrollmentProgress] = None,
         raw_frame: Optional[np.ndarray] = None,
+        preview_frame: Optional[np.ndarray] = None,
+        overlay: Optional[Dict[str, Any]] = None,
     ):
         self.composited_frame = composited_frame
         self.state = state
@@ -179,6 +181,8 @@ class EnrollmentStepResult:
         self.saved_profile = saved_profile
         self.progress = progress
         self.raw_frame = raw_frame
+        self.preview_frame = preview_frame
+        self.overlay = overlay
 
     def __iter__(self):
         yield self.composited_frame
@@ -352,7 +356,18 @@ class EnrollmentRunner:
         raw_copy = frame.copy()
 
         # Mirror webcam feed for intuitive gaze direction
-        frame = cv2.flip(frame, 1)
+        mirrored = cv2.flip(raw_copy, 1)
+
+        # Build clean square preview frame for native rendering (no OpenCV drawing)
+        h, w = mirrored.shape[:2]
+        sq_size = min(h, w)
+        crop_x = (w - sq_size) // 2
+        crop_y = (h - sq_size) // 2
+        cropped_square = mirrored[crop_y:crop_y + sq_size, crop_x:crop_x + sq_size]
+        preview_frame = cv2.resize(cropped_square, (480, 480), interpolation=cv2.INTER_LINEAR)
+
+        # Frame for OpenCV composited HUD
+        frame = mirrored.copy()
 
         # Create layout canvas: 760 width, 520 height
         canvas = np.zeros((520, 760, 3), dtype=np.uint8)
@@ -361,8 +376,8 @@ class EnrollmentRunner:
         prev_idx = self.session.current_pose_idx
         prev_pose = self.session.current_pose
 
-        # Process frame through enrollment session
-        progress = self.session.process_frame(frame, mirrored=True)
+        # Process frame through enrollment session (runs detector once)
+        progress = self.session.process_frame(mirrored, mirrored=True)
         self._last_progress = progress
 
         # Check if pose just completed
@@ -370,34 +385,81 @@ class EnrollmentRunner:
         completed_pose_str = prev_pose.value if pose_just_completed else ""
         completed_pose_idx = prev_idx if pose_just_completed else -1
 
-        # Extract user pose for the HUD dial
+        # Extract user pose for the HUD dial by reusing detections from session (no second detector call)
         user_yaw = 0.0
         user_pitch = 0.0
         det = None
-        if hasattr(self.session, "detector") and self.session.detector:
-            try:
-                det = self.session.detector.detect(frame)
-            except Exception:
-                det = None
-
-        if det:
-            if hasattr(self.session, "pose_estimator") and self.session.pose_estimator:
+        session_dets = getattr(self.session, "last_detections", None)
+        if session_dets and len(session_dets) > 0:
+            det = session_dets[0]
+            pose_est = getattr(self.session, "last_pose_estimate", None)
+            if pose_est is not None:
+                user_yaw = -pose_est.yaw  # Mirrored
+                user_pitch = pose_est.pitch
+            elif hasattr(self.session, "pose_estimator") and self.session.pose_estimator:
                 try:
-                    pose_est = self.session.pose_estimator.estimate(det[0].landmarks)
-                    user_yaw = -pose_est.yaw  # Mirrored
-                    user_pitch = pose_est.pitch
+                    pe = self.session.pose_estimator.estimate(det.landmarks)
+                    user_yaw = -pe.yaw
+                    user_pitch = pe.pitch
                 except Exception:
                     pass
 
             # Draw subtle face tracking brackets on camera preview
             try:
-                x1, y1, x2, y2 = det[0].bbox.astype(int)
+                x1, y1, x2, y2 = det.bbox.astype(int)
                 color = COLOR_GREEN if progress.pose_matched and progress.quality_passed else COLOR_YELLOW
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 1, cv2.LINE_AA)
-                for pt in det[0].landmarks.astype(int):
+                for pt in det.landmarks.astype(int):
                     cv2.circle(frame, tuple(pt), 2, (50, 230, 255), -1)
             except Exception:
                 pass
+
+        # Build normalized overlay dictionary for native UI rendering
+        if det is not None:
+            bx1, by1, bx2, by2 = det.bbox
+            norm_x1 = max(0.0, min(1.0, (float(bx1) - crop_x) / float(sq_size)))
+            norm_y1 = max(0.0, min(1.0, (float(by1) - crop_y) / float(sq_size)))
+            norm_x2 = max(0.0, min(1.0, (float(bx2) - crop_x) / float(sq_size)))
+            norm_y2 = max(0.0, min(1.0, (float(by2) - crop_y) / float(sq_size)))
+            norm_landmarks = []
+            for pt in det.landmarks:
+                lx = max(0.0, min(1.0, (float(pt[0]) - crop_x) / float(sq_size)))
+                ly = max(0.0, min(1.0, (float(pt[1]) - crop_y) / float(sq_size)))
+                norm_landmarks.append([round(lx, 4), round(ly, 4)])
+
+            face_data = {
+                "found": True,
+                "bbox": [round(norm_x1, 4), round(norm_y1, 4), round(norm_x2, 4), round(norm_y2, 4)],
+                "landmarks": norm_landmarks,
+                "yaw": round(float(user_yaw), 4),
+                "pitch": round(float(user_pitch), 4),
+            }
+        else:
+            face_data = {
+                "found": False,
+                "bbox": [0.0, 0.0, 0.0, 0.0],
+                "landmarks": [],
+                "yaw": 0.0,
+                "pitch": 0.0,
+            }
+
+        tdx, tdy = POSE_DIAL_COORDS.get(progress.current_pose, (0.0, 0.0))
+        poses_completed = 9 if self.session.is_complete else int(self.session.current_pose_idx)
+        overlay_dict = {
+            "face": face_data,
+            "pose_matched": bool(progress.pose_matched),
+            "quality_passed": bool(progress.quality_passed),
+            "target": {
+                "pose": progress.current_pose.value,
+                "yaw": round(float(tdx), 4),
+                "pitch": round(float(tdy), 4),
+            },
+            "samples": {
+                "collected": int(progress.candidates_collected),
+                "target": int(max(1, progress.target_candidates)),
+            },
+            "poses_completed": poses_completed,
+        }
 
         # Resize & embed live camera preview into canvas (480x360 at (30, 85))
         preview = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_LINEAR)
@@ -485,6 +547,8 @@ class EnrollmentRunner:
             saved_profile=self.saved_profile,
             progress=progress,
             raw_frame=raw_copy,
+            preview_frame=preview_frame,
+            overlay=overlay_dict,
         )
 
     def run(self, auto_stop_on_complete: bool = False) -> Generator[EnrollmentStepResult, None, None]:

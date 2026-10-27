@@ -49,6 +49,25 @@ namespace PeekSetup.ViewModels
         private int _currentPoseIndex;
         private string _engineErrorMessage = string.Empty;
 
+        // Native Overlay & Face Tracking State
+        private bool _hasOverlay;
+        private bool _isFaceDetected;
+        private double _faceBboxLeft;
+        private double _faceBboxTop;
+        private double _faceBboxWidth;
+        private double _faceBboxHeight;
+        private bool _isPoseMatched;
+        private bool _isBracketGreen;
+        private double _sampleProgress;
+        private double _targetDotX = 155.0;
+        private double _targetDotY = 155.0;
+        private bool _isTargetDotVisible;
+        private bool _isPoseFlashActive;
+        private bool _isPoseCheckActive;
+        private bool _isEnrollmentCompleteRing;
+        private bool _isDetailsExpanded;
+        private string _rawTechnicalDetails = string.Empty;
+
         // Password linking state
         private string _enrolledProfileId = string.Empty;
         private string _enrolledDisplayName = string.Empty;
@@ -76,6 +95,7 @@ namespace PeekSetup.ViewModels
                     OnPropertyChanged(nameof(IsPasswordLinkStep));
                     OnPropertyChanged(nameof(IsDoneStep));
                     OnPropertyChanged(nameof(IsAlreadyEnrolledStep));
+                    OnPropertyChanged(nameof(ShowStepIndicator));
                     OnPropertyChanged(nameof(StepNumberText));
                 }
             }
@@ -86,6 +106,7 @@ namespace PeekSetup.ViewModels
         public bool IsPasswordLinkStep => CurrentStep == SetupStep.PasswordLink;
         public bool IsDoneStep => CurrentStep == SetupStep.Done;
         public bool IsAlreadyEnrolledStep => CurrentStep == SetupStep.AlreadyEnrolled;
+        public bool ShowStepIndicator => CurrentStep != SetupStep.AlreadyEnrolled;
         public string StepNumberText => CurrentStep == SetupStep.AlreadyEnrolled ? "Active Profile" : $"Step {(int)CurrentStep} of 4";
 
         public string ExistingProfileName
@@ -278,6 +299,300 @@ namespace PeekSetup.ViewModels
             }
         }
 
+        public bool HasOverlay
+        {
+            get => _hasOverlay;
+            private set
+            {
+                if (_hasOverlay != value)
+                {
+                    _hasOverlay = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public bool IsFaceDetected
+        {
+            get => _isFaceDetected;
+            private set
+            {
+                if (_isFaceDetected != value)
+                {
+                    _isFaceDetected = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(CornerBracketsData));
+                }
+            }
+        }
+
+        public double FaceBboxLeft
+        {
+            get => _faceBboxLeft;
+            private set
+            {
+                if (Math.Abs(_faceBboxLeft - value) > 0.1)
+                {
+                    _faceBboxLeft = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public double FaceBboxTop
+        {
+            get => _faceBboxTop;
+            private set
+            {
+                if (Math.Abs(_faceBboxTop - value) > 0.1)
+                {
+                    _faceBboxTop = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public double FaceBboxWidth
+        {
+            get => _faceBboxWidth;
+            private set
+            {
+                if (Math.Abs(_faceBboxWidth - value) > 0.1)
+                {
+                    _faceBboxWidth = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(CornerBracketsData));
+                }
+            }
+        }
+
+        public double FaceBboxHeight
+        {
+            get => _faceBboxHeight;
+            private set
+            {
+                if (Math.Abs(_faceBboxHeight - value) > 0.1)
+                {
+                    _faceBboxHeight = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(CornerBracketsData));
+                }
+            }
+        }
+
+        public string CornerBracketsData
+        {
+            get
+            {
+                if (!IsFaceDetected || FaceBboxWidth < 10 || FaceBboxHeight < 10)
+                    return string.Empty;
+
+                double w = FaceBboxWidth;
+                double h = FaceBboxHeight;
+                double arm = Math.Clamp(Math.Min(w, h) * 0.22, 10.0, 24.0);
+
+                return string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "M 0,{2:F1} L 0,0 L {2:F1},0 M {0:F1},0 L {1:F1},0 L {1:F1},{2:F1} M {1:F1},{3:F1} L {1:F1},{4:F1} L {0:F1},{4:F1} M {2:F1},{4:F1} L 0,{4:F1} L 0,{3:F1}",
+                    w - arm, w, arm, h - arm, h);
+            }
+        }
+
+        public bool IsPoseMatched
+        {
+            get => _isPoseMatched;
+            private set
+            {
+                if (_isPoseMatched != value)
+                {
+                    _isPoseMatched = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public bool IsBracketGreen
+        {
+            get => _isBracketGreen;
+            private set
+            {
+                if (_isBracketGreen != value)
+                {
+                    _isBracketGreen = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public double SampleProgress
+        {
+            get => _sampleProgress;
+            private set
+            {
+                if (Math.Abs(_sampleProgress - value) > 0.001)
+                {
+                    _sampleProgress = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(SampleProgressRingData));
+                }
+            }
+        }
+
+        public string SampleProgressRingData
+        {
+            get
+            {
+                if (IsEnrollmentCompleteRing || SampleProgress >= 0.999)
+                {
+                    return "M 155,7 A 148,148 0 1 1 154.99,7";
+                }
+                if (SampleProgress <= 0.005)
+                {
+                    return string.Empty;
+                }
+
+                double angle = SampleProgress * 360.0;
+                double rad = (angle - 90.0) * Math.PI / 180.0;
+                double endX = 155.0 + 148.0 * Math.Cos(rad);
+                double endY = 155.0 + 148.0 * Math.Sin(rad);
+                int isLargeArc = angle > 180.0 ? 1 : 0;
+                return string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "M 155,7 A 148,148 0 {0} 1 {1:F2},{2:F2}", isLargeArc, endX, endY);
+            }
+        }
+
+        public double TargetDotX
+        {
+            get => _targetDotX;
+            private set
+            {
+                if (Math.Abs(_targetDotX - value) > 0.1)
+                {
+                    _targetDotX = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(TargetDotCanvasLeft));
+                }
+            }
+        }
+
+        public double TargetDotY
+        {
+            get => _targetDotY;
+            private set
+            {
+                if (Math.Abs(_targetDotY - value) > 0.1)
+                {
+                    _targetDotY = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(TargetDotCanvasTop));
+                }
+            }
+        }
+
+        public double TargetDotCanvasLeft => TargetDotX - 5.0;
+        public double TargetDotCanvasTop => TargetDotY - 5.0;
+
+        public bool IsTargetDotVisible
+        {
+            get => _isTargetDotVisible;
+            private set
+            {
+                if (_isTargetDotVisible != value)
+                {
+                    _isTargetDotVisible = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public bool IsPoseFlashActive
+        {
+            get => _isPoseFlashActive;
+            set
+            {
+                if (_isPoseFlashActive != value)
+                {
+                    _isPoseFlashActive = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public bool IsPoseCheckActive
+        {
+            get => _isPoseCheckActive;
+            set
+            {
+                if (_isPoseCheckActive != value)
+                {
+                    _isPoseCheckActive = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public bool IsEnrollmentCompleteRing
+        {
+            get => _isEnrollmentCompleteRing;
+            set
+            {
+                if (_isEnrollmentCompleteRing != value)
+                {
+                    _isEnrollmentCompleteRing = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(SampleProgressRingData));
+                }
+            }
+        }
+
+        public bool IsReducedMotion
+        {
+            get
+            {
+                try
+                {
+                    return !SystemParameters.ClientAreaAnimation;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+        }
+
+        public int PoseCompleteDelayMs { get; set; } = 250;
+        public int EnrollmentCompleteDelayMs { get; set; } = 600;
+
+        public bool IsDetailsExpanded
+        {
+            get => _isDetailsExpanded;
+            set
+            {
+                if (_isDetailsExpanded != value)
+                {
+                    _isDetailsExpanded = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(DetailsToggleText));
+                }
+            }
+        }
+
+        public string RawTechnicalDetails
+        {
+            get => _rawTechnicalDetails;
+            set
+            {
+                if (_rawTechnicalDetails != value)
+                {
+                    _rawTechnicalDetails = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(HasTechnicalDetails));
+                }
+            }
+        }
+
+        public bool HasTechnicalDetails => !string.IsNullOrWhiteSpace(RawTechnicalDetails);
+        public string DetailsToggleText => IsDetailsExpanded ? "Hide Details" : "Show Details";
+
         // Password linking properties
         public string EnrolledProfileId
         {
@@ -381,6 +696,7 @@ namespace PeekSetup.ViewModels
         public ICommand GoToPasswordLinkCommand { get; }
         public ICommand LinkPasswordElevatedCommand { get; }
         public ICommand ExitCommand { get; }
+        public ICommand ToggleDetailsCommand { get; }
 
         public MainViewModel()
             : this(null, null, null)
@@ -415,6 +731,7 @@ namespace PeekSetup.ViewModels
             GoToPasswordLinkCommand = new RelayCommand(GoToPasswordLink);
             LinkPasswordElevatedCommand = new AsyncRelayCommand(LinkPasswordElevatedAsync, () => CanLinkPassword);
             ExitCommand = new RelayCommand(FinishSetup);
+            ToggleDetailsCommand = new RelayCommand(() => IsDetailsExpanded = !IsDetailsExpanded);
         }
 
         private void InitializePoses()
@@ -461,11 +778,13 @@ namespace PeekSetup.ViewModels
             {
                 EnrollmentMode = EnrollmentViewMode.EngineUnavailable;
                 EngineErrorMessage = ex.Message;
+                RawTechnicalDetails = ex.ToString();
             }
             catch (Exception ex)
             {
                 EnrollmentMode = EnrollmentViewMode.Failed;
                 EngineErrorMessage = $"Could not initiate face enrollment: {ex.Message}";
+                RawTechnicalDetails = ex.ToString();
             }
         }
 
@@ -484,6 +803,10 @@ namespace PeekSetup.ViewModels
             {
                 CurrentStep = SetupStep.Welcome;
                 PreviewImage = null;
+                ClearOverlay();
+                IsEnrollmentCompleteRing = false;
+                IsPoseFlashActive = false;
+                IsPoseCheckActive = false;
             }
         }
 
@@ -680,6 +1003,94 @@ namespace PeekSetup.ViewModels
             }
         }
 
+        public void ApplyOverlay(EnrollmentOverlayData overlay)
+        {
+            HasOverlay = true;
+            IsPoseMatched = overlay.PoseMatched;
+            IsBracketGreen = overlay.PoseMatched && overlay.QualityPassed;
+
+            if (overlay.Face != null && overlay.Face.Found && overlay.Face.Bbox != null && overlay.Face.Bbox.Length >= 4)
+            {
+                IsFaceDetected = true;
+                double bx1 = overlay.Face.Bbox[0];
+                double by1 = overlay.Face.Bbox[1];
+                double bx2 = overlay.Face.Bbox[2];
+                double by2 = overlay.Face.Bbox[3];
+
+                double left = Math.Clamp(bx1 * 296.0, 0, 296.0);
+                double top = Math.Clamp(by1 * 296.0, 0, 296.0);
+                double right = Math.Clamp(bx2 * 296.0, left, 296.0);
+                double bottom = Math.Clamp(by2 * 296.0, top, 296.0);
+
+                FaceBboxLeft = Math.Round(left, 1);
+                FaceBboxTop = Math.Round(top, 1);
+                FaceBboxWidth = Math.Round(right - left, 1);
+                FaceBboxHeight = Math.Round(bottom - top, 1);
+            }
+            else
+            {
+                IsFaceDetected = false;
+            }
+
+            if (overlay.Samples != null && overlay.Samples.Target > 0)
+            {
+                SampleProgress = Math.Clamp((double)overlay.Samples.Collected / overlay.Samples.Target, 0.0, 1.0);
+            }
+            else
+            {
+                SampleProgress = 0.0;
+            }
+
+            if (overlay.Target != null)
+            {
+                double targetYaw = overlay.Target.Yaw;
+                double targetPitch = overlay.Target.Pitch;
+
+                if (overlay.PoseMatched)
+                {
+                    TargetDotX = 155.0;
+                    TargetDotY = 155.0;
+                }
+                else if (targetYaw == 0.0 && targetPitch == 0.0)
+                {
+                    double uy = overlay.Face != null ? overlay.Face.Yaw : 0.0;
+                    double up = overlay.Face != null ? overlay.Face.Pitch : 0.0;
+                    TargetDotX = Math.Clamp(155.0 + Math.Clamp(uy / 0.30, -1.0, 1.0) * 80.0, 20.0, 290.0);
+                    TargetDotY = Math.Clamp(155.0 + Math.Clamp(up / 0.20, -1.0, 1.0) * 80.0, 20.0, 290.0);
+                }
+                else
+                {
+                    double angle = Math.Atan2(targetPitch, targetYaw);
+                    double ringX = 155.0 + 148.0 * Math.Cos(angle);
+                    double ringY = 155.0 + 148.0 * Math.Sin(angle);
+
+                    double userYawOffset = overlay.Face != null ? (targetYaw - overlay.Face.Yaw) : 0.0;
+                    double userPitchOffset = overlay.Face != null ? (targetPitch - overlay.Face.Pitch) : 0.0;
+
+                    TargetDotX = Math.Clamp(ringX + userYawOffset * 15.0, 15.0, 295.0);
+                    TargetDotY = Math.Clamp(ringY + userPitchOffset * 15.0, 15.0, 295.0);
+                }
+
+                IsTargetDotVisible = IsEnrolling && !IsEnrollmentCompleteRing;
+            }
+            else
+            {
+                IsTargetDotVisible = false;
+            }
+        }
+
+        public void ClearOverlay()
+        {
+            HasOverlay = false;
+            IsFaceDetected = false;
+            IsTargetDotVisible = false;
+            SampleProgress = 0.0;
+            FaceBboxLeft = 0;
+            FaceBboxTop = 0;
+            FaceBboxWidth = 0;
+            FaceBboxHeight = 0;
+        }
+
         // IPC Event Handlers
         private void OnPreviewFrameReceived(object? sender, PreviewFrameEventArgs e)
         {
@@ -694,6 +1105,15 @@ namespace PeekSetup.ViewModels
 
                 IsQualityPassed = string.Equals(e.QualityState, "PASSED", StringComparison.OrdinalIgnoreCase);
                 QualityStatusText = FormatQualityText(e.QualityState);
+
+                if (e.Overlay != null)
+                {
+                    ApplyOverlay(e.Overlay);
+                }
+                else
+                {
+                    ClearOverlay();
+                }
             });
         }
 
@@ -708,11 +1128,26 @@ namespace PeekSetup.ViewModels
             _ => string.IsNullOrEmpty(qualityState) ? "Analyzing frame..." : qualityState
         };
 
-        private void OnPoseCompleted(object? sender, PoseCompletedEventArgs e)
+        private async void OnPoseCompleted(object? sender, PoseCompletedEventArgs e)
         {
+            int completedIdx = e.PoseIndex;
+
             RunOnUi(() =>
             {
-                int completedIdx = e.PoseIndex;
+                IsPoseFlashActive = true;
+                IsPoseCheckActive = true;
+            });
+
+            if (!IsReducedMotion && PoseCompleteDelayMs > 0)
+            {
+                await Task.Delay(PoseCompleteDelayMs).ConfigureAwait(false);
+            }
+
+            RunOnUi(() =>
+            {
+                IsPoseFlashActive = false;
+                IsPoseCheckActive = false;
+
                 if (completedIdx >= 0 && completedIdx < Poses.Count)
                 {
                     Poses[completedIdx].State = PoseState.Completed;
@@ -728,7 +1163,7 @@ namespace PeekSetup.ViewModels
             });
         }
 
-        private void OnEnrollmentCompleted(object? sender, EnrollmentCompletedEventArgs e)
+        private async void OnEnrollmentCompleted(object? sender, EnrollmentCompletedEventArgs e)
         {
             RunOnUi(() =>
             {
@@ -740,7 +1175,18 @@ namespace PeekSetup.ViewModels
                     Poses[i].State = PoseState.Completed;
                 }
                 ProgressPercentage = 100.0;
+                IsEnrollmentCompleteRing = true;
+                IsPoseCheckActive = true;
+            });
 
+            if (!IsReducedMotion && EnrollmentCompleteDelayMs > 0)
+            {
+                await Task.Delay(EnrollmentCompleteDelayMs).ConfigureAwait(false);
+            }
+
+            RunOnUi(() =>
+            {
+                IsPoseCheckActive = false;
                 // Advance to Step 3: Password Linking
                 CurrentStep = SetupStep.PasswordLink;
             });
@@ -754,6 +1200,7 @@ namespace PeekSetup.ViewModels
                 EngineErrorMessage = string.IsNullOrWhiteSpace(e.Detail)
                     ? $"Enrollment could not be completed ({e.ReasonCode})."
                     : e.Detail;
+                RawTechnicalDetails = $"Reason Code: {e.ReasonCode}\nDetail: {e.Detail}";
             });
         }
 
@@ -761,6 +1208,7 @@ namespace PeekSetup.ViewModels
         {
             RunOnUi(() =>
             {
+                RawTechnicalDetails = $"Error Code: {e.ReasonCode}\nDetail: {e.Detail}";
                 if (e.ReasonCode == EnrollmentProtocol.ReasonCameraUnavailable ||
                     e.ReasonCode == EnrollmentProtocol.ReasonCameraError)
                 {

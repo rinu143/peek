@@ -148,13 +148,15 @@ def parse_message(raw_data: Any) -> Dict[str, Any]:
 def make_start_enrollment(
     display_name: str = "Primary User",
     confirmed: bool = False,
-    password: Optional[str] = None
+    password: Optional[str] = None,
+    clean_preview: bool = True,
 ) -> Dict[str, Any]:
     msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_START_ENROLLMENT,
         "display_name": str(display_name),
         "confirmed": bool(confirmed),
+        "clean_preview": bool(clean_preview),
         "timestamp": time.time(),
     }
     if password is not None:
@@ -204,8 +206,10 @@ def make_preview_frame(
     quality_state: str,
     progress_pct: float,
     guidance_text: str = "",
+    overlay: Optional[Dict[str, Any]] = None,
+    frame_kind: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return {
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_PREVIEW_FRAME,
         "frame": frame_jpeg_b64,
@@ -217,6 +221,11 @@ def make_preview_frame(
         "guidance_text": str(guidance_text),
         "timestamp": time.time(),
     }
+    if overlay is not None:
+        msg["overlay"] = overlay
+    if frame_kind is not None:
+        msg["frame_kind"] = str(frame_kind)
+    return msg
 
 
 def make_pose_complete(

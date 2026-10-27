@@ -26,6 +26,8 @@ namespace PeekSetup.Services
         public double ProgressPercentage { get; }
         public string GuidanceText { get; }
         public double Timestamp { get; }
+        public EnrollmentOverlayData? Overlay { get; }
+        public string? FrameKind { get; }
 
         public PreviewFrameEventArgs(
             BitmapSource previewImage,
@@ -33,7 +35,9 @@ namespace PeekSetup.Services
             string qualityState,
             double progressPercentage,
             string guidanceText,
-            double timestamp)
+            double timestamp,
+            EnrollmentOverlayData? overlay = null,
+            string? frameKind = null)
         {
             PreviewImage = previewImage;
             TargetPose = targetPose;
@@ -41,6 +45,8 @@ namespace PeekSetup.Services
             ProgressPercentage = progressPercentage;
             GuidanceText = guidanceText;
             Timestamp = timestamp;
+            Overlay = overlay;
+            FrameKind = frameKind;
         }
     }
 
