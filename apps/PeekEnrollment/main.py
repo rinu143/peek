@@ -1,50 +1,28 @@
 """
-Peek — Guided Face Enrollment Application (Phase 2)
-Deliverable: Standalone 9-direction guided enrollment app inspired by Glance.
-Enforces pose detection via measured landmarks, strict quality gating, multi-frame candidate selection,
-DPAPI encryption at rest, and immediate raw camera frame discard.
+Peek — Guided Face Enrollment Application
+Launches the native Windows Setup window (PeekSetup) with Glance / Face-ID style circular aperture
+and native WPF controls. No OpenCV GUI windows are used.
 """
 
 import sys
 import os
-import cv2
 import time
-import math
-import numpy as np
 import logging
 import ctypes
-import getpass
-import struct
+import shutil
+import subprocess
+from typing import Optional
 from ctypes import wintypes
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from engine.camera.camera_capture import CameraCapture
-from engine.detection.scrfd_detector import SCRFDDetector
-from engine.alignment.aligner import FaceAligner
-from engine.embedding.arcface_embedder import ArcFaceEmbedder
 from engine.pose.pose_estimator import HeadPose, ORDERED_ENROLLMENT_POSES
 from engine.enrollment.enrollment_session import EnrollmentSession, EnrollmentState
 from engine.enrollment.enrollment_runner import (
     EnrollmentRunner,
     EnrollmentStepResult,
-    COLOR_BG_DARK,
-    COLOR_CARD,
-    COLOR_ACCENT,
-    COLOR_ACCENT_GLOW,
-    COLOR_GREEN,
-    COLOR_RED,
-    COLOR_YELLOW,
-    COLOR_WHITE,
-    COLOR_GRAY,
-    COLOR_MUTED,
-    POSE_DIAL_COORDS,
-    POSE_FRIENDLY_NAMES,
-    draw_hud_header,
-    draw_progress_pills,
-    draw_pose_guide_dial,
 )
 from storage.template_store import SecureProfileStore
 
@@ -66,55 +44,77 @@ def prompt_optional_password_link(profile_id: str, store: SecureProfileStore) ->
     print("To link your Windows password for instant unlock, run PeekSetup.")
 
 
-def run_enrollment_app(profile_name: str = "Primary User"):
-    logger.info("Starting Peek Guided Enrollment Application...")
+def find_peek_setup_exe() -> Optional[str]:
+    """Locate the native PeekSetup.exe Windows application."""
+    candidates = [
+        os.path.join(PROJECT_ROOT, "app", "PeekSetup", "bin", "Release", "net8.0-windows", "win-x64", "publish", "PeekSetup.exe"),
+        os.path.join(PROJECT_ROOT, "scripts", "packaging", "PeekSetup.exe"),
+        os.path.join(PROJECT_ROOT, "dist", "PeekSetup.exe"),
+        os.path.join(PROJECT_ROOT, "app", "PeekSetup", "bin", "Release", "net8.0-windows", "PeekSetup.exe"),
+        os.path.join(PROJECT_ROOT, "app", "PeekSetup", "bin", "Debug", "net8.0-windows", "PeekSetup.exe"),
+        os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Peek", "PeekSetup.exe"),
+    ]
+    for cand in candidates:
+        if os.path.isfile(cand):
+            return cand
+    return None
 
+
+def run_headless_enrollment(profile_name: str = "Primary User") -> int:
+    """Headless enrollment fallback when GUI cannot be displayed (no OpenCV windows)."""
     runner = EnrollmentRunner(display_name=profile_name)
-
-    window_name = "Peek — Guided Face Enrollment"
-    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
-
     if not runner.start_camera():
         logger.error("Camera not available for enrollment.")
-        blank = np.zeros((480, 720, 3), dtype=np.uint8)
-        cv2.putText(blank, "Webcam unavailable or in use by another app.", (60, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.65, COLOR_RED, 2)
-        cv2.imshow(window_name, blank)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-        return
+        return 1
 
-    # Start guided enrollment runner
     runner.start(display_name=profile_name)
-    password_prompted = False
-
     try:
-        for composited_frame, state, guidance_text in runner.run():
-            # When complete, prompt for optional password linking once
-            if state == EnrollmentState.COMPLETED and not password_prompted:
-                password_prompted = True
+        for _composited_frame, state, guidance_text in runner.run():
+            if state == EnrollmentState.COMPLETED:
+                logger.info("Enrollment completed successfully.")
                 if runner.saved_profile is not None:
-                    try:
-                        prompt_optional_password_link(runner.saved_profile.profile_id, runner.profile_store)
-                    except (EOFError, OSError, RuntimeError) as ex:
-                        logger.warning("Optional password linking was skipped: %s", ex)
-
-            cv2.imshow(window_name, composited_frame)
-
-            # Handle keystrokes
-            key = cv2.waitKey(1) & 0xFF
-            if key in (27, ord('q'), ord('Q')):
-                runner.cancel()
-                break
-            elif key == ord(' '):
-                # Restart enrollment
-                runner.restart()
-                password_prompted = False
-
+                    prompt_optional_password_link(runner.saved_profile.profile_id, runner.profile_store)
+                return 0
+            elif state == EnrollmentState.FAILED:
+                logger.error("Enrollment failed: %s", guidance_text)
+                return 1
     finally:
         runner.stop()
-        cv2.destroyAllWindows()
-        logger.info("Peek Enrollment App exited cleanly.")
+    return 0
+
+
+def run_enrollment_app(profile_name: str = "Primary User", headless: bool = False) -> int:
+    """
+    Main enrollment entrypoint.
+    Delegates to the native Windows Setup UI (PeekSetup) with Face-ID circular aperture.
+    Never opens an OpenCV or Python GUI window.
+    """
+    logger.info("Starting Peek Face Enrollment...")
+
+    if not headless:
+        setup_exe = find_peek_setup_exe()
+        if setup_exe:
+            logger.info("Launching native Peek Setup UI (%s)...", setup_exe)
+            try:
+                proc = subprocess.run([setup_exe], check=False)
+                return proc.returncode
+            except Exception as ex:
+                logger.warning("Failed to start PeekSetup.exe: %s. Trying dotnet...", ex)
+
+        if shutil.which("dotnet"):
+            project_dir = os.path.join(PROJECT_ROOT, "app", "PeekSetup")
+            if os.path.isdir(project_dir):
+                logger.info("Launching Peek Setup via dotnet run (%s)...", project_dir)
+                try:
+                    proc = subprocess.run(["dotnet", "run", "--project", project_dir], check=False)
+                    return proc.returncode
+                except Exception as ex:
+                    logger.warning("dotnet run failed: %s", ex)
+
+    logger.info("Falling back to headless enrollment...")
+    return run_headless_enrollment(profile_name)
 
 
 if __name__ == "__main__":
-    run_enrollment_app()
+    is_headless = "--headless" in sys.argv or "--cli" in sys.argv
+    sys.exit(run_enrollment_app(headless=is_headless))

@@ -299,5 +299,141 @@ namespace PeekSetup.Tests
             var overlay = EnrollmentProtocol.ParseOverlay(doc.RootElement);
             Assert.Null(overlay);
         }
+
+        [Fact]
+        public void ApplyOverlay_ComputesBiometricLandmarkMeshAndNodes()
+        {
+            var vm = new MainViewModel();
+            var landmarks = new double[][]
+            {
+                new double[] { 0.35, 0.40 }, // Left eye
+                new double[] { 0.65, 0.40 }, // Right eye
+                new double[] { 0.50, 0.55 }, // Nose
+                new double[] { 0.40, 0.70 }, // Left mouth
+                new double[] { 0.60, 0.70 }, // Right mouth
+            };
+
+            var overlay = new EnrollmentOverlayData(
+                Face: new FaceOverlayData(true, new double[] { 0.2, 0.2, 0.8, 0.8 }, landmarks, 0.0, 0.0),
+                PoseMatched: true,
+                QualityPassed: true,
+                Target: new TargetPoseData("CENTER", 0.0, 0.0),
+                Samples: new SampleProgressData(1, 2),
+                PosesCompleted: 0
+            );
+
+            vm.ApplyOverlay(overlay);
+
+            Assert.True(vm.HasLandmarks);
+            Assert.False(string.IsNullOrEmpty(vm.BiometricMeshPathData));
+            // 0.35 * 296 = 103.6, canvas left is 103.6 - 2.5 = 101.1
+            Assert.True(vm.LeftEyeCanvasLeft > 95 && vm.LeftEyeCanvasLeft < 105);
+            Assert.True(vm.RightEyeCanvasLeft > 185 && vm.RightEyeCanvasLeft < 195);
+            Assert.True(vm.NoseCanvasLeft > 140 && vm.NoseCanvasLeft < 155);
+        }
+
+        [Fact]
+        public void ApplyOverlay_ComputesCenterTargetReticleAndAlignment()
+        {
+            var vm = new MainViewModel();
+            var overlayCenter = new EnrollmentOverlayData(
+                Face: new FaceOverlayData(true, new double[] { 0.2, 0.2, 0.8, 0.8 }, Array.Empty<double[]>(), 0.0, 0.0),
+                PoseMatched: true,
+                QualityPassed: true,
+                Target: new TargetPoseData("CENTER", 0.0, 0.0),
+                Samples: new SampleProgressData(2, 2),
+                PosesCompleted: 1
+            );
+
+            vm.ApplyOverlay(overlayCenter);
+
+            Assert.True(vm.IsCenterTarget);
+            Assert.False(vm.IsDirectionalTarget);
+            Assert.True(vm.IsCenterFocusAligned);
+            Assert.Equal("✓ Aligned", vm.PoseStatusBadgeText);
+            Assert.True(vm.CenterReticleCanvasLeft > 50 && vm.CenterReticleCanvasLeft < 200);
+            Assert.True(vm.CenterReticleCanvasTop > 50 && vm.CenterReticleCanvasTop < 200);
+        }
+
+        [Fact]
+        public void ApplyOverlay_ComputesDirectionalBeaconAndAngle()
+        {
+            var vm = new MainViewModel();
+            var overlayRight = new EnrollmentOverlayData(
+                Face: new FaceOverlayData(true, new double[] { 0.2, 0.2, 0.8, 0.8 }, Array.Empty<double[]>(), 0.1, 0.0),
+                PoseMatched: false,
+                QualityPassed: true,
+                Target: new TargetPoseData(EnrollmentProtocol.PoseRight, 0.35, 0.0),
+                Samples: new SampleProgressData(0, 2),
+                PosesCompleted: 1
+            );
+
+            vm.ApplyOverlay(overlayRight);
+
+            Assert.False(vm.IsCenterTarget);
+            Assert.True(vm.IsDirectionalTarget);
+            Assert.False(vm.IsCenterFocusAligned);
+            Assert.Equal(0.0, vm.TargetAngleDegrees); // RIGHT is 0.0 degrees
+            Assert.True(vm.TargetBeaconCanvasLeft > 250); // Near right edge of 310 canvas
+            Assert.Equal("Aligning", vm.PoseStatusBadgeText);
+        }
+
+        [Fact]
+        public void ApplyOverlay_TracksDiscreteSampleCounts()
+        {
+            var vm = new MainViewModel();
+            var overlay0 = new EnrollmentOverlayData(
+                Face: null,
+                PoseMatched: false,
+                QualityPassed: false,
+                Target: new TargetPoseData("CENTER", 0.0, 0.0),
+                Samples: new SampleProgressData(0, 2),
+                PosesCompleted: 0
+            );
+            vm.ApplyOverlay(overlay0);
+            Assert.Equal(0, vm.SamplesCollected);
+            Assert.Equal(2, vm.SamplesTarget);
+            Assert.False(vm.IsSample1Captured);
+            Assert.False(vm.IsSample2Captured);
+
+            var overlay1 = new EnrollmentOverlayData(
+                Face: null,
+                PoseMatched: true,
+                QualityPassed: true,
+                Target: new TargetPoseData("CENTER", 0.0, 0.0),
+                Samples: new SampleProgressData(1, 2),
+                PosesCompleted: 0
+            );
+            vm.ApplyOverlay(overlay1);
+            Assert.True(vm.IsSample1Captured);
+            Assert.False(vm.IsSample2Captured);
+
+            var overlay2 = new EnrollmentOverlayData(
+                Face: null,
+                PoseMatched: true,
+                QualityPassed: true,
+                Target: new TargetPoseData("CENTER", 0.0, 0.0),
+                Samples: new SampleProgressData(2, 2),
+                PosesCompleted: 0
+            );
+            vm.ApplyOverlay(overlay2);
+            Assert.True(vm.IsSample1Captured);
+            Assert.True(vm.IsSample2Captured);
+        }
+
+        [Fact]
+        public void GetPoseIconData_ReturnsValidSvgGeometryForAllPoses()
+        {
+            string[] poses = EnrollmentProtocol.OrderedPoses;
+
+            foreach (var pose in poses)
+            {
+                string iconData = EnrollmentProtocol.GetPoseIconData(pose);
+                Assert.False(string.IsNullOrWhiteSpace(iconData), $"Icon data for {pose} should not be empty");
+
+                var itemVm = new PoseItemViewModel(pose, pose, 0);
+                Assert.Equal(iconData, itemVm.IconData);
+            }
+        }
     }
 }

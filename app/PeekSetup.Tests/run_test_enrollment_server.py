@@ -5,18 +5,23 @@ Runs on \\\\.\\pipe\\PeekEnrollmentTest with a mock runner.
 import sys
 import os
 import time
+import tempfile
+import shutil
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from engine.ipc.enrollment_pipe_server import EnrollmentPipeServer
+from storage.template_store import SecureProfileStore
 from tests.test_enrollment_pipe_server import MockEnrollmentRunner
 
 def main():
     pipe_name = r"\\.\pipe\PeekEnrollmentTest"
+    temp_dir = tempfile.mkdtemp()
+    profile_store = SecureProfileStore(storage_dir=temp_dir)
     runner = MockEnrollmentRunner(frames_to_complete=3, camera_available=True)
-    server = EnrollmentPipeServer(pipe_name=pipe_name, runner=runner)
+    server = EnrollmentPipeServer(pipe_name=pipe_name, runner=runner, profile_store=profile_store)
     server.start()
     print("READY", flush=True)
 
@@ -30,6 +35,7 @@ def main():
             time.sleep(0.1)
     finally:
         server.stop()
+        shutil.rmtree(temp_dir, ignore_errors=True)
         print("STOPPED", flush=True)
 
 if __name__ == "__main__":

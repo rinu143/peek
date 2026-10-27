@@ -73,6 +73,20 @@ namespace PeekSetup.Models
             _ => pose
         };
 
+        public static string GetPoseIconData(string? pose) => pose?.ToUpperInvariant() switch
+        {
+            PoseCenter => "M 12,9 A 3,3 0 1 1 12,15 A 3,3 0 1 1 12,9",
+            PoseRight => "M 10,7 L 15,12 L 10,17",
+            PoseLeft => "M 14,7 L 9,12 L 14,17",
+            PoseUp => "M 7,14 L 12,9 L 17,14",
+            PoseDown => "M 7,10 L 12,15 L 17,10",
+            PoseUpperRight => "M 9,15 L 15,9 M 10,9 L 15,9 L 15,14",
+            PoseUpperLeft => "M 15,15 L 9,9 M 9,14 L 9,9 L 14,9",
+            PoseLowerRight => "M 9,9 L 15,15 M 10,15 L 15,15 L 15,10",
+            PoseLowerLeft => "M 15,9 L 9,15 M 9,10 L 9,15 L 14,15",
+            _ => "M 12,9 A 3,3 0 1 1 12,15 A 3,3 0 1 1 12,9"
+        };
+
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,

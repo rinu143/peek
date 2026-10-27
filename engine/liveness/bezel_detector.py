@@ -276,8 +276,10 @@ class BezelDetector:
             confidence = 0.80
         elif framing_sides >= 3 and has_consistent_frame:
             confidence = 0.72
-        elif has_consistent_frame:
+        elif has_consistent_frame and rectilinear_pairs >= 1:
             confidence = 0.65 if high_contrast_bezel else 0.45
+        elif has_consistent_frame:
+            confidence = 0.50 if high_contrast_bezel else 0.35
         elif rectilinear_pairs >= 2 and high_contrast_bezel and not periodic_pattern:
             confidence = 0.60
         else:

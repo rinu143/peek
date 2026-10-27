@@ -14,6 +14,19 @@ import signal
 import logging
 import argparse
 
+# In windowless GUI / background service mode (e.g. PyInstaller console=False),
+# sys.stdout and sys.stderr may be None. Protect against NoneType write errors.
+if sys.stdout is None:
+    try:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
+if sys.stderr is None:
+    try:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
@@ -28,10 +41,32 @@ logger = logging.getLogger("Peek.EngineService")
 
 
 def setup_logging(debug: bool = False):
-    """Configures structured service logging."""
+    """Configures structured service logging to stdout/stderr and file if log directory exists."""
     log_level = logging.DEBUG if debug else logging.INFO
     log_format = "[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s"
-    logging.basicConfig(level=log_level, format=log_format)
+    handlers = []
+    if sys.stderr is not None:
+        handlers.append(logging.StreamHandler(sys.stderr))
+    
+    # Optional persistent file logging if Peek directory exists
+    log_dirs = [
+        os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Peek", "logs"),
+        os.path.join(os.environ.get("TEMP", r"C:\Temp"), "Peek", "logs")
+    ]
+    for ld in log_dirs:
+        try:
+            if not os.path.exists(ld):
+                os.makedirs(ld, exist_ok=True)
+            log_file = os.path.join(ld, "engine.log")
+            handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+            break
+        except Exception:
+            continue
+
+    if handlers:
+        logging.basicConfig(level=log_level, format=log_format, handlers=handlers)
+    else:
+        logging.basicConfig(level=log_level, format=log_format)
 
 
 def main():

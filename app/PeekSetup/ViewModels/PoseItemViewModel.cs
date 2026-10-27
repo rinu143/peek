@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using PeekSetup.Models;
 
 namespace PeekSetup.ViewModels
 {
@@ -17,6 +18,7 @@ namespace PeekSetup.ViewModels
         public string PoseKey { get; }
         public string Label { get; }
         public int Index { get; }
+        public string IconData { get; }
 
         public PoseState State
         {
@@ -43,6 +45,7 @@ namespace PeekSetup.ViewModels
             PoseKey = poseKey;
             Label = label;
             Index = index;
+            IconData = EnrollmentProtocol.GetPoseIconData(poseKey);
             _state = index == 0 ? PoseState.Active : PoseState.Pending;
         }
 

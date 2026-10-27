@@ -137,7 +137,9 @@ def resolve_enrolled_user_sid(profile_store: Optional[SecureProfileStore] = None
                 try:
                     tok_handle = pywintypes.HANDLE(h_token.value)
                     sid, _ = win32security.GetTokenInformation(tok_handle, win32security.TokenUser)
-                    return win32security.ConvertSidToStringSid(sid)
+                    user_sid = win32security.ConvertSidToStringSid(sid)
+                    if user_sid and user_sid != "S-1-5-18":
+                        return user_sid
                 finally:
                     kernel32.CloseHandle(h_token)
     except Exception as ex:
@@ -147,7 +149,9 @@ def resolve_enrolled_user_sid(profile_store: Optional[SecureProfileStore] = None
         token = win32security.OpenProcessToken(win32process.GetCurrentProcess(), win32con.TOKEN_QUERY)
         try:
             sid, _ = win32security.GetTokenInformation(token, win32security.TokenUser)
-            return win32security.ConvertSidToStringSid(sid)
+            proc_sid = win32security.ConvertSidToStringSid(sid)
+            if proc_sid and proc_sid != "S-1-5-18":
+                return proc_sid
         finally:
             token.Close()
     except Exception as ex:
@@ -157,10 +161,33 @@ def resolve_enrolled_user_sid(profile_store: Optional[SecureProfileStore] = None
 
 
 def build_enrollment_sddl(user_sid: Optional[str]) -> str:
-    """Builds hardened SDDL restricting enrollment pipe to SYSTEM and the enrolled user SID."""
-    if user_sid:
-        return f"D:(A;;GA;;;SY)(A;;GRGW;;;{user_sid})"
-    return "D:(A;;GA;;;SY)"
+    """
+    Builds hardened SDDL for enrollment named pipe.
+    SYSTEM (SY) and Builtin Administrators (BA) are granted Generic All (GA).
+    If an enrolled user SID is known, that user is granted Generic Read/Write (GRGW).
+    If no user is enrolled yet, Authenticated Users (AU) are granted GRGW so
+    the initial interactive user can complete setup.
+    PIPE_REJECT_REMOTE_CLIENTS ensures only local processes can connect.
+    """
+    sddl_parts = ["D:(A;;GA;;;SY)(A;;GA;;;BA)"]
+    if user_sid and user_sid != "S-1-5-18":
+        sddl_parts.append(f"(A;;GRGW;;;{user_sid})")
+    else:
+        sddl_parts.append("(A;;GRGW;;;AU)")
+
+    try:
+        token = win32security.OpenProcessToken(win32process.GetCurrentProcess(), win32con.TOKEN_QUERY)
+        try:
+            sid, _ = win32security.GetTokenInformation(token, win32security.TokenUser)
+            proc_sid = win32security.ConvertSidToStringSid(sid)
+            if proc_sid and proc_sid not in ("S-1-5-18", "S-1-5-32-544"):
+                sddl_parts.append(f"(A;;GA;;;{proc_sid})")
+        finally:
+            token.Close()
+    except Exception as ex:
+        logger.debug(f"Process token SID resolution in build_enrollment_sddl failed: {ex}")
+
+    return "".join(sddl_parts)
 
 
 class EnrollmentPipeClientSession:
@@ -445,6 +472,15 @@ class EnrollmentPipeServer:
 
         while not self._stop_event.is_set():
             try:
+                if h_pipe is None:
+                    try:
+                        h_pipe = self._create_pipe_instance(is_first=False)
+                    except Exception as ex:
+                        if not self._stop_event.is_set():
+                            logger.error(f"Failed to create enrollment pipe instance: {ex}")
+                        time.sleep(0.5)
+                        continue
+
                 logger.debug(f"Waiting for client connection on Named Pipe {self.pipe_name}...")
                 try:
                     win32pipe.ConnectNamedPipe(h_pipe, None)
@@ -473,9 +509,16 @@ class EnrollmentPipeServer:
             finally:
                 self._current_session = None
 
+                # Disconnect current client so the pipe handle can be reused or closed
+                if h_pipe:
+                    try:
+                        win32pipe.DisconnectNamedPipe(h_pipe)
+                    except Exception:
+                        pass
+
                 # CRITICAL SECURITY REQUIREMENT:
                 # Keep one instance listening at all times:
-                # create the next instance BEFORE disconnecting/closing the current one.
+                # create the next instance BEFORE closing the current one.
                 next_pipe = None
                 if not self._stop_event.is_set():
                     try:
@@ -483,17 +526,15 @@ class EnrollmentPipeServer:
                     except Exception as ex:
                         logger.error(f"Failed to create next enrollment pipe instance: {ex}")
 
-                if h_pipe:
-                    try:
-                        win32pipe.DisconnectNamedPipe(h_pipe)
-                    except Exception:
-                        pass
-                    try:
-                        win32file.CloseHandle(h_pipe)
-                    except Exception:
-                        pass
-
-                h_pipe = next_pipe
+                if next_pipe is not None:
+                    if h_pipe:
+                        try:
+                            win32file.CloseHandle(h_pipe)
+                        except Exception:
+                            pass
+                    h_pipe = next_pipe
+                else:
+                    logger.warning("Reusing existing disconnected enrollment pipe handle for next connection.")
 
     def _handle_client(self, session: EnrollmentPipeClientSession):
         """Processes requests from a single connected client session."""
@@ -588,7 +629,7 @@ class EnrollmentPipeServer:
                             session.write_message(make_error(REASON_CONFIRMATION_REQUIRED, "Confirmation required to replace existing profile"))
                             continue
 
-                    clean_preview = bool(msg.get("clean_preview", False))
+                    clean_preview = bool(msg.get("clean_preview", True))
 
                     self._run_enrollment_session(
                         session,
@@ -629,7 +670,7 @@ class EnrollmentPipeServer:
 
         # Requirement 6: Verify client process SID matches enrolled user before streaming frames
         client_sid = get_client_process_sid(session.handle)
-        if self.enrolled_user_sid and client_sid:
+        if self.enrolled_user_sid and self.enrolled_user_sid != "S-1-5-18" and client_sid:
             if client_sid != self.enrolled_user_sid and client_sid != "S-1-5-18":
                 logger.warning(
                     "Client process SID '%s' does not match enrolled user SID '%s'. Dropping connection without streaming frames.",
@@ -712,7 +753,7 @@ class EnrollmentPipeServer:
                 frame_b64 = base64.b64encode(buffer).decode("ascii")
 
                 # Re-verify client before streaming frame
-                if self.enrolled_user_sid and client_sid:
+                if self.enrolled_user_sid and self.enrolled_user_sid != "S-1-5-18" and client_sid:
                     if client_sid != self.enrolled_user_sid and client_sid != "S-1-5-18":
                         logger.warning("Unauthorized client detected during preview frame streaming; aborting.")
                         session.write_message(make_error(REASON_INVALID_MESSAGE, "Unauthorized client"))

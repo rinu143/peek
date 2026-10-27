@@ -68,6 +68,23 @@ namespace PeekSetup.ViewModels
         private bool _isDetailsExpanded;
         private string _rawTechnicalDetails = string.Empty;
 
+        // Advanced Face Tracking, Biometric Constellation & 3D Guidance
+        private bool _hasLandmarks;
+        private string _biometricMeshPathData = string.Empty;
+        private double _leftEyeX, _leftEyeY;
+        private double _rightEyeX, _rightEyeY;
+        private double _noseX, _noseY;
+        private double _leftMouthX, _leftMouthY;
+        private double _rightMouthX, _rightMouthY;
+        private string _targetPoseKey = EnrollmentProtocol.PoseCenter;
+        private double _targetAngleDegrees;
+        private double _targetBeaconX = 155.0;
+        private double _targetBeaconY = 155.0;
+        private double _centerReticleX = 155.0;
+        private double _centerReticleY = 155.0;
+        private int _samplesCollected;
+        private int _samplesTarget = 2;
+
         // Password linking state
         private string _enrolledProfileId = string.Empty;
         private string _enrolledDisplayName = string.Empty;
@@ -544,6 +561,173 @@ namespace PeekSetup.ViewModels
             }
         }
 
+        public bool HasLandmarks
+        {
+            get => _hasLandmarks;
+            private set
+            {
+                if (_hasLandmarks != value)
+                {
+                    _hasLandmarks = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public string BiometricMeshPathData
+        {
+            get => _biometricMeshPathData;
+            private set
+            {
+                if (_biometricMeshPathData != value)
+                {
+                    _biometricMeshPathData = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public double LeftEyeCanvasLeft => Math.Max(0, _leftEyeX - 2.5);
+        public double LeftEyeCanvasTop => Math.Max(0, _leftEyeY - 2.5);
+        public double RightEyeCanvasLeft => Math.Max(0, _rightEyeX - 2.5);
+        public double RightEyeCanvasTop => Math.Max(0, _rightEyeY - 2.5);
+        public double NoseCanvasLeft => Math.Max(0, _noseX - 2.5);
+        public double NoseCanvasTop => Math.Max(0, _noseY - 2.5);
+        public double LeftMouthCanvasLeft => Math.Max(0, _leftMouthX - 2.5);
+        public double LeftMouthCanvasTop => Math.Max(0, _leftMouthY - 2.5);
+        public double RightMouthCanvasLeft => Math.Max(0, _rightMouthX - 2.5);
+        public double RightMouthCanvasTop => Math.Max(0, _rightMouthY - 2.5);
+
+        public string TargetPoseKey
+        {
+            get => _targetPoseKey;
+            set
+            {
+                if (_targetPoseKey != value)
+                {
+                    _targetPoseKey = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(IsCenterTarget));
+                    OnPropertyChanged(nameof(IsDirectionalTarget));
+                    OnPropertyChanged(nameof(CurrentPoseIconData));
+                }
+            }
+        }
+
+        public bool IsCenterTarget => string.Equals(TargetPoseKey, EnrollmentProtocol.PoseCenter, StringComparison.OrdinalIgnoreCase);
+        public bool IsDirectionalTarget => !IsCenterTarget && HasOverlay;
+
+        public double TargetAngleDegrees
+        {
+            get => _targetAngleDegrees;
+            private set
+            {
+                if (Math.Abs(_targetAngleDegrees - value) > 0.5)
+                {
+                    _targetAngleDegrees = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public double TargetBeaconX
+        {
+            get => _targetBeaconX;
+            private set
+            {
+                if (Math.Abs(_targetBeaconX - value) > 0.1)
+                {
+                    _targetBeaconX = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(TargetBeaconCanvasLeft));
+                }
+            }
+        }
+
+        public double TargetBeaconY
+        {
+            get => _targetBeaconY;
+            private set
+            {
+                if (Math.Abs(_targetBeaconY - value) > 0.1)
+                {
+                    _targetBeaconY = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(TargetBeaconCanvasTop));
+                }
+            }
+        }
+
+        public double TargetBeaconCanvasLeft => TargetBeaconX - 10.0;
+        public double TargetBeaconCanvasTop => TargetBeaconY - 10.0;
+
+        public double CenterReticleX
+        {
+            get => _centerReticleX;
+            private set
+            {
+                if (Math.Abs(_centerReticleX - value) > 0.1)
+                {
+                    _centerReticleX = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(CenterReticleCanvasLeft));
+                }
+            }
+        }
+
+        public double CenterReticleY
+        {
+            get => _centerReticleY;
+            private set
+            {
+                if (Math.Abs(_centerReticleY - value) > 0.1)
+                {
+                    _centerReticleY = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(CenterReticleCanvasTop));
+                }
+            }
+        }
+
+        public double CenterReticleCanvasLeft => CenterReticleX - 35.0;
+        public double CenterReticleCanvasTop => CenterReticleY - 35.0;
+        public bool IsCenterFocusAligned => IsCenterTarget && IsPoseMatched;
+
+        public int SamplesCollected
+        {
+            get => _samplesCollected;
+            private set
+            {
+                if (_samplesCollected != value)
+                {
+                    _samplesCollected = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(IsSample1Captured));
+                    OnPropertyChanged(nameof(IsSample2Captured));
+                }
+            }
+        }
+
+        public int SamplesTarget
+        {
+            get => _samplesTarget;
+            private set
+            {
+                if (_samplesTarget != value)
+                {
+                    _samplesTarget = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public bool IsSample1Captured => SamplesCollected >= 1;
+        public bool IsSample2Captured => SamplesCollected >= 2;
+        public bool SampleBeadsVisible => IsEnrolling && !IsEnrollmentCompleteRing;
+
+        public string CurrentPoseIconData => EnrollmentProtocol.GetPoseIconData(TargetPoseKey);
+        public string PoseStatusBadgeText => IsPoseMatched && IsQualityPassed ? "✓ Aligned" : (!IsQualityPassed ? "Adjusting" : "Aligning");
+
         public bool IsReducedMotion
         {
             get
@@ -757,10 +941,13 @@ namespace PeekSetup.ViewModels
             GuidanceText = "Look directly at the camera";
             QualityStatusText = "Connecting...";
             IsQualityPassed = true;
+            TargetPoseKey = EnrollmentProtocol.PoseCenter;
+            SamplesCollected = 0;
         }
 
         public async Task StartEnrollmentFlowAsync()
         {
+            bool isReEnrollment = CurrentStep == SetupStep.AlreadyEnrolled || !string.IsNullOrEmpty(ExistingProfileName);
             CurrentStep = SetupStep.Enrollment;
             EnrollmentMode = EnrollmentViewMode.Connecting;
             ResetPoseStates();
@@ -769,7 +956,6 @@ namespace PeekSetup.ViewModels
 
             try
             {
-                bool isReEnrollment = CurrentStep == SetupStep.AlreadyEnrolled || !string.IsNullOrEmpty(ExistingProfileName);
                 await _pipeClient.ConnectAsync();
                 EnrollmentMode = EnrollmentViewMode.Enrolling;
                 await _pipeClient.StartEnrollmentAsync(DisplayName, confirmed: isReEnrollment);
@@ -1026,52 +1212,125 @@ namespace PeekSetup.ViewModels
                 FaceBboxTop = Math.Round(top, 1);
                 FaceBboxWidth = Math.Round(right - left, 1);
                 FaceBboxHeight = Math.Round(bottom - top, 1);
+
+                if (overlay.Face.Landmarks != null && overlay.Face.Landmarks.Length >= 5)
+                {
+                    HasLandmarks = true;
+                    _leftEyeX = Math.Clamp(overlay.Face.Landmarks[0][0] * 296.0, 0, 296.0);
+                    _leftEyeY = Math.Clamp(overlay.Face.Landmarks[0][1] * 296.0, 0, 296.0);
+                    _rightEyeX = Math.Clamp(overlay.Face.Landmarks[1][0] * 296.0, 0, 296.0);
+                    _rightEyeY = Math.Clamp(overlay.Face.Landmarks[1][1] * 296.0, 0, 296.0);
+                    _noseX = Math.Clamp(overlay.Face.Landmarks[2][0] * 296.0, 0, 296.0);
+                    _noseY = Math.Clamp(overlay.Face.Landmarks[2][1] * 296.0, 0, 296.0);
+                    _leftMouthX = Math.Clamp(overlay.Face.Landmarks[3][0] * 296.0, 0, 296.0);
+                    _leftMouthY = Math.Clamp(overlay.Face.Landmarks[3][1] * 296.0, 0, 296.0);
+                    _rightMouthX = Math.Clamp(overlay.Face.Landmarks[4][0] * 296.0, 0, 296.0);
+                    _rightMouthY = Math.Clamp(overlay.Face.Landmarks[4][1] * 296.0, 0, 296.0);
+
+                    OnPropertyChanged(nameof(LeftEyeCanvasLeft));
+                    OnPropertyChanged(nameof(LeftEyeCanvasTop));
+                    OnPropertyChanged(nameof(RightEyeCanvasLeft));
+                    OnPropertyChanged(nameof(RightEyeCanvasTop));
+                    OnPropertyChanged(nameof(NoseCanvasLeft));
+                    OnPropertyChanged(nameof(NoseCanvasTop));
+                    OnPropertyChanged(nameof(LeftMouthCanvasLeft));
+                    OnPropertyChanged(nameof(LeftMouthCanvasTop));
+                    OnPropertyChanged(nameof(RightMouthCanvasLeft));
+                    OnPropertyChanged(nameof(RightMouthCanvasTop));
+
+                    BiometricMeshPathData = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                        "M {0:F1},{1:F1} L {2:F1},{3:F1} M {0:F1},{1:F1} L {4:F1},{5:F1} L {2:F1},{3:F1} M {4:F1},{5:F1} L {6:F1},{7:F1} L {8:F1},{9:F1} L {4:F1},{5:F1}",
+                        _leftEyeX, _leftEyeY, _rightEyeX, _rightEyeY, _noseX, _noseY, _leftMouthX, _leftMouthY, _rightMouthX, _rightMouthY);
+                }
+                else
+                {
+                    HasLandmarks = false;
+                    BiometricMeshPathData = string.Empty;
+                }
             }
             else
             {
                 IsFaceDetected = false;
+                HasLandmarks = false;
+                BiometricMeshPathData = string.Empty;
             }
 
             if (overlay.Samples != null && overlay.Samples.Target > 0)
             {
+                SamplesCollected = overlay.Samples.Collected;
+                SamplesTarget = overlay.Samples.Target;
                 SampleProgress = Math.Clamp((double)overlay.Samples.Collected / overlay.Samples.Target, 0.0, 1.0);
             }
             else
             {
+                SamplesCollected = 0;
                 SampleProgress = 0.0;
             }
 
             if (overlay.Target != null)
             {
+                if (!string.IsNullOrEmpty(overlay.Target.Pose))
+                {
+                    TargetPoseKey = overlay.Target.Pose;
+                }
+
                 double targetYaw = overlay.Target.Yaw;
                 double targetPitch = overlay.Target.Pitch;
+                double uy = overlay.Face != null ? overlay.Face.Yaw : 0.0;
+                double up = overlay.Face != null ? overlay.Face.Pitch : 0.0;
 
-                if (overlay.PoseMatched)
+                bool isCenter = (targetYaw == 0.0 && targetPitch == 0.0) || string.Equals(TargetPoseKey, EnrollmentProtocol.PoseCenter, StringComparison.OrdinalIgnoreCase);
+
+                if (isCenter)
                 {
-                    TargetDotX = 155.0;
-                    TargetDotY = 155.0;
-                }
-                else if (targetYaw == 0.0 && targetPitch == 0.0)
-                {
-                    double uy = overlay.Face != null ? overlay.Face.Yaw : 0.0;
-                    double up = overlay.Face != null ? overlay.Face.Pitch : 0.0;
-                    TargetDotX = Math.Clamp(155.0 + Math.Clamp(uy / 0.30, -1.0, 1.0) * 80.0, 20.0, 290.0);
-                    TargetDotY = Math.Clamp(155.0 + Math.Clamp(up / 0.20, -1.0, 1.0) * 80.0, 20.0, 290.0);
+                    TargetAngleDegrees = 0.0;
+                    TargetBeaconX = 155.0;
+                    TargetBeaconY = 155.0;
+
+                    if (overlay.PoseMatched)
+                    {
+                        CenterReticleX = 155.0;
+                        CenterReticleY = 155.0;
+                        TargetDotX = 155.0;
+                        TargetDotY = 155.0;
+                    }
+                    else
+                    {
+                        CenterReticleX = Math.Clamp(155.0 + Math.Clamp(uy / 0.30, -1.0, 1.0) * 40.0, 115.0, 195.0);
+                        CenterReticleY = Math.Clamp(155.0 + Math.Clamp(up / 0.20, -1.0, 1.0) * 40.0, 115.0, 195.0);
+                        TargetDotX = CenterReticleX;
+                        TargetDotY = CenterReticleY;
+                    }
                 }
                 else
                 {
                     double angle = Math.Atan2(targetPitch, targetYaw);
+                    TargetAngleDegrees = angle * 180.0 / Math.PI;
+
                     double ringX = 155.0 + 148.0 * Math.Cos(angle);
                     double ringY = 155.0 + 148.0 * Math.Sin(angle);
+                    TargetBeaconX = ringX;
+                    TargetBeaconY = ringY;
 
-                    double userYawOffset = overlay.Face != null ? (targetYaw - overlay.Face.Yaw) : 0.0;
-                    double userPitchOffset = overlay.Face != null ? (targetPitch - overlay.Face.Pitch) : 0.0;
-
-                    TargetDotX = Math.Clamp(ringX + userYawOffset * 15.0, 15.0, 295.0);
-                    TargetDotY = Math.Clamp(ringY + userPitchOffset * 15.0, 15.0, 295.0);
+                    if (overlay.PoseMatched)
+                    {
+                        TargetDotX = ringX;
+                        TargetDotY = ringY;
+                    }
+                    else
+                    {
+                        double userYawOffset = (targetYaw - uy);
+                        double userPitchOffset = (targetPitch - up);
+                        TargetDotX = Math.Clamp(ringX + userYawOffset * 15.0, 15.0, 295.0);
+                        TargetDotY = Math.Clamp(ringY + userPitchOffset * 15.0, 15.0, 295.0);
+                    }
                 }
 
                 IsTargetDotVisible = IsEnrolling && !IsEnrollmentCompleteRing;
+                OnPropertyChanged(nameof(IsCenterFocusAligned));
+                OnPropertyChanged(nameof(IsDirectionalTarget));
+                OnPropertyChanged(nameof(PoseStatusBadgeText));
+                OnPropertyChanged(nameof(SampleBeadsVisible));
             }
             else
             {
@@ -1083,12 +1342,22 @@ namespace PeekSetup.ViewModels
         {
             HasOverlay = false;
             IsFaceDetected = false;
+            HasLandmarks = false;
+            BiometricMeshPathData = string.Empty;
             IsTargetDotVisible = false;
             SampleProgress = 0.0;
+            SamplesCollected = 0;
             FaceBboxLeft = 0;
             FaceBboxTop = 0;
             FaceBboxWidth = 0;
             FaceBboxHeight = 0;
+            TargetBeaconX = 155.0;
+            TargetBeaconY = 155.0;
+            CenterReticleX = 155.0;
+            CenterReticleY = 155.0;
+            OnPropertyChanged(nameof(SampleBeadsVisible));
+            OnPropertyChanged(nameof(IsDirectionalTarget));
+            OnPropertyChanged(nameof(IsCenterFocusAligned));
         }
 
         // IPC Event Handlers
@@ -1097,6 +1366,10 @@ namespace PeekSetup.ViewModels
             RunOnUi(() =>
             {
                 PreviewImage = e.PreviewImage;
+                if (!string.IsNullOrEmpty(e.TargetPose))
+                {
+                    TargetPoseKey = e.TargetPose;
+                }
                 GuidanceText = string.IsNullOrWhiteSpace(e.GuidanceText)
                     ? EnrollmentProtocol.GetPoseFriendlyName(e.TargetPose)
                     : e.GuidanceText;
@@ -1206,6 +1479,13 @@ namespace PeekSetup.ViewModels
 
         private void OnErrorOccurred(object? sender, EnrollmentErrorEventArgs e)
         {
+            if (e.ReasonCode == EnrollmentProtocol.ReasonConfirmationRequired)
+            {
+                // Auto-confirm re-enrollment when user initiated enrollment from setup UI
+                _ = _pipeClient.StartEnrollmentAsync(DisplayName, confirmed: true);
+                return;
+            }
+
             RunOnUi(() =>
             {
                 RawTechnicalDetails = $"Error Code: {e.ReasonCode}\nDetail: {e.Detail}";

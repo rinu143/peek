@@ -12,6 +12,7 @@ namespace PeekSetup.Services
 {
     public class EnrollmentPipeClient : IEnrollmentPipeClient
     {
+        private readonly IEngineProcessManager? _engineManager;
         private NamedPipeClientStream? _pipeStream;
         private StreamReader? _reader;
         private StreamWriter? _writer;
@@ -22,6 +23,11 @@ namespace PeekSetup.Services
         private int _isDisposed;
 
         public bool IsConnected => _pipeStream?.IsConnected == true;
+
+        public EnrollmentPipeClient(IEngineProcessManager? engineManager = null)
+        {
+            _engineManager = engineManager ?? new EngineProcessManager();
+        }
 
         public event EventHandler<PreviewFrameEventArgs>? PreviewFrameReceived;
         public event EventHandler<PoseCompletedEventArgs>? PoseCompleted;
@@ -38,25 +44,63 @@ namespace PeekSetup.Services
             _cts = new CancellationTokenSource();
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, ct);
 
+            // 1. Initial attempt: check if pipe is already open and responding
+            int probeTimeout = Math.Min(800, timeoutMs);
+            if (await TryConnectInternalAsync(pipeName, probeTimeout, linkedCts.Token).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            // 2. If not connected, attempt to start the engine process silently in background
+            if (_engineManager != null && !linkedCts.Token.IsCancellationRequested)
+            {
+                bool launched = _engineManager.StartEngineProcess();
+                if (launched)
+                {
+                    var startTime = DateTime.UtcNow;
+                    int maxWaitMs = Math.Max(timeoutMs, 7000);
+                    while ((DateTime.UtcNow - startTime).TotalMilliseconds < maxWaitMs && !linkedCts.Token.IsCancellationRequested)
+                    {
+                        await Task.Delay(250, linkedCts.Token).ConfigureAwait(false);
+                        if (await TryConnectInternalAsync(pipeName, 500, linkedCts.Token).ConfigureAwait(false))
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+
+            await DisconnectAsync();
+            throw new EngineUnavailableException("Peek engine isn't running — start it and try again.");
+        }
+
+        private async Task<bool> TryConnectInternalAsync(string pipeName, int timeoutMs, CancellationToken ct)
+        {
+            NamedPipeClientStream? stream = null;
             try
             {
-                _pipeStream = new NamedPipeClientStream(
+                stream = new NamedPipeClientStream(
                     ".",
                     pipeName,
                     PipeDirection.InOut,
                     PipeOptions.Asynchronous);
 
-                await _pipeStream.ConnectAsync(timeoutMs, linkedCts.Token).ConfigureAwait(false);
+                await stream.ConnectAsync(timeoutMs, ct).ConfigureAwait(false);
 
+                _pipeStream = stream;
                 _reader = new StreamReader(_pipeStream, new UTF8Encoding(false));
                 _writer = new StreamWriter(_pipeStream, new UTF8Encoding(false)) { AutoFlush = true };
 
-                _readTask = Task.Run(() => ReadLoopAsync(_cts.Token), _cts.Token);
+                _readTask = Task.Run(() => ReadLoopAsync(_cts!.Token), _cts!.Token);
+                return true;
             }
-            catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException or OperationCanceledException)
+            catch (Exception)
             {
-                await DisconnectAsync();
-                throw new EngineUnavailableException("Peek engine isn't running — start it and try again.", ex);
+                if (stream != null)
+                {
+                    try { stream.Dispose(); } catch { }
+                }
+                return false;
             }
         }
 

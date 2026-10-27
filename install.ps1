@@ -155,19 +155,28 @@ Write-Host "[4/5] Configuring test-grade logon startup task..." -ForegroundColor
 $taskName = "PeekEngine"
 $engineExe = Join-Path $InstallDir "PeekEngine.exe"
 
-$schtasksArgs = @(
-    "/Create",
-    "/TN", $taskName,
-    "/TR", "`"$engineExe`"",
-    "/SC", "ONLOGON",
-    "/RL", "HIGHEST",
-    "/F"
-)
-$schtasksProc = Start-Process -FilePath "schtasks.exe" -ArgumentList $schtasksArgs -Wait -NoNewWindow -PassThru
-if ($schtasksProc.ExitCode -eq 0) {
+$taskCreated = $false
+try {
+    $currentUser = if (-not [string]::IsNullOrWhiteSpace($env:USERNAME)) { $env:USERNAME } else { [Environment]::UserName }
+    $action = New-ScheduledTaskAction -Execute $engineExe -WorkingDirectory $InstallDir
+    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
+    $null = Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop
     Write-Host "      [OK] Scheduled Task '$taskName' created (starts at logon)." -ForegroundColor Green
-} else {
-    Write-Warning "schtasks returned exit code $($schtasksProc.ExitCode). Creating Startup folder shortcut as fallback..."
+    $taskCreated = $true
+} catch {
+    $trEscaped = '"' + $engineExe + '"'
+    $cmdArg = "/c schtasks.exe /Create /TN `"$taskName`" /TR `"$trEscaped`" /SC ONLOGON /RL HIGHEST /F"
+    $schtasksProc = Start-Process -FilePath "cmd.exe" -ArgumentList $cmdArg -Wait -NoNewWindow -PassThru
+    if ($schtasksProc.ExitCode -eq 0) {
+        Write-Host "      [OK] Scheduled Task '$taskName' created (starts at logon)." -ForegroundColor Green
+        $taskCreated = $true
+    }
+}
+
+if (-not $taskCreated) {
+    Write-Warning "Scheduled task creation failed. Creating Startup folder shortcut as fallback..."
     $startupFolder = [Environment]::GetFolderPath("CommonStartup")
     $shortcutPath = Join-Path $startupFolder "PeekEngine.lnk"
     $wsh = New-Object -ComObject WScript.Shell
@@ -201,7 +210,7 @@ Write-Host "      [OK] Created Start Menu shortcut for Peek Setup." -ForegroundC
 # 7. Start engine service now
 if (-not $NoStartService) {
     Write-Host "[5/5] Starting PeekEngine service in background..." -ForegroundColor Cyan
-    Start-Process -FilePath $engineExe -WorkingDirectory $InstallDir
+    Start-Process -FilePath $engineExe -WorkingDirectory $InstallDir -WindowStyle Hidden
     Start-Sleep -Seconds 1
     $runningEngine = Get-Process -Name "PeekEngine" -ErrorAction SilentlyContinue
     if ($runningEngine) {

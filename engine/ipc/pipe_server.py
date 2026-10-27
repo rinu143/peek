@@ -45,6 +45,8 @@ import pywintypes
 import win32pipe
 import win32file
 import win32security
+import win32process
+import win32con
 
 from engine.ipc.protocol import (
     PROTOCOL_VERSION,
@@ -93,8 +95,31 @@ from engine.pipeline.face_engine import FaceEngine, EngineFrameResult
 
 logger = logging.getLogger("Peek.PipeServer")
 
+def build_auth_sddl() -> str:
+    """
+    Builds secure SDDL for the authentication named pipe.
+    SYSTEM (SY) and Builtin Administrators (BA) are granted Generic All (GA).
+    Also grants GA to the current process user SID so multi-instance pipe
+    creation and management succeeds when running as a user or elevated service.
+    PIPE_REJECT_REMOTE_CLIENTS ensures only local processes can connect.
+    """
+    sddl_parts = ["D:(A;;GA;;;SY)(A;;GA;;;BA)"]
+    try:
+        token = win32security.OpenProcessToken(win32process.GetCurrentProcess(), win32con.TOKEN_QUERY)
+        try:
+            sid, _ = win32security.GetTokenInformation(token, win32security.TokenUser)
+            user_sid = win32security.ConvertSidToStringSid(sid)
+            if user_sid and user_sid not in ("S-1-5-18", "S-1-5-32-544"):
+                sddl_parts.append(f"(A;;GA;;;{user_sid})")
+        finally:
+            token.Close()
+    except Exception as ex:
+        logger.debug(f"Process token SID resolution in pipe_server failed: {ex}")
+    return "".join(sddl_parts)
+
+
 DEFAULT_PIPE_NAME = r"\\.\pipe\PeekEngine"
-DEFAULT_SDDL = "D:(A;;GA;;;SY)"
+DEFAULT_SDDL = build_auth_sddl()
 PIPE_REJECT_REMOTE_CLIENTS = 0x00000008
 FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000
 ERROR_BROKEN_PIPE = 109
@@ -337,6 +362,15 @@ class PipeServer:
 
         while not self._stop_event.is_set():
             try:
+                if h_pipe is None:
+                    try:
+                        h_pipe = self._create_pipe_instance(is_first=False)
+                    except Exception as ex:
+                        if not self._stop_event.is_set():
+                            logger.error(f"Failed to create pipe instance: {ex}")
+                        time.sleep(0.5)
+                        continue
+
                 logger.debug("Waiting for client connection on Named Pipe...")
                 try:
                     win32pipe.ConnectNamedPipe(h_pipe, None)
@@ -366,9 +400,16 @@ class PipeServer:
                 self._current_session = None
                 self._release_camera()
 
+                # Disconnect current client so the pipe handle can be reused or closed
+                if h_pipe:
+                    try:
+                        win32pipe.DisconnectNamedPipe(h_pipe)
+                    except Exception:
+                        pass
+
                 # CRITICAL SECURITY REQUIREMENT:
                 # Keep one instance listening at all times:
-                # create the next instance BEFORE disconnecting/closing the current one.
+                # create the next instance BEFORE closing the current one.
                 next_pipe = None
                 if not self._stop_event.is_set():
                     try:
@@ -376,17 +417,15 @@ class PipeServer:
                     except Exception as ex:
                         logger.error(f"Failed to create next pipe instance: {ex}")
 
-                if h_pipe:
-                    try:
-                        win32pipe.DisconnectNamedPipe(h_pipe)
-                    except Exception:
-                        pass
-                    try:
-                        win32file.CloseHandle(h_pipe)
-                    except Exception:
-                        pass
-
-                h_pipe = next_pipe
+                if next_pipe is not None:
+                    if h_pipe:
+                        try:
+                            win32file.CloseHandle(h_pipe)
+                        except Exception:
+                            pass
+                    h_pipe = next_pipe
+                else:
+                    logger.warning("Reusing existing disconnected pipe handle for next connection.")
 
         if h_pipe:
             try:
