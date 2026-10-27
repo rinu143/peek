@@ -187,559 +187,369 @@
                     </StackPanel>
                 </Grid>
 
-                <!-- STEP 2: FACE ENROLLMENT (NATIVE APPLE-STYLE CIRCULAR APERTURE) -->
-                <Grid Visibility="{Binding IsEnrollmentStep, Converter={StaticResource BoolToVis}}">
+                <!-- STEP 2: FACE ENROLLMENT (BLACK ROUNDED CARD STAGE IN BOTH LIGHT AND DARK THEMES) -->
+                <Grid Visibility="{Binding IsEnrollmentStep, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <Border Background="#000000" CornerRadius="28" Padding="28,24" MaxWidth="500" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Grid>
+                            <!-- Top-Right Apple Face ID Dismiss '✕' Button -->
+                            <Button Style="{StaticResource MinimalCloseButtonStyle}"
+                                    Command="{Binding CancelEnrollmentCommand}"
+                                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                                    Width="32" Height="32" Margin="0,-6,-6,0"
+                                    ToolTip="Cancel Face Setup"
+                                    AutomationProperties.Name="Cancel Face Setup"
+                                    Panel.ZIndex="30">
+                                <Path Data="M 8,8 L 16,16 M 16,8 L 8,16"
+                                      Stroke="#FFFFFF" Opacity="0.85"
+                                      StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Button>
 
-                    <!-- Top-Right Apple Face ID Dismiss '✕' Button -->
-                    <Button Style="{StaticResource MinimalCloseButtonStyle}"
-                            Command="{Binding CancelEnrollmentCommand}"
-                            HorizontalAlignment="Right" VerticalAlignment="Top"
-                            Width="32" Height="32" Margin="0,-4,-4,0"
-                            ToolTip="Cancel Face Setup"
-                            AutomationProperties.Name="Cancel Face Setup"
-                            Panel.ZIndex="10">
-                        <Path Data="M 8,8 L 16,16 M 16,8 L 8,16"
-                              Stroke="{DynamicResource TextSecondaryBrush}"
-                              StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                              HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Button>
+                            <!-- 2A. Connecting State -->
+                            <Grid Visibility="{Binding IsConnecting, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center" MinHeight="360" MinWidth="340">
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <ProgressBar IsIndeterminate="True" Width="180" Height="3" Style="{StaticResource ModernProgressBarStyle}" Margin="0,0,0,20" />
+                                    <TextBlock Text="Starting camera..." FontSize="15" FontWeight="Medium" HorizontalAlignment="Center" Foreground="#FFFFFF" />
+                                </StackPanel>
+                            </Grid>
 
-                    <!-- 2A. Connecting State -->
-                    <Grid Visibility="{Binding IsConnecting, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center">
-                        <StackPanel HorizontalAlignment="Center">
-                            <ProgressBar IsIndeterminate="True" Width="180" Height="3" Style="{StaticResource ModernProgressBarStyle}" Margin="0,0,0,20" />
-                            <TextBlock Text="Starting camera..." FontSize="15" FontWeight="Medium" HorizontalAlignment="Center" Foreground="{DynamicResource TextPrimaryBrush}" />
-                        </StackPanel>
-                    </Grid>
-
-                    <!-- 2B. Engine Unavailable State (Friendly Message + Expandable Technical Details) -->
-                    <Grid Visibility="{Binding IsEngineUnavailable, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440">
-                        <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
-                                BorderThickness="1" CornerRadius="20" Padding="28">
-                            <StackPanel>
-                                <Border Width="48" Height="48" CornerRadius="24" Background="{DynamicResource WarningBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,16">
-                                    <Path Data="{StaticResource GeoWarning}" Stroke="{DynamicResource WarningBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="20" Height="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                </Border>
-
-                                <TextBlock Text="Engine Not Running" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,6" Foreground="{DynamicResource TextPrimaryBrush}" />
-                                <TextBlock Text="Peek couldn't connect to the local background service. Start it and try again."
-                                           FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center" LineHeight="18" Margin="0,0,0,14" />
-
-                                <!-- Expandable Details Toggle -->
-                                <Button Style="{StaticResource SecondaryButtonStyle}"
-                                        Command="{Binding ToggleDetailsCommand}"
-                                        Content="{Binding DetailsToggleText}"
-                                        Visibility="{Binding HasTechnicalDetails, Converter={StaticResource BoolToVis}}"
-                                        HorizontalAlignment="Center"
-                                        Height="28" Padding="12,4" FontSize="11" Margin="0,0,0,10"
-                                        AutomationProperties.Name="Toggle technical details" />
-
-                                <!-- Capped Inner ScrollViewer with Selectable/Copyable TextBox -->
-                                <Border Background="{DynamicResource PillBgBrush}" CornerRadius="8" Padding="8" MaxHeight="120"
-                                        Visibility="{Binding IsDetailsExpanded, Converter={StaticResource BoolToVis}}">
-                                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
-                                        <TextBox Text="{Binding RawTechnicalDetails, Mode=OneWay}"
-                                                 IsReadOnly="True" TextWrapping="Wrap" Background="Transparent" BorderThickness="0"
-                                                 Foreground="{DynamicResource TextSecondaryBrush}" FontFamily="Consolas, Cascadia Code, monospace" FontSize="11" />
-                                    </ScrollViewer>
-                                </Border>
-                            </StackPanel>
-                        </Border>
-                    </Grid>
-
-                    <!-- 2C. Failed State (Friendly Message + Expandable Technical Details) -->
-                    <Grid Visibility="{Binding IsEnrollmentFailed, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440">
-                        <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
-                                BorderThickness="1" CornerRadius="20" Padding="28">
-                            <StackPanel>
-                                <Border Width="48" Height="48" CornerRadius="24" Background="{DynamicResource DangerBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,16">
-                                    <Path Data="{StaticResource GeoError}" Stroke="{DynamicResource DangerBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="20" Height="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                </Border>
-
-                                <TextBlock Text="Enrollment Incomplete" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,6" Foreground="{DynamicResource TextPrimaryBrush}" />
-                                <TextBlock Text="{Binding EngineErrorMessage}"
-                                           AutomationProperties.LiveSetting="Polite"
-                                           FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,0,0,14" />
-
-                                <!-- Expandable Details Toggle -->
-                                <Button Style="{StaticResource SecondaryButtonStyle}"
-                                        Command="{Binding ToggleDetailsCommand}"
-                                        Content="{Binding DetailsToggleText}"
-                                        Visibility="{Binding HasTechnicalDetails, Converter={StaticResource BoolToVis}}"
-                                        HorizontalAlignment="Center"
-                                        Height="28" Padding="12,4" FontSize="11" Margin="0,0,0,10"
-                                        AutomationProperties.Name="Toggle technical details" />
-
-                                <!-- Capped Inner ScrollViewer with Selectable/Copyable TextBox -->
-                                <Border Background="{DynamicResource PillBgBrush}" CornerRadius="8" Padding="8" MaxHeight="120"
-                                        Visibility="{Binding IsDetailsExpanded, Converter={StaticResource BoolToVis}}">
-                                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
-                                        <TextBox Text="{Binding RawTechnicalDetails, Mode=OneWay}"
-                                                 IsReadOnly="True" TextWrapping="Wrap" Background="Transparent" BorderThickness="0"
-                                                 Foreground="{DynamicResource TextSecondaryBrush}" FontFamily="Consolas, Cascadia Code, monospace" FontSize="11" />
-                                    </ScrollViewer>
-                                </Border>
-                            </StackPanel>
-                        </Border>
-                    </Grid>
-
-                    <!-- 2D. Active Apple Face ID Viewport View (Clean Aperture + Native Overlays) -->
-                    <Grid Visibility="{Binding IsEnrolling, Converter={StaticResource BoolToVis}}">
-                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-
-                            <!-- Viewbox wraps aperture so it never clips and smoothly shrinks down on small windows/high DPI -->
-                            <Viewbox MaxWidth="340" MaxHeight="340" Stretch="Uniform" StretchDirection="DownOnly" HorizontalAlignment="Center">
-                                <Grid Width="370" Height="370">
-
-                                    <!-- 1. Apple Face ID Radial Ticks: Inactive/White Ticks (64 Radial Ticks) -->
-                                    <Path Data="{Binding FaceIdWhiteTicksData}"
-                                          Stroke="#FFFFFF" Opacity="0.85" StrokeThickness="3"
-                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                          HorizontalAlignment="Center" VerticalAlignment="Center"
-                                          IsHitTestVisible="False" />
-
-                                    <!-- 2. Apple Face ID Radial Ticks: Active/Illuminated Blue Ticks (Glow DropShadow) -->
-                                    <Path Data="{Binding FaceIdBlueTicksData}"
-                                          Stroke="#007AFF" StrokeThickness="3.5"
-                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                          HorizontalAlignment="Center" VerticalAlignment="Center"
-                                          IsHitTestVisible="False">
-                                        <Path.Effect>
-                                            <DropShadowEffect Color="#38BDF8" BlurRadius="12" ShadowDepth="0" Opacity="0.95" />
-                                        </Path.Effect>
-                                    </Path>
-
-                                    <!-- 3. Apple Face ID Radial Ticks: Completed Green Ticks (All 64 glowing emerald) -->
-                                    <Path Data="{Binding FaceIdGreenTicksData}"
-                                          Stroke="#10B981" StrokeThickness="3.5"
-                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                          HorizontalAlignment="Center" VerticalAlignment="Center"
-                                          IsHitTestVisible="False">
-                                        <Path.Effect>
-                                            <DropShadowEffect Color="#10B981" BlurRadius="14" ShadowDepth="0" Opacity="0.95" />
-                                        </Path.Effect>
-                                    </Path>
-
-                                    <!-- 4. Clean Camera Circular Aperture (No OpenCV drawings) -->
-                                    <Border Width="296" Height="296" CornerRadius="148" Background="#000000"
-                                            SnapsToDevicePixels="True" ClipToBounds="True" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                        <Grid Width="296" Height="296">
-                                            <!-- Clean Camera Stream Frame -->
-                                            <Image Source="{Binding PreviewImage}" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" />
-
-                                            <!-- Camera Starting Placeholder -->
-                                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                                                <StackPanel.Style>
-                                                    <Style TargetType="StackPanel">
-                                                        <Setter Property="Visibility" Value="Collapsed" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding PreviewImage}" Value="{x:Null}">
-                                                                <Setter Property="Visibility" Value="Visible" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </StackPanel.Style>
-                                                <Path Data="{StaticResource GeoCamera}" Stroke="{DynamicResource TextMutedBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="32" Height="32" HorizontalAlignment="Center" Margin="0,0,0,10" />
-                                                <TextBlock Text="Starting camera..." FontSize="13" Foreground="{DynamicResource TextMutedBrush}" HorizontalAlignment="Center" />
-                                            </StackPanel>
-
-                                            <!-- Biometric Triangulation Constellation & Landmarks -->
-                                            <Canvas Width="296" Height="296" IsHitTestVisible="False"
-                                                    Visibility="{Binding HasLandmarks, Converter={StaticResource BoolToVis}}">
-                                                <!-- Connecting triangulation wireframe -->
-                                                <Path Data="{Binding BiometricMeshPathData}"
-                                                      StrokeThickness="1" Opacity="0.4">
-                                                    <Path.Style>
-                                                        <Style TargetType="Path">
-                                                            <Setter Property="Stroke" Value="{DynamicResource AccentBrush}" />
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsBracketGreen}" Value="True">
-                                                                    <Setter Property="Stroke" Value="{DynamicResource SuccessBrush}" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Path.Style>
-                                                </Path>
-
-                                                <!-- 5 Landmark Nodes (Eyes, Nose, Mouth Corners) -->
-                                                <Ellipse Canvas.Left="{Binding LeftEyeCanvasLeft}" Canvas.Top="{Binding LeftEyeCanvasTop}" Width="5" Height="5" Fill="{DynamicResource AccentBrush}" Opacity="0.85" />
-                                                <Ellipse Canvas.Left="{Binding RightEyeCanvasLeft}" Canvas.Top="{Binding RightEyeCanvasTop}" Width="5" Height="5" Fill="{DynamicResource AccentBrush}" Opacity="0.85" />
-                                                <Ellipse Canvas.Left="{Binding NoseCanvasLeft}" Canvas.Top="{Binding NoseCanvasTop}" Width="5" Height="5" Fill="{DynamicResource AccentBrush}" Opacity="0.85" />
-                                                <Ellipse Canvas.Left="{Binding LeftMouthCanvasLeft}" Canvas.Top="{Binding LeftMouthCanvasTop}" Width="5" Height="5" Fill="{DynamicResource AccentBrush}" Opacity="0.85" />
-                                                <Ellipse Canvas.Left="{Binding RightMouthCanvasLeft}" Canvas.Top="{Binding RightMouthCanvasTop}" Width="5" Height="5" Fill="{DynamicResource AccentBrush}" Opacity="0.85" />
-                                            </Canvas>
-
-                                            <!-- Subtle Face ID Corner Brackets Canvas -->
-                                            <Canvas Width="296" Height="296" IsHitTestVisible="False">
-                                                <Path Canvas.Left="{Binding FaceBboxLeft}"
-                                                      Canvas.Top="{Binding FaceBboxTop}"
-                                                      Data="{Binding CornerBracketsData}"
-                                                      StrokeThickness="2"
-                                                      StrokeStartLineCap="Round"
-                                                      StrokeEndLineCap="Round"
-                                                      StrokeLineJoin="Round"
-                                                      Visibility="{Binding IsFaceDetected, Converter={StaticResource BoolToVis}}">
-                                                    <Path.Style>
-                                                        <Style TargetType="Path">
-                                                            <Setter Property="Stroke" Value="{DynamicResource WarningBrush}" />
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsBracketGreen}" Value="True">
-                                                                    <Setter Property="Stroke" Value="{DynamicResource SuccessBrush}" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Path.Style>
-                                                </Path>
-                                            </Canvas>
-
-                                            <!-- Apple Face ID Directional Double Chevron Arrow (Centered Over Face in Camera Window) -->
-                                            <Grid Width="64" Height="64" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                  Margin="0,0,0,32"
-                                                  Visibility="{Binding IsDirectionArrowVisible, Converter={StaticResource BoolToVis}}"
-                                                  RenderTransformOrigin="0.5,0.5" IsHitTestVisible="False">
-                                                <Grid.Effect>
-                                                    <DropShadowEffect BlurRadius="8" ShadowDepth="2" Direction="270" Color="#000000" Opacity="0.75" />
-                                                </Grid.Effect>
-                                                <Grid.RenderTransform>
-                                                    <TransformGroup>
-                                                        <TranslateTransform x:Name="DirectionArrowTranslate" Y="0" />
-                                                        <RotateTransform Angle="{Binding DirectionArrowAngle}" />
-                                                    </TransformGroup>
-                                                </Grid.RenderTransform>
-                                                <Grid.Style>
-                                                    <Style TargetType="Grid">
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsReducedMotion}" Value="False">
-                                                                <DataTrigger.EnterActions>
-                                                                    <BeginStoryboard>
-                                                                        <Storyboard RepeatBehavior="Forever" AutoReverse="True">
-                                                                            <DoubleAnimation Storyboard.TargetProperty="(RenderTransform).(TransformGroup.Children)[0].(TranslateTransform.Y)"
-                                                                                             From="0" To="-7" Duration="0:0:0.65">
-                                                                                <DoubleAnimation.EasingFunction>
-                                                                                    <QuadraticEase EasingMode="EaseInOut" />
-                                                                                </DoubleAnimation.EasingFunction>
-                                                                            </DoubleAnimation>
-                                                                        </Storyboard>
-                                                                    </BeginStoryboard>
-                                                                </DataTrigger.EnterActions>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Grid.Style>
-                                                <Path Data="M 14,24 L 32,8 L 50,24 M 14,40 L 32,24 L 50,40"
-                                                      StrokeThickness="5"
-                                                      StrokeStartLineCap="Round"
-                                                      StrokeEndLineCap="Round"
-                                                      StrokeLineJoin="Round">
-                                                    <Path.Style>
-                                                        <Style TargetType="Path">
-                                                            <Setter Property="Stroke" Value="#FFFFFF" />
-                                                            <Setter Property="Opacity" Value="0.95" />
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsPoseMatched}" Value="True">
-                                                                    <Setter Property="Stroke" Value="{DynamicResource SuccessBrush}" />
-                                                                    <Setter Property="Opacity" Value="0.35" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Path.Style>
-                                                </Path>
-                                            </Grid>
-
-                                            <!-- Pose Completion Flash Overlay -->
-                                            <Rectangle Width="296" Height="296" Fill="#FFFFFF" Opacity="0.55" IsHitTestVisible="False"
-                                                       Visibility="{Binding IsPoseFlashActive, Converter={StaticResource BoolToVis}}" />
-
-                                            <!-- Pose Completion Checkmark Overlay -->
-                                            <Grid Width="64" Height="64" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
-                                                  Visibility="{Binding IsPoseCheckActive, Converter={StaticResource BoolToVis}}">
-                                                <Border CornerRadius="32" Background="{DynamicResource SuccessBgBrush}" BorderBrush="{DynamicResource SuccessBorderBrush}" BorderThickness="2" />
-                                                <Path Data="{StaticResource GeoCheck}" Stroke="{DynamicResource SuccessBrush}" StrokeThickness="3" Stretch="Uniform" Width="28" Height="28" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                            </Grid>
-                                        </Grid>
-                                    </Border>
-
-                                    <!-- 5. Central Target Focus Reticle (Shown for Center pose) -->
-                                    <Canvas Width="310" Height="310" IsHitTestVisible="False"
-                                            Visibility="{Binding IsCenterTarget, Converter={StaticResource BoolToVis}}">
-                                        <Grid Canvas.Left="{Binding CenterReticleCanvasLeft}"
-                                              Canvas.Top="{Binding CenterReticleCanvasTop}"
-                                              Width="70" Height="70">
-                                            <!-- Target Ring -->
-                                            <Ellipse Width="60" Height="60" StrokeThickness="1.5" StrokeDashArray="3 3"
-                                                     HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                <Ellipse.Style>
-                                                    <Style TargetType="Ellipse">
-                                                        <Setter Property="Stroke" Value="{DynamicResource AccentBrush}" />
-                                                        <Setter Property="Opacity" Value="0.65" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsCenterFocusAligned}" Value="True">
-                                                                <Setter Property="Stroke" Value="{DynamicResource SuccessBrush}" />
-                                                                <Setter Property="Opacity" Value="1.0" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Ellipse.Style>
-                                            </Ellipse>
-                                            <!-- Crosshairs -->
-                                            <Path Data="M 35,5 L 35,15 M 35,55 L 35,65 M 5,35 L 15,35 M 55,35 L 65,35"
-                                                  StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                                  HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                <Path.Style>
-                                                    <Style TargetType="Path">
-                                                        <Setter Property="Stroke" Value="{DynamicResource AccentBrush}" />
-                                                        <Setter Property="Opacity" Value="0.65" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsCenterFocusAligned}" Value="True">
-                                                                <Setter Property="Stroke" Value="{DynamicResource SuccessBrush}" />
-                                                                <Setter Property="Opacity" Value="1.0" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Path.Style>
-                                            </Path>
-                                            <!-- Center Focus Pip -->
-                                            <Ellipse Width="6" Height="6" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                <Ellipse.Style>
-                                                    <Style TargetType="Ellipse">
-                                                        <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsCenterFocusAligned}" Value="True">
-                                                                <Setter Property="Fill" Value="{DynamicResource SuccessBrush}" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Ellipse.Style>
-                                            </Ellipse>
-                                        </Grid>
-                                    </Canvas>
-
-                                    <!-- 6. Directional Target Chevron & Radar Beacon (Shown for non-center directional poses) -->
-                                    <Canvas Width="310" Height="310" IsHitTestVisible="False"
-                                            Visibility="{Binding IsDirectionalTarget, Converter={StaticResource BoolToVis}}">
-                                        <Grid Canvas.Left="{Binding TargetBeaconCanvasLeft}"
-                                              Canvas.Top="{Binding TargetBeaconCanvasTop}"
-                                              Width="20" Height="20"
-                                              RenderTransformOrigin="0.5,0.5">
-                                            <Grid.RenderTransform>
-                                                <RotateTransform Angle="{Binding TargetAngleDegrees}" />
-                                            </Grid.RenderTransform>
-                                            <!-- Radar Ring -->
-                                            <Ellipse Width="20" Height="20" Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.2" StrokeDashArray="2 2" Opacity="0.75" />
-                                            <!-- Directional Outward Chevron -->
-                                            <Path Data="M 7,6 L 13,10 L 7,14"
-                                                  StrokeThickness="2.2"
-                                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
-                                                  HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                <Path.Style>
-                                                    <Style TargetType="Path">
-                                                        <Setter Property="Stroke" Value="{DynamicResource AccentBrush}" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsPoseMatched}" Value="True">
-                                                                <Setter Property="Stroke" Value="{DynamicResource SuccessBrush}" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Path.Style>
-                                            </Path>
-                                        </Grid>
-                                    </Canvas>
-
-                                    <!-- 7. Native Head-Position Dot Easing to Beacon -->
-                                    <Canvas Width="310" Height="310" IsHitTestVisible="False"
-                                            Visibility="{Binding IsTargetDotVisible, Converter={StaticResource BoolToVis}}">
-                                        <Grid Canvas.Left="{Binding TargetDotCanvasLeft}"
-                                              Canvas.Top="{Binding TargetDotCanvasTop}"
-                                              Width="10" Height="10">
-                                            <Ellipse Width="10" Height="10" Stroke="#FFFFFF" StrokeThickness="1.5">
-                                                <Ellipse.Style>
-                                                    <Style TargetType="Ellipse">
-                                                        <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsPoseMatched}" Value="True">
-                                                                <Setter Property="Fill" Value="{DynamicResource SuccessBrush}" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Ellipse.Style>
-                                            </Ellipse>
-                                        </Grid>
-                                    </Canvas>
-                                </Grid>
-                            </Viewbox>
-
-                            <!-- Apple Face ID Centered Live Guidance Typography -->
-                            <TextBlock Text="{Binding GuidanceText}"
-                                       FontSize="22" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextPrimaryBrush}"
-                                       HorizontalAlignment="Center" TextAlignment="Center"
-                                       TextWrapping="Wrap" MaxWidth="460"
-                                       Margin="0,22,0,10"
-                                       AutomationProperties.LiveSetting="Polite" />
-
-                            <!-- Sleek Secondary Status Pill & Frame Acquisition Beads -->
-                            <Border CornerRadius="14" Background="{DynamicResource PillBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1" Padding="14,6" Margin="0,0,0,16" HorizontalAlignment="Center">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <!-- Directional Pose Mini-Icon -->
-                                    <Path Data="{Binding CurrentPoseIconData}" Fill="{DynamicResource AccentBrush}" Stretch="Uniform" Width="12" Height="12" Margin="0,0,8,0" VerticalAlignment="Center" />
-
-                                    <!-- Pose Friendly Name -->
-                                    <TextBlock Text="{Binding TargetPoseName}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" Margin="0,0,12,0" />
-
-                                    <!-- Discrete Multi-Frame Acquisition Indicator (Frame 1 & Frame 2) -->
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
-                                        <Border CornerRadius="6" Padding="6,2" Margin="0,0,4,0">
-                                            <Border.Style>
-                                                <Style TargetType="Border">
-                                                    <Setter Property="Background" Value="{DynamicResource CardBgBrush}" />
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsSample1Captured}" Value="True">
-                                                            <Setter Property="Background" Value="{DynamicResource SuccessBgBrush}" />
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Border.Style>
-                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                <Ellipse Width="5" Height="5" Margin="0,0,4,0" VerticalAlignment="Center">
-                                                    <Ellipse.Style>
-                                                        <Style TargetType="Ellipse">
-                                                            <Setter Property="Fill" Value="{DynamicResource TextMutedBrush}" />
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsSample1Captured}" Value="True">
-                                                                    <Setter Property="Fill" Value="{DynamicResource SuccessBrush}" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Ellipse.Style>
-                                                </Ellipse>
-                                                <TextBlock Text="Frame 1" FontSize="10" FontWeight="Medium" Foreground="{DynamicResource TextSecondaryBrush}" />
-                                            </StackPanel>
+                            <!-- 2B. Engine Unavailable State (Friendly Message + Expandable Technical Details) -->
+                            <Grid Visibility="{Binding IsEngineUnavailable, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440" MinHeight="360">
+                                <Border Background="#1C1C1E" BorderBrush="#2C2C2E"
+                                        BorderThickness="1" CornerRadius="20" Padding="28">
+                                    <StackPanel>
+                                        <Border Width="48" Height="48" CornerRadius="24" Background="{DynamicResource WarningBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,16">
+                                            <Path Data="{StaticResource GeoWarning}" Stroke="{DynamicResource WarningBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="20" Height="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
 
-                                        <Border CornerRadius="6" Padding="6,2">
-                                            <Border.Style>
-                                                <Style TargetType="Border">
-                                                    <Setter Property="Background" Value="{DynamicResource CardBgBrush}" />
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsSample2Captured}" Value="True">
-                                                            <Setter Property="Background" Value="{DynamicResource SuccessBgBrush}" />
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Border.Style>
-                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                <Ellipse Width="5" Height="5" Margin="0,0,4,0" VerticalAlignment="Center">
-                                                    <Ellipse.Style>
-                                                        <Style TargetType="Ellipse">
-                                                            <Setter Property="Fill" Value="{DynamicResource TextMutedBrush}" />
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsSample2Captured}" Value="True">
-                                                                    <Setter Property="Fill" Value="{DynamicResource SuccessBrush}" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Ellipse.Style>
-                                                </Ellipse>
-                                                <TextBlock Text="Frame 2" FontSize="10" FontWeight="Medium" Foreground="{DynamicResource TextSecondaryBrush}" />
-                                            </StackPanel>
+                                        <TextBlock Text="Engine Not Running" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,6" Foreground="#FFFFFF" />
+                                        <TextBlock Text="Peek couldn't connect to the local background service. Start it and try again."
+                                                   FontSize="13" Foreground="#A1A1A6" TextWrapping="Wrap" TextAlignment="Center" LineHeight="18" Margin="0,0,0,14" />
+
+                                        <!-- Expandable Details Toggle -->
+                                        <Button Style="{StaticResource SecondaryButtonStyle}"
+                                                Command="{Binding ToggleDetailsCommand}"
+                                                Content="{Binding DetailsToggleText}"
+                                                Visibility="{Binding HasTechnicalDetails, Converter={StaticResource BoolToVis}}"
+                                                HorizontalAlignment="Center"
+                                                Height="28" Padding="12,4" FontSize="11" Margin="0,0,0,10"
+                                                AutomationProperties.Name="Toggle technical details" />
+
+                                        <!-- Capped Inner ScrollViewer with Selectable/Copyable TextBox -->
+                                        <Border Background="#2C2C2E" CornerRadius="8" Padding="8" MaxHeight="120"
+                                                Visibility="{Binding IsDetailsExpanded, Converter={StaticResource BoolToVis}}">
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                                                <TextBox Text="{Binding RawTechnicalDetails, Mode=OneWay}"
+                                                         IsReadOnly="True" TextWrapping="Wrap" Background="Transparent" BorderThickness="0"
+                                                         Foreground="#E5E5EA" FontFamily="Consolas, Cascadia Code, monospace" FontSize="11" />
+                                            </ScrollViewer>
                                         </Border>
                                     </StackPanel>
+                                </Border>
+                            </Grid>
 
-                                    <!-- Alignment Status Badge -->
-                                    <Border CornerRadius="8" Padding="6,2" VerticalAlignment="Center">
-                                        <Border.Style>
-                                            <Style TargetType="Border">
-                                                <Setter Property="Background" Value="{DynamicResource CardBgBrush}" />
-                                                <Style.Triggers>
-                                                    <MultiDataTrigger>
-                                                        <MultiDataTrigger.Conditions>
-                                                            <Condition Binding="{Binding IsPoseMatched}" Value="True" />
-                                                            <Condition Binding="{Binding IsQualityPassed}" Value="True" />
-                                                        </MultiDataTrigger.Conditions>
-                                                        <Setter Property="Background" Value="{DynamicResource SuccessBgBrush}" />
-                                                    </MultiDataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Border.Style>
-                                        <TextBlock Text="{Binding PoseStatusBadgeText}" FontSize="10" FontWeight="SemiBold">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-                                                    <Style.Triggers>
-                                                        <MultiDataTrigger>
-                                                            <MultiDataTrigger.Conditions>
-                                                                <Condition Binding="{Binding IsPoseMatched}" Value="True" />
-                                                                <Condition Binding="{Binding IsQualityPassed}" Value="True" />
-                                                            </MultiDataTrigger.Conditions>
-                                                            <Setter Property="Foreground" Value="{DynamicResource SuccessBrush}" />
-                                                        </MultiDataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
-                                    </Border>
-                                </StackPanel>
-                            </Border>
+                            <!-- 2C. Failed State (Friendly Message + Expandable Technical Details) -->
+                            <Grid Visibility="{Binding IsEnrollmentFailed, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440" MinHeight="360">
+                                <Border Background="#1C1C1E" BorderBrush="#2C2C2E"
+                                        BorderThickness="1" CornerRadius="20" Padding="28">
+                                    <StackPanel>
+                                        <Border Width="48" Height="48" CornerRadius="24" Background="{DynamicResource DangerBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,16">
+                                            <Path Data="{StaticResource GeoError}" Stroke="{DynamicResource DangerBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="20" Height="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
 
-                            <!-- Apple-Style 9-Pose Segmented Progress Track with Directional Mini-Icons -->
-                            <StackPanel Width="340" HorizontalAlignment="Center" Margin="0,16,0,0">
-                                <ItemsControl ItemsSource="{Binding Poses}" HorizontalAlignment="Center" Margin="0,0,0,10">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <StackPanel Orientation="Horizontal" />
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Border Width="32" Height="24" CornerRadius="6" Margin="0,0,4,0" ToolTip="{Binding Label}">
-                                                <Border.Style>
-                                                    <Style TargetType="Border">
-                                                        <Setter Property="Background" Value="{DynamicResource PillBgBrush}" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsCompleted}" Value="True">
-                                                                <Setter Property="Background" Value="{DynamicResource SuccessBgBrush}" />
-                                                                <Setter Property="BorderBrush" Value="{DynamicResource SuccessBorderBrush}" />
-                                                                <Setter Property="BorderThickness" Value="1" />
-                                                            </DataTrigger>
-                                                            <DataTrigger Binding="{Binding IsActive}" Value="True">
-                                                                <Setter Property="Background" Value="{DynamicResource CardHoverBrush}" />
-                                                                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-                                                                <Setter Property="BorderThickness" Value="1.5" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Border.Style>
-                                                <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                    <!-- Checkmark when Completed -->
-                                                    <Path Data="{StaticResource GeoCheck}" Stroke="{DynamicResource SuccessBrush}" StrokeThickness="2" Stretch="Uniform" Width="11" Height="11"
-                                                          Visibility="{Binding IsCompleted, Converter={StaticResource BoolToVis}}" />
-                                                    <!-- Active Directional Icon when In Progress -->
-                                                    <Path Data="{Binding IconData}" Fill="{DynamicResource AccentBrush}" Stretch="Uniform" Width="12" Height="12"
-                                                          Visibility="{Binding IsActive, Converter={StaticResource BoolToVis}}" />
-                                                    <!-- Subtle Dot when Pending -->
-                                                    <Ellipse Width="4" Height="4" Fill="{DynamicResource TextMutedBrush}"
-                                                             Visibility="{Binding IsPending, Converter={StaticResource BoolToVis}}" />
+                                        <TextBlock Text="Enrollment Incomplete" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,6" Foreground="#FFFFFF" />
+                                        <TextBlock Text="{Binding EngineErrorMessage}"
+                                                   AutomationProperties.LiveSetting="Polite"
+                                                   FontSize="13" Foreground="#A1A1A6" TextWrapping="Wrap" TextAlignment="Center" Margin="0,0,0,14" />
+
+                                        <!-- Expandable Details Toggle -->
+                                        <Button Style="{StaticResource SecondaryButtonStyle}"
+                                                Command="{Binding ToggleDetailsCommand}"
+                                                Content="{Binding DetailsToggleText}"
+                                                Visibility="{Binding HasTechnicalDetails, Converter={StaticResource BoolToVis}}"
+                                                HorizontalAlignment="Center"
+                                                Height="28" Padding="12,4" FontSize="11" Margin="0,0,0,10"
+                                                AutomationProperties.Name="Toggle technical details" />
+
+                                        <!-- Capped Inner ScrollViewer with Selectable/Copyable TextBox -->
+                                        <Border Background="#2C2C2E" CornerRadius="8" Padding="8" MaxHeight="120"
+                                                Visibility="{Binding IsDetailsExpanded, Converter={StaticResource BoolToVis}}">
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                                                <TextBox Text="{Binding RawTechnicalDetails, Mode=OneWay}"
+                                                         IsReadOnly="True" TextWrapping="Wrap" Background="Transparent" BorderThickness="0"
+                                                         Foreground="#E5E5EA" FontFamily="Consolas, Cascadia Code, monospace" FontSize="11" />
+                                            </ScrollViewer>
+                                        </Border>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <!-- 2D. Active Apple Face ID Viewport View (Clean Aperture + 72 Ticks + Chevron + Guidance) -->
+                            <Grid Visibility="{Binding IsEnrolling, Converter={StaticResource BoolToVis}}">
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+
+                                    <!-- Viewbox wraps aperture so it never clips and smoothly shrinks down on small windows/high DPI -->
+                                    <Viewbox MaxWidth="340" MaxHeight="340" Stretch="Uniform" StretchDirection="DownOnly" HorizontalAlignment="Center">
+                                        <Canvas Width="370" Height="370">
+
+                                            <!-- 1. Apple Face ID 72 Radial Ticks (ItemsControl of Line elements) -->
+                                            <ItemsControl ItemsSource="{Binding Ticks}" Width="370" Height="370" IsHitTestVisible="False">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <Canvas Width="370" Height="370" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Line X1="{Binding X1}" Y1="{Binding Y1}"
+                                                              X2="{Binding X2}" Y2="{Binding Y2}"
+                                                              Stroke="{Binding StrokeBrush}"
+                                                              Opacity="{Binding Opacity}"
+                                                              StrokeThickness="2.8"
+                                                              StrokeStartLineCap="Round"
+                                                              StrokeEndLineCap="Round" />
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+
+                                            <!-- 2. Clean Camera Circular Aperture (296x296 centered at (37, 37)) -->
+                                            <Border Canvas.Left="37" Canvas.Top="37"
+                                                    Width="296" Height="296" CornerRadius="148" Background="#000000"
+                                                    SnapsToDevicePixels="True" ClipToBounds="True">
+                                                <Grid Width="296" Height="296">
+                                                    <!-- Clean Camera Stream Frame -->
+                                                    <Image Source="{Binding PreviewImage}" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" />
+
+                                                    <!-- Camera Starting Placeholder -->
+                                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                        <StackPanel.Style>
+                                                            <Style TargetType="StackPanel">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding PreviewImage}" Value="{x:Null}">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </StackPanel.Style>
+                                                        <Path Data="{StaticResource GeoCamera}" Stroke="#8E8E93" StrokeThickness="1.5" Stretch="Uniform" Width="32" Height="32" HorizontalAlignment="Center" Margin="0,0,0,10" />
+                                                        <TextBlock Text="Starting camera..." FontSize="13" Foreground="#8E8E93" HorizontalAlignment="Center" />
+                                                    </StackPanel>
+
+                                                    <!-- Debug Overlay: Landmarks & Biometric Mesh -->
+                                                    <Canvas Width="296" Height="296" IsHitTestVisible="False"
+                                                            Visibility="{Binding ShowDebugOverlay, Converter={StaticResource BoolToVis}}">
+                                                        <Path Data="{Binding BiometricMeshPathData}" Stroke="{DynamicResource AccentBrush}" StrokeThickness="1" Opacity="0.4" />
+                                                        <Ellipse Canvas.Left="{Binding LeftEyeCanvasLeft}" Canvas.Top="{Binding LeftEyeCanvasTop}" Width="5" Height="5" Fill="{DynamicResource AccentBrush}" Opacity="0.85" />
+                                                        <Ellipse Canvas.Left="{Binding RightEyeCanvasLeft}" Canvas.Top="{Binding RightEyeCanvasTop}" Width="5" Height="5" Fill="{DynamicResource AccentBrush}" Opacity="0.85" />
+                                                        <Ellipse Canvas.Left="{Binding NoseCanvasLeft}" Canvas.Top="{Binding NoseCanvasTop}" Width="5" Height="5" Fill="{DynamicResource AccentBrush}" Opacity="0.85" />
+                                                        <Ellipse Canvas.Left="{Binding LeftMouthCanvasLeft}" Canvas.Top="{Binding LeftMouthCanvasTop}" Width="5" Height="5" Fill="{DynamicResource AccentBrush}" Opacity="0.85" />
+                                                        <Ellipse Canvas.Left="{Binding RightMouthCanvasLeft}" Canvas.Top="{Binding RightMouthCanvasTop}" Width="5" Height="5" Fill="{DynamicResource AccentBrush}" Opacity="0.85" />
+                                                    </Canvas>
+
+                                                    <!-- Debug Overlay: Subtle Face ID Corner Brackets -->
+                                                    <Canvas Width="296" Height="296" IsHitTestVisible="False"
+                                                            Visibility="{Binding ShowDebugOverlay, Converter={StaticResource BoolToVis}}">
+                                                        <Path Canvas.Left="{Binding FaceBboxLeft}"
+                                                              Canvas.Top="{Binding FaceBboxTop}"
+                                                              Data="{Binding CornerBracketsData}"
+                                                              StrokeThickness="2"
+                                                              StrokeStartLineCap="Round"
+                                                              StrokeEndLineCap="Round"
+                                                              StrokeLineJoin="Round"
+                                                              Visibility="{Binding IsFaceDetected, Converter={StaticResource BoolToVis}}">
+                                                            <Path.Style>
+                                                                <Style TargetType="Path">
+                                                                    <Setter Property="Stroke" Value="{DynamicResource WarningBrush}" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsBracketGreen}" Value="True">
+                                                                            <Setter Property="Stroke" Value="{DynamicResource SuccessBrush}" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Path.Style>
+                                                        </Path>
+                                                    </Canvas>
+
+                                                    <!-- Apple Face ID Directional Double Chevron Arrow (Centered Over Face in Camera Window) -->
+                                                    <Grid Width="64" Height="64" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                          Visibility="{Binding IsDirectionArrowVisible, Converter={StaticResource BoolToVis}}"
+                                                          RenderTransformOrigin="0.5,0.5" IsHitTestVisible="False">
+                                                        <Grid.Effect>
+                                                            <DropShadowEffect BlurRadius="8" ShadowDepth="2" Direction="270" Color="#000000" Opacity="0.75" />
+                                                        </Grid.Effect>
+                                                        <Grid.RenderTransform>
+                                                            <TransformGroup>
+                                                                <TranslateTransform x:Name="DirectionArrowTranslate" Y="0" />
+                                                                <RotateTransform Angle="{Binding DirectionArrowAngle}" />
+                                                            </TransformGroup>
+                                                        </Grid.RenderTransform>
+                                                        <Grid.Style>
+                                                            <Style TargetType="Grid">
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsReducedMotion}" Value="False">
+                                                                        <DataTrigger.EnterActions>
+                                                                            <BeginStoryboard>
+                                                                                <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                                                                    <DoubleAnimation Storyboard.TargetProperty="(RenderTransform).(TransformGroup.Children)[0].(TranslateTransform.Y)"
+                                                                                                     From="0" To="-7" Duration="0:0:0.65">
+                                                                                        <DoubleAnimation.EasingFunction>
+                                                                                            <QuadraticEase EasingMode="EaseInOut" />
+                                                                                        </DoubleAnimation.EasingFunction>
+                                                                                    </DoubleAnimation>
+                                                                                </Storyboard>
+                                                                            </BeginStoryboard>
+                                                                        </DataTrigger.EnterActions>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Grid.Style>
+                                                        <Path Data="M 14,24 L 32,8 L 50,24 M 14,40 L 32,24 L 50,40"
+                                                              StrokeThickness="5"
+                                                              StrokeStartLineCap="Round"
+                                                              StrokeEndLineCap="Round"
+                                                              StrokeLineJoin="Round">
+                                                            <Path.Style>
+                                                                <Style TargetType="Path">
+                                                                    <Setter Property="Stroke" Value="#FFFFFF" />
+                                                                    <Setter Property="Opacity" Value="0.95" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsPoseMatched}" Value="True">
+                                                                            <Setter Property="Stroke" Value="#0A84FF" />
+                                                                            <Setter Property="Opacity" Value="0.65" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Path.Style>
+                                                        </Path>
+                                                    </Grid>
+
+                                                    <!-- Pose Completion Flash Overlay -->
+                                                    <Rectangle Width="296" Height="296" Fill="#FFFFFF" Opacity="0.55" IsHitTestVisible="False"
+                                                               Visibility="{Binding IsPoseFlashActive, Converter={StaticResource BoolToVis}}" />
+
+                                                    <!-- Pose Completion Checkmark Overlay -->
+                                                    <Grid Width="64" Height="64" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
+                                                          Visibility="{Binding IsPoseCheckActive, Converter={StaticResource BoolToVis}}">
+                                                        <Border CornerRadius="32" Background="#1C3829" BorderBrush="#30D158" BorderThickness="2" />
+                                                        <Path Data="{StaticResource GeoCheck}" Stroke="#30D158" StrokeThickness="3" Stretch="Uniform" Width="28" Height="28" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Grid>
+
+                                                    <!-- Debug Overlay: Central Target Focus Reticle -->
+                                                    <Canvas Width="296" Height="296" IsHitTestVisible="False"
+                                                            Visibility="{Binding ShowDebugOverlay, Converter={StaticResource BoolToVis}}">
+                                                        <Grid Canvas.Left="{Binding CenterReticleCanvasLeft}"
+                                                              Canvas.Top="{Binding CenterReticleCanvasTop}"
+                                                              Width="70" Height="70"
+                                                              Visibility="{Binding IsCenterTarget, Converter={StaticResource BoolToVis}}">
+                                                            <Ellipse Width="60" Height="60" Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.5" StrokeDashArray="3 3" Opacity="0.65" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                            <Ellipse Width="6" Height="6" Fill="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                        </Grid>
+
+                                                        <!-- Radar Beacon -->
+                                                        <Grid Canvas.Left="{Binding TargetBeaconCanvasLeft}"
+                                                              Canvas.Top="{Binding TargetBeaconCanvasTop}"
+                                                              Width="20" Height="20"
+                                                              RenderTransformOrigin="0.5,0.5"
+                                                              Visibility="{Binding IsDirectionalTarget, Converter={StaticResource BoolToVis}}">
+                                                            <Grid.RenderTransform>
+                                                                <RotateTransform Angle="{Binding TargetAngleDegrees}" />
+                                                            </Grid.RenderTransform>
+                                                            <Ellipse Width="20" Height="20" Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.2" StrokeDashArray="2 2" Opacity="0.75" />
+                                                            <Path Data="M 7,6 L 13,10 L 7,14" Stroke="{DynamicResource AccentBrush}" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                        </Grid>
+
+                                                        <!-- Target Dot -->
+                                                        <Grid Canvas.Left="{Binding TargetDotCanvasLeft}"
+                                                              Canvas.Top="{Binding TargetDotCanvasTop}"
+                                                              Width="10" Height="10"
+                                                              Visibility="{Binding IsTargetDotVisible, Converter={StaticResource BoolToVis}}">
+                                                            <Ellipse Width="10" Height="10" Fill="{DynamicResource AccentBrush}" Stroke="#FFFFFF" StrokeThickness="1.5" />
+                                                        </Grid>
+                                                    </Canvas>
                                                 </Grid>
                                             </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                                        </Canvas>
+                                    </Viewbox>
 
-                                <!-- Overall Progress Bar + Percent Indicator -->
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <ProgressBar Grid.Column="0" Value="{Binding ProgressPercentage, Mode=OneWay}"
-                                                 Maximum="100" Style="{StaticResource ModernProgressBarStyle}" Height="4" VerticalAlignment="Center" />
-                                    <TextBlock Grid.Column="1" Text="{Binding ProgressPercentageText}" FontSize="11" FontWeight="SemiBold"
-                                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="8,0,0,0" VerticalAlignment="Center" />
-                                </Grid>
-                            </StackPanel>
+                                    <!-- Apple Face ID Centered Live Guidance Typography (One Clean Line Under Ring) -->
+                                    <TextBlock Text="{Binding FriendlyGuidanceText}"
+                                               FontSize="22" FontWeight="SemiBold"
+                                               Foreground="#FFFFFF"
+                                               HorizontalAlignment="Center" TextAlignment="Center"
+                                               TextWrapping="Wrap" MaxWidth="460"
+                                               Margin="0,24,0,8"
+                                               AutomationProperties.LiveSetting="Polite" />
 
-                        </StackPanel>
-                    </Grid>
+                                    <!-- Debug Only: Secondary Status Pill, Beads, and 9-Pose Track -->
+                                    <StackPanel Visibility="{Binding ShowDebugOverlay, Converter={StaticResource BoolToVis}}" Margin="0,10,0,0">
+                                        <Border CornerRadius="14" Background="#1C1C1E" BorderBrush="#2C2C2E" BorderThickness="1" Padding="14,6" Margin="0,0,0,14" HorizontalAlignment="Center">
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Path Data="{Binding CurrentPoseIconData}" Fill="{DynamicResource AccentBrush}" Stretch="Uniform" Width="12" Height="12" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding TargetPoseName}" FontSize="12" FontWeight="SemiBold" Foreground="#FFFFFF" VerticalAlignment="Center" Margin="0,0,12,0" />
+                                                <TextBlock Text="{Binding PoseStatusBadgeText}" FontSize="10" FontWeight="SemiBold" Foreground="#30D158" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- Apple-Style 9-Pose Segmented Progress Track with Directional Mini-Icons -->
+                                        <StackPanel Width="340" HorizontalAlignment="Center">
+                                            <ItemsControl ItemsSource="{Binding Poses}" HorizontalAlignment="Center" Margin="0,0,0,10">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <StackPanel Orientation="Horizontal" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Width="32" Height="24" CornerRadius="6" Margin="0,0,4,0" ToolTip="{Binding Label}">
+                                                            <Border.Style>
+                                                                <Style TargetType="Border">
+                                                                    <Setter Property="Background" Value="#2C2C2E" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsCompleted}" Value="True">
+                                                                            <Setter Property="Background" Value="#1C3829" />
+                                                                            <Setter Property="BorderBrush" Value="#30D158" />
+                                                                            <Setter Property="BorderThickness" Value="1" />
+                                                                        </DataTrigger>
+                                                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                                            <Setter Property="Background" Value="#3A3A3C" />
+                                                                            <Setter Property="BorderBrush" Value="#0A84FF" />
+                                                                            <Setter Property="BorderThickness" Value="1.5" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Border.Style>
+                                                            <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                                <Path Data="{StaticResource GeoCheck}" Stroke="#30D158" StrokeThickness="2" Stretch="Uniform" Width="11" Height="11"
+                                                                      Visibility="{Binding IsCompleted, Converter={StaticResource BoolToVis}}" />
+                                                                <Path Data="{Binding IconData}" Fill="#0A84FF" Stretch="Uniform" Width="12" Height="12"
+                                                                      Visibility="{Binding IsActive, Converter={StaticResource BoolToVis}}" />
+                                                                <Ellipse Width="4" Height="4" Fill="#8E8E93"
+                                                                         Visibility="{Binding IsPending, Converter={StaticResource BoolToVis}}" />
+                                                            </Grid>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+
+                                            <!-- Overall Progress Bar + Percent Indicator -->
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <ProgressBar Grid.Column="0" Value="{Binding ProgressPercentage, Mode=OneWay}"
+                                                             Maximum="100" Style="{StaticResource ModernProgressBarStyle}" Height="4" VerticalAlignment="Center" />
+                                                <TextBlock Grid.Column="1" Text="{Binding ProgressPercentageText}" FontSize="11" FontWeight="SemiBold"
+                                                           Foreground="#A1A1A6" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                            </Grid>
+                                        </StackPanel>
+                                    </StackPanel>
+
+                                </StackPanel>
+                            </Grid>
+                        </Grid>
+                    </Border>
                 </Grid>
 
                 <!-- STEP 3: MANDATORY PASSWORD LINKING -->

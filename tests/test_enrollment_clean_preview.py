@@ -220,6 +220,34 @@ class TestEnrollmentCleanPreview(unittest.TestCase):
         self.assertEqual(parsed["frame_kind"], "clean")
         self.assertEqual(parsed["overlay"], {"face": {"found": True}})
 
+    def test_distance_centering_hint_computation(self):
+        """Validates closer, back, center, and none hint determination from bounding boxes."""
+        from engine.enrollment.enrollment_runner import (
+            compute_distance_centering_hint,
+            HINT_WIDTH_MIN,
+            HINT_WIDTH_MAX,
+            HINT_CENTER_MAX,
+        )
+
+        # 1. Closer: width fraction < 0.30 (e.g. width = 0.20)
+        self.assertEqual(compute_distance_centering_hint([0.40, 0.40, 0.60, 0.60]), "closer")
+
+        # 2. Back: width fraction > 0.65 (e.g. width = 0.72)
+        self.assertEqual(compute_distance_centering_hint([0.14, 0.14, 0.86, 0.86]), "back")
+
+        # 3. Center: width normal (0.45), but face shifted right (cx = 0.725, offset = 0.225 > 0.15)
+        self.assertEqual(compute_distance_centering_hint([0.50, 0.25, 0.95, 0.75]), "center")
+
+        # 4. Center: width normal (0.45), but face shifted down (cy = 0.725, offset = 0.225 > 0.15)
+        self.assertEqual(compute_distance_centering_hint([0.275, 0.50, 0.725, 0.95]), "center")
+
+        # 5. None: well-centered and normal distance
+        self.assertEqual(compute_distance_centering_hint([0.275, 0.275, 0.725, 0.725]), "none")
+
+        # 6. None: empty or None bbox
+        self.assertEqual(compute_distance_centering_hint(None), "none")
+        self.assertEqual(compute_distance_centering_hint([]), "none")
+
 
 if __name__ == "__main__":
     unittest.main()

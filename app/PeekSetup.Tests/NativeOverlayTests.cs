@@ -437,12 +437,17 @@ namespace PeekSetup.Tests
         }
 
         [Fact]
-        public void FaceIdTicks_Initialized_HasWhiteTicksAndNoGreenTicks()
+        public void Ticks_Initialized_Has72TicksWithCorrectAnglesAndIdleState()
         {
             var vm = new MainViewModel();
-
-            Assert.False(string.IsNullOrWhiteSpace(vm.FaceIdWhiteTicksData));
-            Assert.Equal(string.Empty, vm.FaceIdGreenTicksData);
+            Assert.Equal(72, vm.Ticks.Count);
+            for (int i = 0; i < 72; i++)
+            {
+                Assert.Equal(i * 5.0, vm.Ticks[i].Angle);
+                Assert.Equal(0.0, vm.Ticks[i].Intensity);
+                Assert.False(vm.Ticks[i].IsCompleted);
+                Assert.True(vm.Ticks[i].Opacity >= 0.84);
+            }
         }
 
         [Theory]
@@ -461,61 +466,157 @@ namespace PeekSetup.Tests
             Assert.Equal(expectedAngle, angle);
         }
 
-        [Fact]
-        public void FaceIdTicks_WhenLookingUp_IlluminatesTopSectorBlue()
+        [Theory]
+        [InlineData("UP", 0.0, -0.25, 54)]              // 270 deg (12 o'clock)
+        [InlineData("DOWN", 0.0, 0.25, 18)]             // 90 deg (6 o'clock)
+        [InlineData("LEFT", -0.30, 0.0, 36)]            // 180 deg (9 o'clock)
+        [InlineData("RIGHT", 0.30, 0.0, 0)]             // 0 deg (3 o'clock)
+        [InlineData("LOWER_RIGHT", 0.30, 0.20, 9)]      // 45 deg
+        [InlineData("LOWER_LEFT", -0.30, 0.20, 27)]     // 135 deg
+        [InlineData("UPPER_LEFT", -0.30, -0.20, 45)]    // 225 deg
+        [InlineData("UPPER_RIGHT", 0.30, -0.20, 63)]    // 315 deg
+        public void LobePeaksAtCorrectTick_ForEightDirections(string pose, double yaw, double pitch, int expectedPeakIndex)
         {
             var vm = new MainViewModel();
             vm.EnrollmentMode = EnrollmentViewMode.Enrolling;
+            vm.ResetSmoothing();
 
-            // Overlay with user tilting up (pitch = -0.22)
-            string json = """
-            {
-                "face": {
-                    "found": true,
-                    "bbox": [0.2, 0.2, 0.8, 0.8],
-                    "yaw": 0.0,
-                    "pitch": -0.22
-                },
-                "pose_matched": true,
-                "quality_passed": true,
-                "target": {
-                    "pose": "UP",
-                    "yaw": 0.0,
-                    "pitch": -1.0
-                },
-                "samples": { "collected": 1, "target": 2 },
-                "poses_completed": 3
-            }
-            """;
-
-            using var doc = JsonDocument.Parse(json);
-            var overlay = EnrollmentProtocol.ParseOverlay(doc.RootElement);
-            Assert.NotNull(overlay);
+            var face = new FaceOverlayData(true, new double[] { 0.2, 0.2, 0.8, 0.8 }, Array.Empty<double[]>(), yaw, pitch);
+            var overlay = new EnrollmentOverlayData(face, false, true, new TargetPoseData(pose, 0, 0), new SampleProgressData(0, 2), 0);
 
             vm.ApplyOverlay(overlay);
 
-            // Blue ticks must be non-empty (Sector 6 at top illuminated)
-            Assert.False(string.IsNullOrWhiteSpace(vm.FaceIdBlueTicksData));
-            // Top tick line coordinates M 185.0,30.0 L 185.0,10.0 must be in blue ticks
-            Assert.Contains("185.0,30.0", vm.FaceIdBlueTicksData);
-            Assert.Contains("185.0,10.0", vm.FaceIdBlueTicksData);
+            int bestIdx = -1;
+            double maxIntensity = -1.0;
+            for (int i = 0; i < 72; i++)
+            {
+                if (vm.Ticks[i].Intensity > maxIntensity)
+                {
+                    maxIntensity = vm.Ticks[i].Intensity;
+                    bestIdx = i;
+                }
+            }
 
-            // Arrow must point UP (0 degrees) and be visible
-            Assert.Equal(0.0, vm.DirectionArrowAngle);
-            Assert.True(vm.IsDirectionArrowVisible);
+            Assert.Equal(expectedPeakIndex, bestIdx);
+            Assert.True(vm.Ticks[expectedPeakIndex].Intensity > 0.8, $"Tick {expectedPeakIndex} intensity should be high");
         }
 
         [Fact]
-        public void FaceIdTicks_WhenEnrollmentComplete_TurnsAllTicksGreen()
+        public void DeadZone_WhenMotionBelowThreshold_NoBlueLobe()
+        {
+            var vm = new MainViewModel();
+            vm.EnrollmentMode = EnrollmentViewMode.Enrolling;
+            vm.ResetSmoothing();
+
+            // Sub-threshold head drift (yaw 0.02, pitch 0.01 -> m < 0.12)
+            var face = new FaceOverlayData(true, new double[] { 0.2, 0.2, 0.8, 0.8 }, Array.Empty<double[]>(), 0.02, 0.01);
+            var overlay = new EnrollmentOverlayData(face, false, true, null, null, 0);
+
+            vm.ApplyOverlay(overlay);
+
+            for (int i = 0; i < 72; i++)
+            {
+                Assert.Equal(0.0, vm.Ticks[i].Intensity);
+            }
+        }
+
+        [Fact]
+        public void VectorSmoothing_GlidesLobeGradually()
+        {
+            var vm = new MainViewModel();
+            vm.EnrollmentMode = EnrollmentViewMode.Enrolling;
+            vm.ResetSmoothing();
+
+            // Step 1: Idle frame at (0, 0)
+            var face0 = new FaceOverlayData(true, new double[] { 0.2, 0.2, 0.8, 0.8 }, Array.Empty<double[]>(), 0.0, 0.0);
+            vm.ApplyOverlay(new EnrollmentOverlayData(face0, false, true, null, null, 0));
+
+            // Step 2: Next frame jumps to yaw 0.30 (vx = 1.0). With EMA alpha = 0.35, smoothVx becomes 0.35
+            var face1 = new FaceOverlayData(true, new double[] { 0.2, 0.2, 0.8, 0.8 }, Array.Empty<double[]>(), 0.30, 0.0);
+            vm.ApplyOverlay(new EnrollmentOverlayData(face1, false, true, null, null, 0));
+
+            // Peak at tick 0 should reflect smoothed magnitude ~0.35, not full 1.0
+            double peakIntensity = vm.Ticks[0].Intensity;
+            Assert.InRange(peakIntensity, 0.30, 0.40);
+        }
+
+        [Fact]
+        public void CompletedSectors_StaySoftlyBlue()
+        {
+            var vm = new MainViewModel();
+            vm.EnrollmentMode = EnrollmentViewMode.Enrolling;
+            vm.ResetSmoothing();
+
+            // Complete the "LEFT" pose (Sector 4, indices 32..40)
+            for (int p = 0; p < vm.Poses.Count; p++)
+            {
+                if (string.Equals(vm.Poses[p].PoseKey, EnrollmentProtocol.PoseLeft, StringComparison.OrdinalIgnoreCase))
+                {
+                    vm.Poses[p].State = PoseState.Completed;
+                }
+            }
+
+            // User is now looking straight ahead in dead-zone
+            var face = new FaceOverlayData(true, new double[] { 0.2, 0.2, 0.8, 0.8 }, Array.Empty<double[]>(), 0.0, 0.0);
+            vm.ApplyOverlay(new EnrollmentOverlayData(face, false, true, null, null, 1));
+
+            // Sector 4 ticks must be marked completed
+            for (int i = 32; i <= 40; i++)
+            {
+                Assert.True(vm.Ticks[i].IsCompleted, $"Tick {i} in completed sector should be marked completed");
+            }
+            // Other sector ticks (e.g. tick 0) must not be completed
+            Assert.False(vm.Ticks[0].IsCompleted);
+        }
+
+        [Fact]
+        public void GreenSweep_TurnsAll72TicksGreen()
         {
             var vm = new MainViewModel();
             vm.EnrollmentMode = EnrollmentViewMode.Enrolling;
             vm.IsEnrollmentCompleteRing = true;
 
-            Assert.False(string.IsNullOrWhiteSpace(vm.FaceIdGreenTicksData));
-            Assert.Equal(string.Empty, vm.FaceIdBlueTicksData);
-            Assert.Equal(string.Empty, vm.FaceIdWhiteTicksData);
+            Assert.Equal(72, vm.Ticks.Count);
+            for (int i = 0; i < 72; i++)
+            {
+                Assert.True(vm.Ticks[i].IsCompleted);
+                Assert.Equal(1.0, vm.Ticks[i].Opacity);
+            }
             Assert.False(vm.IsDirectionArrowVisible);
+        }
+
+        [Theory]
+        [InlineData("closer", "Bring your face closer", 0.0, true)]
+        [InlineData("back", "Move back a little", 180.0, true)]
+        [InlineData("center", "Center your face", 0.0, true)]
+        [InlineData("none", "Look straight at the camera", 0.0, false)]
+        public void DistanceCenteringHint_UpdatesFriendlyGuidanceAndChevron(
+            string hint,
+            string expectedGuidance,
+            double expectedAngle,
+            bool expectedArrowVisible)
+        {
+            var vm = new MainViewModel();
+            vm.EnrollmentMode = EnrollmentViewMode.Enrolling;
+            vm.TargetPoseKey = EnrollmentProtocol.PoseCenter;
+
+            var face = new FaceOverlayData(true, new double[] { 0.2, 0.2, 0.8, 0.8 }, Array.Empty<double[]>(), 0.0, 0.0);
+            var overlay = new EnrollmentOverlayData(face, false, true, null, null, 0, hint);
+
+            vm.ApplyOverlay(overlay);
+
+            Assert.Equal(expectedGuidance, vm.FriendlyGuidanceText);
+            Assert.Equal(expectedAngle, vm.DirectionArrowAngle);
+            Assert.Equal(expectedArrowVisible, vm.IsDirectionArrowVisible);
+        }
+
+        [Fact]
+        public void ClutterRemoval_ShowDebugOverlay_DefaultsToFalse()
+        {
+            var vm = new MainViewModel();
+            Assert.False(vm.ShowDebugOverlay);
+            vm.ShowDebugOverlay = true;
+            Assert.True(vm.ShowDebugOverlay);
         }
     }
 }

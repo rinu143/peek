@@ -183,8 +183,9 @@ namespace PeekSetup.Models
                 }
 
                 int posesCompleted = overlayElement.TryGetProperty("poses_completed", out var pcEl) && pcEl.ValueKind == JsonValueKind.Number && pcEl.TryGetInt32(out int pcv) ? pcv : 0;
+                string hint = overlayElement.TryGetProperty("hint", out var hEl) && hEl.ValueKind == JsonValueKind.String ? hEl.GetString() ?? "none" : "none";
 
-                return new EnrollmentOverlayData(face, poseMatched, qualityPassed, target, samples, posesCompleted);
+                return new EnrollmentOverlayData(face, poseMatched, qualityPassed, target, samples, posesCompleted, hint);
             }
             catch
             {
@@ -253,7 +254,8 @@ namespace PeekSetup.Models
         bool QualityPassed,
         TargetPoseData? Target,
         SampleProgressData? Samples,
-        int PosesCompleted
+        int PosesCompleted,
+        string Hint = "none"
     );
 
     public record PreviewFrameData(

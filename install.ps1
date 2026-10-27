@@ -157,7 +157,12 @@ $engineExe = Join-Path $InstallDir "PeekEngine.exe"
 
 $taskCreated = $false
 try {
-    $currentUser = if (-not [string]::IsNullOrWhiteSpace($env:USERNAME)) { $env:USERNAME } else { [Environment]::UserName }
+    $currentUser = $env:USERNAME
+    if ([string]::IsNullOrWhiteSpace($currentUser)) { $currentUser = [Environment]::UserName }
+    if ([string]::IsNullOrWhiteSpace($currentUser)) {
+        try { $currentUser = (whoami).Split('\')[-1] } catch {}
+    }
+    if ([string]::IsNullOrWhiteSpace($currentUser)) { $currentUser = "SYSTEM" }
     $action = New-ScheduledTaskAction -Execute $engineExe -WorkingDirectory $InstallDir
     $trigger = New-ScheduledTaskTrigger -AtLogOn
     $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Highest

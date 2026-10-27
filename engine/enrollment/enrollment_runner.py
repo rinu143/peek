@@ -10,6 +10,7 @@ yielding composited preview frames and state updates per iteration while accepti
 import os
 import sys
 import time
+import math
 import logging
 from typing import Optional, Generator, Tuple, Dict, Any, List
 
@@ -66,6 +67,37 @@ POSE_FRIENDLY_NAMES = {
     HeadPose.LOWER_LEFT: "Look Down-Left",
     HeadPose.LOWER_RIGHT: "Look Down-Right",
 }
+
+# Distance & Centering Hint Constants (Normalized 0..1 Preview Coordinates)
+HINT_WIDTH_MIN = 0.30
+HINT_WIDTH_MAX = 0.65
+HINT_CENTER_MAX = 0.15
+
+
+def compute_distance_centering_hint(bbox: Optional[List[float]]) -> str:
+    """
+    Computes distance and centering hint from normalized bounding box [x1, y1, x2, y2].
+    - width fraction < 0.30 -> 'closer'
+    - width fraction > 0.65 -> 'back'
+    - center offset > 0.15 -> 'center'
+    - otherwise -> 'none'
+    """
+    if not bbox or len(bbox) < 4:
+        return "none"
+    bx1, by1, bx2, by2 = bbox
+    w = float(bx2 - bx1)
+    if w <= 0:
+        return "none"
+    if w < HINT_WIDTH_MIN:
+        return "closer"
+    if w > HINT_WIDTH_MAX:
+        return "back"
+    cx = float(bx1 + bx2) / 2.0
+    cy = float(by1 + by2) / 2.0
+    center_offset = math.hypot(cx - 0.5, cy - 0.5)
+    if center_offset > HINT_CENTER_MAX:
+        return "center"
+    return "none"
 
 
 def draw_hud_header(canvas: np.ndarray, current_step: int, total_steps: int, title: str):
@@ -445,6 +477,7 @@ class EnrollmentRunner:
 
         tdx, tdy = POSE_DIAL_COORDS.get(progress.current_pose, (0.0, 0.0))
         poses_completed = 9 if self.session.is_complete else int(self.session.current_pose_idx)
+        hint = compute_distance_centering_hint(face_data["bbox"]) if face_data["found"] else "none"
         overlay_dict = {
             "face": face_data,
             "pose_matched": bool(progress.pose_matched),
@@ -459,6 +492,7 @@ class EnrollmentRunner:
                 "target": int(max(1, progress.target_candidates)),
             },
             "poses_completed": poses_completed,
+            "hint": hint,
         }
 
         # Resize & embed live camera preview into canvas (480x360 at (30, 85))
