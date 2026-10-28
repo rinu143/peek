@@ -39,7 +39,8 @@
 
             <!-- Brand Identity (Quiet & Clean) -->
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <Path Data="{StaticResource GeoEye}" Fill="{DynamicResource TextPrimaryBrush}" Stretch="Uniform" Width="18" Height="18" VerticalAlignment="Center" Margin="0,0,8,0" />
+                <Image Source="{DynamicResource AppLogoSource}" Width="20" Height="20" VerticalAlignment="Center" Margin="0,0,8,0"
+                       RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" />
                 <TextBlock Text="Peek" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
             </StackPanel>
 
@@ -133,10 +134,10 @@
                 <!-- SCREEN: ALREADY ENROLLED (ACTIVE PROFILE MANAGEMENT) -->
                 <Grid Visibility="{Binding IsAlreadyEnrolledStep, Converter={StaticResource BoolToVis}}">
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440">
-                        <!-- Peek Eye Brand Mark -->
-                        <Border Width="60" Height="60" CornerRadius="30" Background="{DynamicResource PillBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,18">
-                            <Path Data="{StaticResource GeoEye}" Fill="{DynamicResource TextPrimaryBrush}" Stretch="Uniform" Width="30" Height="30" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
+                        <!-- Peek Biometric Logo (frame_search_1) -->
+                        <Image Source="{DynamicResource AppLogoSource}" Width="60" Height="60"
+                               HorizontalAlignment="Center" Margin="0,0,0,18"
+                               RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" />
 
                         <TextBlock Text="Face Recognition" FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,6" Foreground="{DynamicResource TextPrimaryBrush}" />
                         <TextBlock Text="{Binding AlreadyEnrolledTitle}"
@@ -173,10 +174,10 @@
                 <!-- STEP 1: WELCOME & NAME -->
                 <Grid Visibility="{Binding IsWelcomeStep, Converter={StaticResource BoolToVis}}">
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440">
-                        <!-- Peek Eye Brand Mark -->
-                        <Border Width="64" Height="64" CornerRadius="32" Background="{DynamicResource PillBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,18">
-                            <Path Data="{StaticResource GeoEye}" Fill="{DynamicResource TextPrimaryBrush}" Stretch="Uniform" Width="32" Height="32" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
+                        <!-- Peek Biometric Logo (frame_search_1) -->
+                        <Image Source="{DynamicResource AppLogoSource}" Width="64" Height="64"
+                               HorizontalAlignment="Center" Margin="0,0,0,18"
+                               RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" />
 
                         <TextBlock Text="Set Up Face Recognition" FontSize="26" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,8" Foreground="{DynamicResource TextPrimaryBrush}" />
                         <TextBlock Text="Position your face in front of the camera to unlock your PC quickly and securely."

@@ -191,6 +191,37 @@ namespace PeekSetup.Services
 
             UpdateBrush(res, "InputBgBrush", "InputBgColor");
             UpdateBrush(res, "InputBorderBrush", "InputBorderColor");
+
+            // Dynamic AppLogoSource switching (white glyph for dark mode, dark glyph for light mode)
+            string logoKey = isDark ? "AppLogoWhite" : "AppLogoDark";
+            if (Application.Current?.Resources != null && Application.Current.Resources.Contains(logoKey))
+            {
+                res["AppLogoSource"] = Application.Current.Resources[logoKey];
+            }
+            else if (res.Contains(logoKey))
+            {
+                res["AppLogoSource"] = res[logoKey];
+            }
+            else
+            {
+                try
+                {
+                    string packUri = isDark
+                        ? "pack://application:,,,/assets/frame_search_1.png"
+                        : "pack://application:,,,/assets/frame_search_1_dark.png";
+                    var bmp = new System.Windows.Media.Imaging.BitmapImage();
+                    bmp.BeginInit();
+                    bmp.UriSource = new Uri(packUri, UriKind.RelativeOrAbsolute);
+                    bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                    bmp.EndInit();
+                    bmp.Freeze();
+                    res["AppLogoSource"] = bmp;
+                }
+                catch
+                {
+                    // Fallback for headless testing
+                }
+            }
         }
 
         private static void SetColor(ResourceDictionary res, string key, Color color)

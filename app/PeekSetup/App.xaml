@@ -3,6 +3,12 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Application.Resources>
         <!-- ============================================================== -->
+        <!-- PEEK APP LOGO RESOURCES (from credential_provider/res)         -->
+        <!-- ============================================================== -->
+        <BitmapImage x:Key="AppLogoWhite" UriSource="assets/frame_search_1.png" />
+        <BitmapImage x:Key="AppLogoDark" UriSource="assets/frame_search_1_dark.png" />
+        <BitmapImage x:Key="AppLogoSource" UriSource="assets/frame_search_1_dark.png" />
+        <!-- ============================================================== -->
         <!-- APPLE-GRADE SYSTEM THEMED DESIGN TOKENS (LIGHT & DARK DYNAMIC) -->
         <!-- ============================================================== -->
         <!-- Initial Base Palette (Overridden at runtime by ThemeManager) -->
@@ -101,10 +107,10 @@
             M 9,16 C 10,17.2 14,17.2 15,16
         </StreamGeometry>
 
-        <!-- Stylized Eye (24x24) - Cleaned-up symmetric Peek Logo -->
+        <!-- Peek Biometric Eye Logo Mark (frame_search_1) -->
         <StreamGeometry x:Key="GeoEye">
-            M 2,12 C 5,6 19,6 22,12 C 19,18 5,18 2,12 Z
-            M 12,8.5 A 3.5,3.5 0 1 0 12,15.5 A 3.5,3.5 0 1 0 12,8.5 Z
+            M 43,30 L 40,31 L 37,33 L 33,37 L 32,39 L 31,41 L 30,44 L 30,51 L 31,54 L 32,56 L 34,59 L 36,61 L 39,63 L 41,64 L 44,65 L 52,65 L 55,64 L 57,63 L 63,57 L 64,55 L 65,53 L 66,47 L 65,42 L 64,39 L 62,36 L 59,33 L 53,30 Z
+            M 41,8 L 37,9 L 34,10 L 26,14 L 22,17 L 19,20 L 16,24 L 14,27 L 13,29 L 13,34 L 15,36 L 19,36 L 22,33 L 23,30 L 31,22 L 34,20 L 36,19 L 39,18 L 42,17 L 53,17 L 57,18 L 63,21 L 66,23 L 71,28 L 74,34 L 76,36 L 79,37 L 81,36 L 83,34 L 83,30 L 82,28 L 81,26 L 79,23 L 71,15 L 68,13 L 62,10 L 59,9 L 55,8 Z
         </StreamGeometry>
 
         <!-- Security Shield (24x24) -->

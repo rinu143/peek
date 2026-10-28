@@ -13,6 +13,8 @@
   <ItemGroup>
     <Resource Include="assets\peek.ico" />
     <Resource Include="assets\peek-logo.svg" />
+    <Resource Include="assets\frame_search_1.png" />
+    <Resource Include="assets\frame_search_1_dark.png" />
   </ItemGroup>
 
   <ItemGroup>

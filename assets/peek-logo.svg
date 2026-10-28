@@ -1,22 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <defs>
-    <linearGradient id="peekBg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#1C1C1E" />
-      <stop offset="100%" stop-color="#0A0A0C" />
-    </linearGradient>
-    <linearGradient id="peekIris" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0A84FF" />
-      <stop offset="100%" stop-color="#0062CC" />
-    </linearGradient>
-  </defs>
-  <!-- Background Squircle -->
-  <rect x="10" y="10" width="236" height="236" rx="52" fill="url(#peekBg)" stroke="#2C2C2E" stroke-width="2.5" />
-  <!-- Eye Outer Contour -->
-  <path d="M 28,128 C 56,66 200,66 228,128 C 200,190 56,190 28,128 Z" fill="#0F172A" stroke="#FFFFFF" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" />
-  <!-- Iris -->
-  <circle cx="128" cy="128" r="42" fill="url(#peekIris)" stroke="#FFFFFF" stroke-width="5" />
-  <!-- Pupil -->
-  <circle cx="128" cy="128" r="19" fill="#FFFFFF" />
-  <!-- Lens Highlight -->
-  <circle cx="141" cy="115" r="7" fill="#FFFFFF" opacity="0.85" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+  <!-- Windows Hello / Peek Biometric Eye Glyph (frame_search_1) -->
+  <path d="M 43,30 L 40,31 L 37,33 L 33,37 L 32,39 L 31,41 L 30,44 L 30,51 L 31,54 L 32,56 L 34,59 L 36,61 L 39,63 L 41,64 L 44,65 L 52,65 L 55,64 L 57,63 L 63,57 L 64,55 L 65,53 L 66,47 L 65,42 L 64,39 L 62,36 L 59,33 L 53,30 Z" fill="currentColor" />
+  <path d="M 41,8 L 37,9 L 34,10 L 26,14 L 22,17 L 19,20 L 16,24 L 14,27 L 13,29 L 13,34 L 15,36 L 19,36 L 22,33 L 23,30 L 31,22 L 34,20 L 36,19 L 39,18 L 42,17 L 53,17 L 57,18 L 63,21 L 66,23 L 71,28 L 74,34 L 76,36 L 79,37 L 81,36 L 83,34 L 83,30 L 82,28 L 81,26 L 79,23 L 71,15 L 68,13 L 62,10 L 59,9 L 55,8 Z" fill="currentColor" />
 </svg>
