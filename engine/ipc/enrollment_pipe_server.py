@@ -346,11 +346,17 @@ class EnrollmentPipeServer:
         self,
         display_name: str = "Primary User",
         confirmed: bool = False,
-        password: Optional[str] = None
+        password: Optional[str] = None,
+        keep_existing: bool = True,
+        profile_id: Optional[str] = None,
     ) -> EnrollmentRunner:
         with self._runner_lock:
             if self._runner is not None:
                 self._runner.display_name = display_name
+                if hasattr(self._runner, "keep_existing"):
+                    self._runner.keep_existing = keep_existing
+                if hasattr(self._runner, "target_profile_id"):
+                    self._runner.target_profile_id = profile_id
                 self._active_runner = self._runner
                 return self._runner
 
@@ -361,11 +367,15 @@ class EnrollmentPipeServer:
                     profile_store=self.profile_store,
                     confirmed=confirmed,
                     password=password,
+                    keep_existing=keep_existing,
+                    profile_id=profile_id,
                 )
             else:
                 self._active_runner.display_name = display_name
                 self._active_runner.confirmed = confirmed
                 self._active_runner.confirmation_password = password
+                self._active_runner.keep_existing = keep_existing
+                self._active_runner.target_profile_id = profile_id
 
             return self._active_runner
 
@@ -602,6 +612,8 @@ class EnrollmentPipeServer:
                     display_name = msg.get("display_name", "Primary User")
                     confirmed = bool(msg.get("confirmed", False))
                     password = msg.get("password")
+                    keep_existing = bool(msg.get("keep_existing", False))
+                    profile_id = msg.get("profile_id")
 
                     # Requirement 6: Require explicit confirmation to replace an existing enabled profile
                     try:
@@ -611,7 +623,7 @@ class EnrollmentPipeServer:
                         logger.error(f"Failed to check existing profiles: {ex}")
                         has_enabled = False
 
-                    if has_enabled:
+                    if has_enabled and not keep_existing:
                         is_confirmed = False
                         if password:
                             from engine.enrollment.enrollment_session import verify_windows_password
@@ -637,6 +649,8 @@ class EnrollmentPipeServer:
                         confirmed=confirmed,
                         password=password,
                         clean_preview=clean_preview,
+                        keep_existing=keep_existing,
+                        profile_id=profile_id,
                     )
                 finally:
                     if self.coordinator is not None:
@@ -657,6 +671,8 @@ class EnrollmentPipeServer:
         confirmed: bool = False,
         password: Optional[str] = None,
         clean_preview: bool = False,
+        keep_existing: bool = False,
+        profile_id: Optional[str] = None,
     ):
         """
         Executes a live guided enrollment session:
@@ -666,7 +682,7 @@ class EnrollmentPipeServer:
         4. Streams PREVIEW_FRAME messages only to verified client.
         5. Emits POSE_COMPLETE and ENROLLMENT_COMPLETE.
         """
-        logger.info(f"Starting enrollment session for display_name='{display_name}' (clean_preview={clean_preview})")
+        logger.info(f"Starting enrollment session for display_name='{display_name}' (clean_preview={clean_preview}, keep_existing={keep_existing})")
 
         # Requirement 6: Verify client process SID matches enrolled user before streaming frames
         client_sid = get_client_process_sid(session.handle)
@@ -679,7 +695,13 @@ class EnrollmentPipeServer:
                 session.write_message(make_error(REASON_INVALID_MESSAGE, "Unauthorized client"))
                 return
 
-        runner = self._ensure_runner(display_name=display_name, confirmed=confirmed, password=password)
+        runner = self._ensure_runner(
+            display_name=display_name,
+            confirmed=confirmed,
+            password=password,
+            keep_existing=keep_existing,
+            profile_id=profile_id,
+        )
 
         if hasattr(runner, "start_camera") and not runner.start_camera():
             logger.error("Camera acquisition failed for enrollment.")
@@ -687,7 +709,13 @@ class EnrollmentPipeServer:
             return
 
         try:
-            runner.start(display_name=display_name, confirmed=confirmed, password=password)
+            runner.start(
+                display_name=display_name,
+                confirmed=confirmed,
+                password=password,
+                keep_existing=keep_existing,
+                profile_id=profile_id,
+            )
         except TypeError:
             runner.start(display_name=display_name)
         target_interval = 1.0 / max(1.0, self.target_fps)

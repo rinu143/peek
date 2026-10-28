@@ -93,7 +93,13 @@ namespace PeekSetup.Models
             PropertyNamingPolicy = null
         };
 
-        public static string CreateStartEnrollment(string displayName, bool confirmed = false, string? password = null, bool cleanPreview = true)
+        public static string CreateStartEnrollment(
+            string displayName,
+            bool confirmed = false,
+            string? password = null,
+            bool cleanPreview = true,
+            bool keepExisting = true,
+            string? profileId = null)
         {
             var msg = new
             {
@@ -102,6 +108,8 @@ namespace PeekSetup.Models
                 display_name = displayName,
                 confirmed = confirmed ? (bool?)true : null,
                 clean_preview = cleanPreview ? (bool?)true : null,
+                keep_existing = keepExisting ? (bool?)true : null,
+                profile_id = profileId,
                 password = password,
                 timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
             };

@@ -254,6 +254,8 @@ class EnrollmentRunner:
         camera_index: int = 0,
         confirmed: bool = False,
         password: Optional[str] = None,
+        keep_existing: bool = True,
+        profile_id: Optional[str] = None,
     ):
         self.display_name = display_name
         self.profile_store = profile_store or SecureProfileStore()
@@ -267,6 +269,8 @@ class EnrollmentRunner:
 
         self.confirmed = confirmed
         self.confirmation_password = password
+        self.keep_existing = keep_existing
+        self.target_profile_id = profile_id
         self._cancelled = False
         self._advance_requested = False
         self.saved_profile: Optional[PeekProfile] = None
@@ -311,13 +315,23 @@ class EnrollmentRunner:
         if self._camera_owned:
             self._camera = None
 
-    def start(self, display_name: Optional[str] = None, confirmed: bool = False, password: Optional[str] = None):
+    def start(
+        self,
+        display_name: Optional[str] = None,
+        confirmed: bool = False,
+        password: Optional[str] = None,
+        keep_existing: bool = True,
+        profile_id: Optional[str] = None,
+    ):
         """Starts or restarts the enrollment session."""
         if display_name:
             self.display_name = display_name
         self.confirmed = confirmed
         if password is not None:
             self.confirmation_password = password
+        self.keep_existing = keep_existing
+        if profile_id is not None:
+            self.target_profile_id = profile_id
         self._cancelled = False
         self._advance_requested = False
         self.saved_profile = None
@@ -555,7 +569,13 @@ class EnrollmentRunner:
         if self.session.is_complete:
             if self.saved_profile is None and not self._cancelled:
                 try:
-                    self.saved_profile = self.session.finalize_and_save_profile(display_name=self.display_name, confirmed=self.confirmed, password=self.confirmation_password)
+                    self.saved_profile = self.session.finalize_and_save_profile(
+                        display_name=self.display_name,
+                        profile_id=self.target_profile_id,
+                        confirmed=self.confirmed,
+                        password=self.confirmation_password,
+                        keep_existing=self.keep_existing,
+                    )
                     logger.info("Enrollment finished and profile '%s' secured via DPAPI.", self.display_name)
                 except Exception as ex:
                     logger.error("Failed to finalize and save profile: %s", ex, exc_info=True)

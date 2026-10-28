@@ -55,11 +55,16 @@ namespace PeekSetup.Tests
             return Task.FromResult(MockStatusResponse);
         }
 
-        public Task StartEnrollmentAsync(string displayName, bool confirmed = false, string? password = null, CancellationToken ct = default)
+        public bool LastStartedKeepExisting { get; private set; }
+        public string? LastStartedProfileId { get; private set; }
+
+        public Task StartEnrollmentAsync(string displayName, bool confirmed = false, string? password = null, bool keepExisting = true, string? profileId = null, CancellationToken ct = default)
         {
             LastStartedDisplayName = displayName;
             LastStartedConfirmed = confirmed;
             LastStartedPassword = password;
+            LastStartedKeepExisting = keepExisting;
+            LastStartedProfileId = profileId;
             return Task.CompletedTask;
         }
 

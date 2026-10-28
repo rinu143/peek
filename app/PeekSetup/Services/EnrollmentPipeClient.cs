@@ -130,14 +130,26 @@ namespace PeekSetup.Services
             }
         }
 
-        public async Task StartEnrollmentAsync(string displayName, bool confirmed = false, string? password = null, CancellationToken ct = default)
+        public async Task StartEnrollmentAsync(
+            string displayName,
+            bool confirmed = false,
+            string? password = null,
+            bool keepExisting = true,
+            string? profileId = null,
+            CancellationToken ct = default)
         {
             if (!IsConnected || _writer == null)
             {
                 throw new InvalidOperationException("Not connected to Peek Enrollment Named Pipe.");
             }
 
-            string message = EnrollmentProtocol.CreateStartEnrollment(displayName, confirmed, password, cleanPreview: true);
+            string message = EnrollmentProtocol.CreateStartEnrollment(
+                displayName,
+                confirmed,
+                password,
+                cleanPreview: true,
+                keepExisting: keepExisting,
+                profileId: profileId);
             await SendLineAsync(message, ct).ConfigureAwait(false);
         }
 

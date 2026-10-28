@@ -34,6 +34,19 @@ namespace PeekSetup.ViewModels
         private readonly IEnrollmentPipeClient _pipeClient;
         private readonly IPasswordLinker _passwordLinker;
         private readonly IPasswordLinkLauncher _linkLauncher;
+        private readonly IProfileManager _profileManager;
+        private readonly IPasswordValidator _passwordValidator;
+
+        public ObservableCollection<IdentityItemViewModel> Identities { get; } = new();
+
+        private bool _isAddingNewIdentity;
+        private bool _isPasswordVerifiedForAdd;
+        private bool _isAddingSecondaryFace;
+        private string? _recapturingProfileId;
+        private string _newIdentityName = string.Empty;
+        private string _passwordVerificationInput = string.Empty;
+        private string _passwordVerificationError = string.Empty;
+        private bool _isVerifyingPasswordForAdd;
 
         private SetupStep _currentStep = SetupStep.Welcome;
         private string _displayName = Environment.UserName;
@@ -183,6 +196,90 @@ namespace PeekSetup.ViewModels
         }
 
         public string AlreadyEnrolledTitle => $"You're already set up as {ExistingProfileName}";
+
+        public bool IsAddingNewIdentity
+        {
+            get => _isAddingNewIdentity;
+            set
+            {
+                if (_isAddingNewIdentity != value)
+                {
+                    _isAddingNewIdentity = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public bool IsPasswordVerifiedForAdd
+        {
+            get => _isPasswordVerifiedForAdd;
+            set
+            {
+                if (_isPasswordVerifiedForAdd != value)
+                {
+                    _isPasswordVerifiedForAdd = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public string NewIdentityName
+        {
+            get => _newIdentityName;
+            set
+            {
+                if (_newIdentityName != value)
+                {
+                    _newIdentityName = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public string PasswordVerificationInput
+        {
+            get => _passwordVerificationInput;
+            set
+            {
+                if (_passwordVerificationInput != value)
+                {
+                    _passwordVerificationInput = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public string PasswordVerificationError
+        {
+            get => _passwordVerificationError;
+            set
+            {
+                if (_passwordVerificationError != value)
+                {
+                    _passwordVerificationError = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(HasPasswordVerificationError));
+                }
+            }
+        }
+
+        public bool HasPasswordVerificationError => !string.IsNullOrEmpty(PasswordVerificationError);
+
+        public bool IsVerifyingPasswordForAdd
+        {
+            get => _isVerifyingPasswordForAdd;
+            set
+            {
+                if (_isVerifyingPasswordForAdd != value)
+                {
+                    _isVerifyingPasswordForAdd = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(CanVerifyPasswordForAdd));
+                }
+            }
+        }
+
+        public bool CanVerifyPasswordForAdd => !IsVerifyingPasswordForAdd;
 
         public string DisplayName
         {
@@ -1059,20 +1156,29 @@ namespace PeekSetup.ViewModels
         public ICommand LinkPasswordElevatedCommand { get; }
         public ICommand ExitCommand { get; }
         public ICommand ToggleDetailsCommand { get; }
+        public ICommand StartAddIdentityCommand { get; }
+        public ICommand VerifyPasswordForAddCommand { get; }
+        public ICommand ConfirmAddIdentityCommand { get; }
+        public ICommand CancelAddIdentityCommand { get; }
+        public ICommand GoToProfileSectionCommand { get; }
 
         public MainViewModel()
-            : this(null, null, null)
+            : this(null, null, null, null, null)
         {
         }
 
         public MainViewModel(
             IEnrollmentPipeClient? pipeClient = null,
             IPasswordLinker? passwordLinker = null,
-            IPasswordLinkLauncher? linkLauncher = null)
+            IPasswordLinkLauncher? linkLauncher = null,
+            IProfileManager? profileManager = null,
+            IPasswordValidator? passwordValidator = null)
         {
             _pipeClient = pipeClient ?? new EnrollmentPipeClient();
             _passwordLinker = passwordLinker ?? new PasswordLinker();
             _linkLauncher = linkLauncher ?? new PasswordLinkLauncher();
+            _profileManager = profileManager ?? new ProfileManager();
+            _passwordValidator = passwordValidator ?? new WindowsPasswordValidator();
 
             InitializePoses();
             InitializeTicks();
@@ -1096,6 +1202,12 @@ namespace PeekSetup.ViewModels
             LinkPasswordElevatedCommand = new AsyncRelayCommand(LinkPasswordElevatedAsync, () => CanLinkPassword);
             ExitCommand = new RelayCommand(FinishSetup);
             ToggleDetailsCommand = new RelayCommand(() => IsDetailsExpanded = !IsDetailsExpanded);
+
+            StartAddIdentityCommand = new RelayCommand(StartAddIdentity);
+            VerifyPasswordForAddCommand = new AsyncRelayCommand(VerifyPasswordForAddAsync);
+            ConfirmAddIdentityCommand = new AsyncRelayCommand(ConfirmAddIdentityAsync);
+            CancelAddIdentityCommand = new RelayCommand(CancelAddIdentity);
+            GoToProfileSectionCommand = new AsyncRelayCommand(GoToProfileSectionAsync);
         }
 
         private void InitializePoses()
@@ -1127,6 +1239,13 @@ namespace PeekSetup.ViewModels
 
         private void ResetPoseStates()
         {
+            IsEnrollmentCompleteRing = false;
+            IsPoseCheckActive = false;
+            IsPoseFlashActive = false;
+            SampleProgress = 0.0;
+            SamplesCollected = 0;
+            ClearOverlay();
+
             for (int i = 0; i < Poses.Count; i++)
             {
                 Poses[i].State = i == 0 ? PoseState.Active : PoseState.Pending;
@@ -1138,7 +1257,6 @@ namespace PeekSetup.ViewModels
             QualityStatusText = "Connecting...";
             IsQualityPassed = true;
             TargetPoseKey = EnrollmentProtocol.PoseCenter;
-            SamplesCollected = 0;
             _lastUserPitch = 0.0;
             _lastUserYaw = 0.0;
             OverlayHint = "none";
@@ -1150,30 +1268,54 @@ namespace PeekSetup.ViewModels
 
         public async Task StartEnrollmentFlowAsync()
         {
-            bool isReEnrollment = CurrentStep == SetupStep.AlreadyEnrolled || !string.IsNullOrEmpty(ExistingProfileName);
-            CurrentStep = SetupStep.Enrollment;
-            EnrollmentMode = EnrollmentViewMode.Connecting;
-            ResetPoseStates();
-            PreviewImage = null;
-            EngineErrorMessage = string.Empty;
+            await StartEnrollmentInternalAsync(
+                keepExisting: _isAddingSecondaryFace || CurrentStep == SetupStep.AlreadyEnrolled,
+                profileId: _recapturingProfileId).ConfigureAwait(false);
+        }
+
+        public async Task StartEnrollmentInternalAsync(bool keepExisting = true, string? profileId = null)
+        {
+            bool isConfirmed = keepExisting || CurrentStep == SetupStep.AlreadyEnrolled || !string.IsNullOrEmpty(ExistingProfileName);
+            RunOnUi(() =>
+            {
+                CurrentStep = SetupStep.Enrollment;
+                EnrollmentMode = EnrollmentViewMode.Connecting;
+                IsEnrollmentCompleteRing = false;
+                IsPoseCheckActive = false;
+                IsPoseFlashActive = false;
+                SampleProgress = 0.0;
+                ResetPoseStates();
+                PreviewImage = null;
+                EngineErrorMessage = string.Empty;
+            });
 
             try
             {
                 await _pipeClient.ConnectAsync();
-                EnrollmentMode = EnrollmentViewMode.Enrolling;
-                await _pipeClient.StartEnrollmentAsync(DisplayName, confirmed: isReEnrollment);
+                RunOnUi(() => EnrollmentMode = EnrollmentViewMode.Enrolling);
+                await _pipeClient.StartEnrollmentAsync(
+                    DisplayName,
+                    confirmed: isConfirmed,
+                    keepExisting: keepExisting,
+                    profileId: profileId);
             }
             catch (EngineUnavailableException ex)
             {
-                EnrollmentMode = EnrollmentViewMode.EngineUnavailable;
-                EngineErrorMessage = ex.Message;
-                RawTechnicalDetails = ex.ToString();
+                RunOnUi(() =>
+                {
+                    EnrollmentMode = EnrollmentViewMode.EngineUnavailable;
+                    EngineErrorMessage = ex.Message;
+                    RawTechnicalDetails = ex.ToString();
+                });
             }
             catch (Exception ex)
             {
-                EnrollmentMode = EnrollmentViewMode.Failed;
-                EngineErrorMessage = $"Could not initiate face enrollment: {ex.Message}";
-                RawTechnicalDetails = ex.ToString();
+                RunOnUi(() =>
+                {
+                    EnrollmentMode = EnrollmentViewMode.Failed;
+                    EngineErrorMessage = $"Could not initiate face enrollment: {ex.Message}";
+                    RawTechnicalDetails = ex.ToString();
+                });
             }
         }
 
@@ -1190,12 +1332,25 @@ namespace PeekSetup.ViewModels
             }
             finally
             {
-                CurrentStep = SetupStep.Welcome;
-                PreviewImage = null;
-                ClearOverlay();
-                IsEnrollmentCompleteRing = false;
-                IsPoseFlashActive = false;
-                IsPoseCheckActive = false;
+                RunOnUi(() =>
+                {
+                    if (Identities.Count > 0 || _isAddingSecondaryFace)
+                    {
+                        _isAddingSecondaryFace = false;
+                        _recapturingProfileId = null;
+                        IsAddingNewIdentity = false;
+                        CurrentStep = SetupStep.AlreadyEnrolled;
+                    }
+                    else
+                    {
+                        CurrentStep = SetupStep.Welcome;
+                    }
+                    PreviewImage = null;
+                    ClearOverlay();
+                    IsEnrollmentCompleteRing = false;
+                    IsPoseFlashActive = false;
+                    IsPoseCheckActive = false;
+                });
             }
         }
 
@@ -1227,6 +1382,7 @@ namespace PeekSetup.ViewModels
                 if (success)
                 {
                     IsPasswordLinked = true;
+                    await RefreshIdentitiesAsync().ConfigureAwait(false);
                     CurrentStep = SetupStep.Done;
                 }
                 else
@@ -1293,6 +1449,7 @@ namespace PeekSetup.ViewModels
                     IsPasswordLinked = true;
                     HasPasswordError = false;
                     PasswordErrorMessage = string.Empty;
+                    _ = RefreshIdentitiesAsync();
                     if (CurrentStep == SetupStep.PasswordLink)
                     {
                         CurrentStep = SetupStep.Done;
@@ -1365,15 +1522,24 @@ namespace PeekSetup.ViewModels
                         EnrolledProfileId = id;
                         CurrentStep = SetupStep.AlreadyEnrolled;
                     });
+                    await RefreshIdentitiesAsync().ConfigureAwait(false);
                 }
                 else
                 {
-                    RunOnUi(() => CurrentStep = SetupStep.Welcome);
+                    RunOnUi(() =>
+                    {
+                        Identities.Clear();
+                        CurrentStep = SetupStep.Welcome;
+                    });
                 }
             }
             catch (Exception)
             {
-                RunOnUi(() => CurrentStep = SetupStep.Welcome);
+                RunOnUi(() =>
+                {
+                    Identities.Clear();
+                    CurrentStep = SetupStep.Welcome;
+                });
             }
             finally
             {
@@ -1390,6 +1556,181 @@ namespace PeekSetup.ViewModels
                 }
                 RunOnUi(() => IsCheckingStatus = false);
             }
+        }
+
+        public async Task RefreshIdentitiesAsync()
+        {
+            try
+            {
+                var profiles = await _profileManager.GetProfilesAsync().ConfigureAwait(false);
+                RunOnUi(() =>
+                {
+                    Identities.Clear();
+                    foreach (var p in profiles)
+                    {
+                        Identities.Add(new IdentityItemViewModel(
+                            p.ProfileId,
+                            p.DisplayName,
+                            p.Enabled,
+                            p.QualityPercentage,
+                            onToggle: (item, enabled) => ToggleProfileAsync(item, enabled),
+                            onRecapture: item => RecaptureProfileAsync(item),
+                            onDelete: item => DeleteProfileAsync(item),
+                            onRename: (item, newName) => RenameProfileAsync(item, newName)));
+                    }
+                    if (Identities.Count > 0 && string.IsNullOrEmpty(ExistingProfileId))
+                    {
+                        ExistingProfileName = Identities[0].DisplayName;
+                        ExistingProfileId = Identities[0].ProfileId;
+                    }
+                    else if (Identities.Count == 0 && !string.IsNullOrEmpty(ExistingProfileId))
+                    {
+                        Identities.Add(new IdentityItemViewModel(
+                            ExistingProfileId,
+                            ExistingProfileName,
+                            true,
+                            75,
+                            onToggle: (item, enabled) => ToggleProfileAsync(item, enabled),
+                            onRecapture: item => RecaptureProfileAsync(item),
+                            onDelete: item => DeleteProfileAsync(item),
+                            onRename: (item, newName) => RenameProfileAsync(item, newName)));
+                    }
+                });
+            }
+            catch
+            {
+                // Fallback
+            }
+        }
+
+        private void StartAddIdentity()
+        {
+            PasswordVerificationInput = string.Empty;
+            PasswordVerificationError = string.Empty;
+            NewIdentityName = string.Empty;
+            IsPasswordVerifiedForAdd = false;
+            IsAddingNewIdentity = true;
+        }
+
+        private async Task VerifyPasswordForAddAsync()
+        {
+            if (string.IsNullOrEmpty(PasswordVerificationInput))
+            {
+                PasswordVerificationError = "Please enter your Windows password.";
+                return;
+            }
+
+            IsVerifyingPasswordForAdd = true;
+            PasswordVerificationError = string.Empty;
+
+            try
+            {
+                var sec = new SecureString();
+                foreach (char c in PasswordVerificationInput) sec.AppendChar(c);
+                sec.MakeReadOnly();
+
+                bool valid = await Task.Run(() => _passwordValidator.Validate(Environment.UserName, sec)).ConfigureAwait(false);
+                RunOnUi(() =>
+                {
+                    if (valid)
+                    {
+                        IsPasswordVerifiedForAdd = true;
+                        PasswordVerificationError = string.Empty;
+                        NewIdentityName = $"{Environment.UserName} {Identities.Count + 1}";
+                    }
+                    else
+                    {
+                        PasswordVerificationError = "Incorrect password. Please try again.";
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                RunOnUi(() => PasswordVerificationError = $"Verification error: {ex.Message}");
+            }
+            finally
+            {
+                RunOnUi(() => IsVerifyingPasswordForAdd = false);
+            }
+        }
+
+        private async Task ConfirmAddIdentityAsync()
+        {
+            string name = !string.IsNullOrWhiteSpace(NewIdentityName) ? NewIdentityName.Trim() : $"{Environment.UserName} {Identities.Count + 1}";
+            _isAddingSecondaryFace = true;
+            _recapturingProfileId = null;
+            DisplayName = name;
+            IsAddingNewIdentity = false;
+            IsPasswordVerifiedForAdd = false;
+            PasswordVerificationInput = string.Empty;
+            PasswordVerificationError = string.Empty;
+            NewIdentityName = string.Empty;
+
+            await StartEnrollmentInternalAsync(keepExisting: true, profileId: null).ConfigureAwait(false);
+        }
+
+        private void CancelAddIdentity()
+        {
+            IsAddingNewIdentity = false;
+            IsPasswordVerifiedForAdd = false;
+            PasswordVerificationInput = string.Empty;
+            PasswordVerificationError = string.Empty;
+        }
+
+        public async Task RecaptureProfileAsync(IdentityItemViewModel item)
+        {
+            _isAddingSecondaryFace = true;
+            _recapturingProfileId = item.ProfileId;
+            DisplayName = item.DisplayName;
+
+            await StartEnrollmentInternalAsync(keepExisting: true, profileId: item.ProfileId).ConfigureAwait(false);
+        }
+
+        public async Task DeleteProfileAsync(IdentityItemViewModel item)
+        {
+            await _profileManager.DeleteProfileAsync(item.ProfileId).ConfigureAwait(false);
+            RunOnUi(() =>
+            {
+                Identities.Remove(item);
+                if (Identities.Count == 0)
+                {
+                    ExistingProfileId = string.Empty;
+                    ExistingProfileName = string.Empty;
+                    CurrentStep = SetupStep.Welcome;
+                }
+                else
+                {
+                    ExistingProfileId = Identities[0].ProfileId;
+                    ExistingProfileName = Identities[0].DisplayName;
+                }
+            });
+        }
+
+        public async Task ToggleProfileAsync(IdentityItemViewModel item, bool enabled)
+        {
+            await _profileManager.ToggleProfileAsync(item.ProfileId, enabled).ConfigureAwait(false);
+        }
+
+        public async Task RenameProfileAsync(IdentityItemViewModel item, string newName)
+        {
+            bool success = await _profileManager.RenameProfileAsync(item.ProfileId, newName).ConfigureAwait(false);
+            if (success)
+            {
+                RunOnUi(() =>
+                {
+                    if (item.ProfileId == ExistingProfileId)
+                    {
+                        ExistingProfileName = newName;
+                    }
+                });
+            }
+        }
+
+        public async Task GoToProfileSectionAsync()
+        {
+            IsEnrollmentCompleteRing = false;
+            await RefreshIdentitiesAsync().ConfigureAwait(false);
+            RunOnUi(() => CurrentStep = SetupStep.AlreadyEnrolled);
         }
 
         public void ApplyOverlay(EnrollmentOverlayData overlay)
@@ -1688,11 +2029,24 @@ namespace PeekSetup.ViewModels
                 await Task.Delay(EnrollmentCompleteDelayMs).ConfigureAwait(false);
             }
 
-            RunOnUi(() =>
+            RunOnUi(async () =>
             {
                 IsPoseCheckActive = false;
-                // Advance to Step 3: Password Linking
-                CurrentStep = SetupStep.PasswordLink;
+                IsEnrollmentCompleteRing = false;
+                if (_isAddingSecondaryFace || Identities.Count > 0)
+                {
+                    _isAddingSecondaryFace = false;
+                    _recapturingProfileId = null;
+                    IsAddingNewIdentity = false;
+                    IsPasswordVerifiedForAdd = false;
+                    await RefreshIdentitiesAsync();
+                    CurrentStep = SetupStep.AlreadyEnrolled;
+                }
+                else
+                {
+                    // Advance to Step 3: Password Linking (first time only)
+                    CurrentStep = SetupStep.PasswordLink;
+                }
             });
         }
 

@@ -129,6 +129,8 @@ class FaceEngine:
         
         # In-memory enrolled templates cache for fast real-time matching
         self.active_profile: Optional[PeekProfile] = None
+        self.enabled_profiles: List[PeekProfile] = []
+        self._template_profile_map: List[PeekProfile] = []
         self.cached_template_embeddings: List[np.ndarray] = []
         self.cached_template_poses: List[str] = []
         self.reload_active_profile()
@@ -136,19 +138,25 @@ class FaceEngine:
     def reload_active_profile(self):
         """Loads enabled profiles from DPAPI storage and caches template embeddings."""
         profiles = self.profile_store.list_profiles()
-        enabled_profiles = [p for p in profiles if p.enabled]
+        self.enabled_profiles = [p for p in profiles if p.enabled]
         
-        if enabled_profiles:
-            self.active_profile = enabled_profiles[0]
-            self.cached_template_embeddings = [
-                np.array(t.embedding, dtype=np.float32) for t in self.active_profile.templates
-            ]
-            self.cached_template_poses = [t.pose_label for t in self.active_profile.templates]
-            logger.info(f"Active profile loaded: '{self.active_profile.display_name}' with {len(self.cached_template_embeddings)} templates.")
-        else:
-            self.active_profile = None
+        if self.enabled_profiles:
+            self.active_profile = self.enabled_profiles[0]
             self.cached_template_embeddings = []
             self.cached_template_poses = []
+            self._template_profile_map = []
+            for prof in self.enabled_profiles:
+                for t in prof.templates:
+                    self.cached_template_embeddings.append(np.array(t.embedding, dtype=np.float32))
+                    self.cached_template_poses.append(t.pose_label)
+                    self._template_profile_map.append(prof)
+            logger.info(f"Loaded {len(self.enabled_profiles)} active profile(s) with {len(self.cached_template_embeddings)} total templates.")
+        else:
+            self.active_profile = None
+            self.enabled_profiles = []
+            self.cached_template_embeddings = []
+            self.cached_template_poses = []
+            self._template_profile_map = []
             logger.info("No active profile enrolled.")
 
         self.temporal_verifier.reset()
@@ -162,10 +170,12 @@ class FaceEngine:
     def set_active_profile(self, profile: PeekProfile):
         """Sets active profile in memory."""
         self.active_profile = profile
+        self.enabled_profiles = [profile]
         self.cached_template_embeddings = [
             np.array(t.embedding, dtype=np.float32) for t in profile.templates
         ]
         self.cached_template_poses = [t.pose_label for t in profile.templates]
+        self._template_profile_map = [profile for _ in profile.templates]
         self.temporal_verifier.reset()
         self.liveness_detector.reset()
         self.challenge_manager.reset()
@@ -362,6 +372,9 @@ class FaceEngine:
             estimated_pose=pose_label,
             threshold=self.active_profile.matching_threshold if self.active_profile else None
         )
+        if match_result.is_match and match_result.best_template_idx is not None:
+            if hasattr(self, '_template_profile_map') and match_result.best_template_idx < len(self._template_profile_map):
+                self.active_profile = self._template_profile_map[match_result.best_template_idx]
 
         # Step 7: Rolling temporal verification confirmation (M-of-N sliding window)
         temporal_res = self.temporal_verifier.update(

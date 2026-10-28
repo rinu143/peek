@@ -58,7 +58,7 @@ namespace PeekSetup.ViewModels
 
         public bool CanExecute(object? parameter) => !_isExecuting && (_canExecute?.Invoke(parameter) ?? true);
 
-        public async void Execute(object? parameter)
+        public async Task ExecuteAsync(object? parameter = null)
         {
             if (!CanExecute(parameter)) return;
 
@@ -74,6 +74,11 @@ namespace PeekSetup.ViewModels
                 _isExecuting = false;
                 CommandManager.InvalidateRequerySuggested();
             }
+        }
+
+        public async void Execute(object? parameter)
+        {
+            await ExecuteAsync(parameter);
         }
     }
 }

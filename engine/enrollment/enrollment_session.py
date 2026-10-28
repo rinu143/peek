@@ -298,12 +298,14 @@ class EnrollmentSession:
         confirmed: bool = False,
         password: Optional[str] = None,
         user_sid: Optional[str] = None,
+        keep_existing: bool = False,
     ) -> PeekProfile:
         """
         Creates and encrypts the completed PeekProfile with Windows DPAPI.
         CRITICAL SECURITY REQUIREMENT:
         Replacing an existing enabled profile requires explicit confirmation
         (confirmed=True or validated Windows password).
+        When keep_existing=True, existing enabled profiles are preserved for multi-identity support.
         """
         if not self.final_templates:
             raise ValueError("No templates enrolled to create a profile.")
@@ -311,7 +313,7 @@ class EnrollmentSession:
         existing_profiles = self.profile_store.list_profiles()
         enabled_existing = [p for p in existing_profiles if p.enabled]
 
-        if enabled_existing and not confirmed:
+        if enabled_existing and not confirmed and not keep_existing:
             if password:
                 if not verify_windows_password(password):
                     raise PermissionError("Confirmation failed: invalid Windows password")
@@ -319,14 +321,15 @@ class EnrollmentSession:
             else:
                 raise PermissionError("Explicit confirmation required to replace an existing enabled profile")
 
-        for prev_profile in enabled_existing:
-            prev_profile.enabled = False
-            self.profile_store.save_profile(prev_profile)
-            logger.info(
-                "Disabled previous active profile '%s' (%s) for single-user replacement.",
-                prev_profile.display_name,
-                prev_profile.profile_id,
-            )
+        if not keep_existing:
+            for prev_profile in enabled_existing:
+                prev_profile.enabled = False
+                self.profile_store.save_profile(prev_profile)
+                logger.info(
+                    "Disabled previous active profile '%s' (%s) for single-user replacement.",
+                    prev_profile.display_name,
+                    prev_profile.profile_id,
+                )
 
         pid = profile_id or str(uuid.uuid4())
         profile = PeekProfile(
