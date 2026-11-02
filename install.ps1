@@ -148,6 +148,16 @@ if (Test-Path $cpRegKey) {
     Write-Host "      [!] WARNING: Credential Provider registry key not detected at $cpRegKey" -ForegroundColor Yellow
 }
 
+# Configure admin-only Peek registry settings
+$peekRegKey = "HKLM:\SOFTWARE\Peek"
+if (-not (Test-Path $peekRegKey)) {
+    New-Item -Path $peekRegKey -Force | Out-Null
+}
+$engineExePath = Join-Path $InstallDir "PeekEngine.exe"
+Set-ItemProperty -Path $peekRegKey -Name "InstallPath" -Value $engineExePath -Type String -Force
+Set-ItemProperty -Path $peekRegKey -Name "LogLevel" -Value 1 -Type DWord -Force # 1 = ERROR, 0 = OFF, 2 = INFO, 3 = DEBUG
+Write-Host "      [OK] Configured HKLM:\SOFTWARE\Peek (InstallPath, LogLevel)." -ForegroundColor Green
+
 # 6. Configure test-grade logon auto-start
 Write-Host "[4/5] Configuring test-grade logon startup task..." -ForegroundColor Cyan
 # -----------------------------------------------------------------------------

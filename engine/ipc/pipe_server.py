@@ -63,6 +63,7 @@ from engine.ipc.protocol import (
     MSG_AUTH_FAILED,
     MSG_TIMEOUT,
     MSG_ERROR,
+    MSG_LOCKED_OUT,
     MSG_PONG,
     REASON_SPOOF_DETECTED,
     REASON_NO_MATCH,
@@ -75,6 +76,7 @@ from engine.ipc.protocol import (
     REASON_ENGINE_ERROR,
     REASON_INVALID_MESSAGE,
     REASON_INTERNAL_ERROR,
+    REASON_LOCKED_OUT,
     ProtocolError,
     serialize_message,
     parse_message,
@@ -88,6 +90,7 @@ from engine.ipc.protocol import (
     make_auth_failed,
     make_timeout,
     make_error,
+    make_locked_out,
     make_pong,
 )
 from engine.camera.camera_capture import CameraCapture
@@ -214,6 +217,91 @@ class PipeClientSession:
         return True, None
 
 
+class UserLockoutTracker:
+    """
+    Tracks failed authentication attempts per user and enforces lockout throttling.
+
+    SECURITY REQUIREMENT:
+      - Counts consecutive failed/timed-out sessions per user.
+      - After 5 failures within 10 minutes (600s), locks out for 5 minutes (300s).
+      - During lockout, replies LOCKED_OUT to START_AUTH.
+      - Resets on successful authentication.
+      - Logs each lockout locally without exposing secrets or user SIDs at INFO level.
+    """
+
+    def __init__(
+        self,
+        max_failures: int = 5,
+        window_seconds: float = 600.0,
+        lockout_duration_seconds: float = 300.0,
+    ):
+        self.max_failures = max_failures
+        self.window_seconds = window_seconds
+        self.lockout_duration_seconds = lockout_duration_seconds
+        self._lock = threading.Lock()
+        self._failures: Dict[str, list] = {}
+        self._lockouts: Dict[str, float] = {}
+
+    def is_locked_out(self, user_id: str) -> Tuple[bool, float]:
+        """Returns (is_locked, remaining_seconds)."""
+        with self._lock:
+            now = time.time()
+            locked_until = self._lockouts.get(user_id, 0.0)
+            if now < locked_until:
+                return True, max(0.0, locked_until - now)
+            if user_id in self._lockouts:
+                del self._lockouts[user_id]
+            return False, 0.0
+
+    def record_failure(self, user_id: str) -> bool:
+        """
+        Records a failed or timed-out session for user_id.
+        Trims attempts outside the sliding window.
+        Returns True if a new lockout was triggered.
+        """
+        with self._lock:
+            now = time.time()
+            if now < self._lockouts.get(user_id, 0.0):
+                return False
+
+            history = self._failures.get(user_id, [])
+            cutoff = now - self.window_seconds
+            history = [t for t in history if t >= cutoff]
+            history.append(now)
+            self._failures[user_id] = history
+
+            if len(history) >= self.max_failures:
+                locked_until = now + self.lockout_duration_seconds
+                self._lockouts[user_id] = locked_until
+                self._failures[user_id] = []
+                logger.warning(
+                    f"Authentication lockout triggered: {self.max_failures} consecutive failures within "
+                    f"{int(self.window_seconds / 60)} minutes. Locked out for {int(self.lockout_duration_seconds / 60)} minutes."
+                )
+                logger.debug(f"Lockout applied for user_id={user_id}, locked_until={locked_until}")
+                return True
+            return False
+
+    def record_success(self, user_id: str):
+        """Resets consecutive failures and any lockout for user_id on successful authentication."""
+        with self._lock:
+            if user_id in self._failures:
+                del self._failures[user_id]
+            if user_id in self._lockouts:
+                del self._lockouts[user_id]
+            logger.debug(f"Reset lockout tracking on successful authentication for user_id={user_id}")
+
+    def reset(self, user_id: Optional[str] = None):
+        """Resets tracking state (useful for tests)."""
+        with self._lock:
+            if user_id is not None:
+                self._failures.pop(user_id, None)
+                self._lockouts.pop(user_id, None)
+            else:
+                self._failures.clear()
+                self._lockouts.clear()
+
+
 class PipeServer:
     """
     Windows Named Pipe IPC server coordinating FaceEngine and CameraCapture
@@ -228,6 +316,7 @@ class PipeServer:
         default_auth_timeout: float = 12.0,
         sddl: Optional[str] = None,
         coordinator: Optional[Any] = None,
+        lockout_tracker: Optional[UserLockoutTracker] = None,
     ):
         self.pipe_name = pipe_name
         self.face_engine = face_engine
@@ -235,6 +324,7 @@ class PipeServer:
         self.default_auth_timeout = default_auth_timeout
         self.sddl = sddl if sddl is not None else DEFAULT_SDDL
         self.coordinator = coordinator
+        self.lockout_tracker = lockout_tracker if lockout_tracker is not None else UserLockoutTracker()
 
         self._stop_event = threading.Event()
         self._is_running = False
@@ -243,6 +333,19 @@ class PipeServer:
         self._active_camera: Optional[Any] = None
         self._camera_lock = threading.Lock()
         self._initial_pipe = None
+
+    def _resolve_auth_user_id(self, msg: Dict[str, Any]) -> str:
+        """Resolves target user identifier for attempt throttling."""
+        user_sid = msg.get("user_sid")
+        if user_sid:
+            return str(user_sid)
+        engine = self._ensure_face_engine()
+        if engine.active_profile:
+            if engine.active_profile.user_sid:
+                return str(engine.active_profile.user_sid)
+            if engine.active_profile.profile_id:
+                return str(engine.active_profile.profile_id)
+        return "default_user"
 
     def _create_security_attributes(self) -> win32security.SECURITY_ATTRIBUTES:
         """Builds SECURITY_ATTRIBUTES from configured SDDL string."""
@@ -261,7 +364,7 @@ class PipeServer:
         if is_first:
             open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE
 
-        return win32pipe.CreateNamedPipe(
+        h = win32pipe.CreateNamedPipe(
             self.pipe_name,
             open_mode,
             win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
@@ -271,6 +374,10 @@ class PipeServer:
             0,
             sa
         )
+        if h == win32file.INVALID_HANDLE_VALUE:
+            err = win32file.GetLastError()
+            raise pywintypes.error(err, "CreateNamedPipe", f"CreateNamedPipe failed with error {err}")
+        return h
 
     def _ensure_face_engine(self) -> FaceEngine:
         """Lazily initializes FaceEngine if not provided in constructor."""
@@ -356,9 +463,9 @@ class PipeServer:
             try:
                 h_pipe = self._create_pipe_instance(is_first=True)
             except Exception as ex:
-                logger.error(f"Failed to create initial pipe instance: {ex}")
+                logger.error(f"Cannot start pipe server: named pipe '{self.pipe_name}' is already taken: {ex}")
                 self._is_running = False
-                return
+                raise RuntimeError(f"Failed to start PipeServer: pipe '{self.pipe_name}' already exists or name taken ({ex})") from ex
 
         while not self._stop_event.is_set():
             try:
@@ -469,19 +576,39 @@ class PipeServer:
                 nonce = msg.get("nonce")
                 if not nonce or not isinstance(nonce, str) or len(nonce) < 16:
                     logger.warning("Rejecting START_AUTH: missing or invalid challenge nonce.")
-                    session.write_message(make_error(REASON_INVALID_MESSAGE, "Invalid challenge nonce"))
+                    session.write_message(make_error(REASON_INVALID_MESSAGE, "Invalid challenge nonce", nonce=nonce))
+                    continue
+
+                user_id = self._resolve_auth_user_id(msg)
+                is_locked, remaining = self.lockout_tracker.is_locked_out(user_id)
+                if is_locked:
+                    logger.warning(
+                        f"Rejecting START_AUTH: user is locked out ({remaining:.1f}s remaining). "
+                        "Instructing client to sign in with PIN or password."
+                    )
+                    session.write_message(
+                        make_locked_out(
+                            detail="Sign in with your PIN or password",
+                            retry_after=remaining,
+                            nonce=nonce,
+                        )
+                    )
                     continue
 
                 if self.coordinator is not None and not self.coordinator.acquire_auth():
                     logger.warning("Rejecting START_AUTH: enrollment session currently active.")
                     session.write_message(
-                        make_error(REASON_CAMERA_UNAVAILABLE, "Cannot start authentication: enrollment session is currently active")
+                        make_error(
+                            REASON_CAMERA_UNAVAILABLE,
+                            "Cannot start authentication: enrollment session is currently active",
+                            nonce=nonce,
+                        )
                     )
                     continue
 
                 try:
                     timeout_sec = float(msg.get("timeout_seconds", self.default_auth_timeout))
-                    self._run_auth_session(session, timeout_seconds=timeout_sec, nonce=nonce)
+                    self._run_auth_session(session, timeout_seconds=timeout_sec, nonce=nonce, user_id=user_id)
                 finally:
                     if self.coordinator is not None:
                         self.coordinator.release_auth()
@@ -528,24 +655,30 @@ class PipeServer:
                 finally:
                     self._active_camera = None
 
-    def _run_auth_session(self, session: PipeClientSession, timeout_seconds: float, nonce: str):
+    def _run_auth_session(
+        self,
+        session: PipeClientSession,
+        timeout_seconds: float,
+        nonce: str,
+        user_id: str = "default_user",
+    ):
         """
         Executes a live authentication session:
-        1. Emits CAMERA_STARTING
+        1. Emits CAMERA_STARTING (echoing nonce)
         2. Acquires camera
         3. Loops frames -> FaceEngine.process_frame()
-        4. Streams progress (SEARCHING, FACE_FOUND, VERIFYING, LIVENESS_CHECK)
-        5. Emits AUTHENTICATED, AUTH_FAILED, TIMEOUT, or ERROR
+        4. Streams progress (SEARCHING, FACE_FOUND, VERIFYING, LIVENESS_CHECK) echoing nonce
+        5. Emits AUTHENTICATED, AUTH_FAILED, TIMEOUT, or ERROR echoing nonce
         6. Honors CANCEL_AUTH with bounded latency (<50ms)
         7. Releases camera upon completion
         Emits only generic details over the wire; keeps specifics in local logs only.
         """
-        session.write_message(make_camera_starting("Acquiring camera..."))
+        session.write_message(make_camera_starting("Acquiring camera...", nonce=nonce))
 
         cam_ok, camera, err_detail = self._acquire_camera()
         if not cam_ok or camera is None:
             logger.error(f"Cannot perform authentication: {err_detail}")
-            session.write_message(make_error(REASON_CAMERA_UNAVAILABLE, "Camera device unavailable"))
+            session.write_message(make_error(REASON_CAMERA_UNAVAILABLE, "Camera device unavailable", nonce=nonce))
             return
 
         engine = self._ensure_face_engine()
@@ -555,7 +688,8 @@ class PipeServer:
         if engine.active_profile is None:
             logger.warning("Authentication requested but no profile is enrolled in storage.")
             self._release_camera()
-            session.write_message(make_auth_failed(REASON_NO_PROFILE, "No biometric profile enrolled"))
+            self.lockout_tracker.record_failure(user_id)
+            session.write_message(make_auth_failed(REASON_NO_PROFILE, "No biometric profile enrolled", nonce=nonce))
             return
 
         start_time = time.time()
@@ -575,7 +709,7 @@ class PipeServer:
                         msg = parse_message(line)
                         if msg.get("type") == MSG_CANCEL_AUTH:
                             logger.info("CANCEL_AUTH received from client; terminating session.")
-                            session.write_message(make_auth_failed(REASON_CANCELLED, "Authentication cancelled by user"))
+                            session.write_message(make_auth_failed(REASON_CANCELLED, "Authentication cancelled by user", nonce=nonce))
                             return
                     except Exception:
                         pass
@@ -584,14 +718,15 @@ class PipeServer:
                 elapsed = time.time() - start_time
                 if elapsed > timeout_seconds:
                     logger.info(f"Authentication timed out after {elapsed:.1f}s.")
-                    session.write_message(make_timeout("Authentication timed out"))
+                    self.lockout_tracker.record_failure(user_id)
+                    session.write_message(make_timeout("Authentication timed out", nonce=nonce))
                     return
 
                 # 3. Read camera frame
                 ret, frame = camera.read_frame()
                 if not ret or frame is None:
                     logger.error("Camera failed to deliver frame.")
-                    session.write_message(make_error(REASON_CAMERA_ERROR, "Camera feed lost"))
+                    session.write_message(make_error(REASON_CAMERA_ERROR, "Camera feed lost", nonce=nonce))
                     return
 
                 # 4. Process frame through FaceEngine
@@ -599,7 +734,7 @@ class PipeServer:
                     result: EngineFrameResult = engine.process_frame(frame)
                 except Exception as ex:
                     logger.error(f"FaceEngine.process_frame raised exception: {ex}", exc_info=True)
-                    session.write_message(make_error(REASON_ENGINE_ERROR, "Recognition processing failed"))
+                    session.write_message(make_error(REASON_ENGINE_ERROR, "Recognition processing failed", nonce=nonce))
                     return
 
                 # 5. Dual-Gate Authorization Check (NON-NEGOTIABLE SECURITY INVARIANT)
@@ -610,6 +745,7 @@ class PipeServer:
                         else "Enrolled User"
                     )
                     logger.info(f"Authentication verified for user '{display_name}'. Emitting AUTHENTICATED.")
+                    self.lockout_tracker.record_success(user_id)
                     session.write_message(
                         make_authenticated(
                             display_name=display_name,
@@ -625,10 +761,12 @@ class PipeServer:
                 if result.liveness_result and result.liveness_result.state == "SPOOF_DETECTED":
                     spoof_reason = result.liveness_result.spoof_reason or "Presentation Attack Detected"
                     logger.warning(f"Spoof attack detected: {spoof_reason}. Emitting generic AUTH_FAILED.")
+                    self.lockout_tracker.record_failure(user_id)
                     session.write_message(
                         make_auth_failed(
                             reason_code=REASON_SPOOF_DETECTED,
-                            detail="Presentation attack detected"
+                            detail="Presentation attack detected",
+                            nonce=nonce,
                         )
                     )
                     return
@@ -638,10 +776,12 @@ class PipeServer:
                     result.challenge_result.state in ("FAILED", "TIMEOUT") and
                     not result.is_authorized_to_unlock):
                     logger.warning(f"Active challenge failed: {result.challenge_result.details}. Emitting generic AUTH_FAILED.")
+                    self.lockout_tracker.record_failure(user_id)
                     session.write_message(
                         make_auth_failed(
                             reason_code=REASON_CHALLENGE_FAILED,
-                            detail="Verification challenge failed"
+                            detail="Verification challenge failed",
+                            nonce=nonce,
                         )
                     )
                     return
@@ -649,7 +789,7 @@ class PipeServer:
                 # 8. Stream progressive intermediate state updates
                 if not result.has_face:
                     if last_state_label != "SEARCHING":
-                        session.write_message(make_searching("Looking for user face..."))
+                        session.write_message(make_searching("Looking for user face...", nonce=nonce))
                         last_state_label = "SEARCHING"
                         face_previously_found = False
                 else:
@@ -658,7 +798,8 @@ class PipeServer:
                             make_face_found(
                                 track_id=result.track_id,
                                 estimated_pose=result.estimated_pose,
-                                detail="Face detected, tracking active"
+                                detail="Face detected, tracking active",
+                                nonce=nonce,
                             )
                         )
                         face_previously_found = True

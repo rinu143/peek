@@ -83,7 +83,8 @@ if (Test-Path $dllPath) {
 $regKeysToClean = @(
     "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\$cpGuid",
     "HKLM:\SOFTWARE\Classes\CLSID\$cpGuid",
-    "HKLM:\SOFTWARE\Classes\WOW6432Node\CLSID\$cpGuid"
+    "HKLM:\SOFTWARE\Classes\WOW6432Node\CLSID\$cpGuid",
+    "HKLM:\SOFTWARE\Peek"
 )
 
 foreach ($keyPath in $regKeysToClean) {

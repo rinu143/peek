@@ -316,11 +316,11 @@ class TestPipeHardening(unittest.TestCase):
     # -------------------------------------------------------------------------
     # 4. Enrollment Replacement Requires Explicit Confirmation
     # -------------------------------------------------------------------------
-    def test_enrollment_replace_without_confirmation_rejected(self):
-        """Starting enrollment when an enabled profile already exists is rejected without confirmation."""
+    def test_enrollment_does_not_require_password_or_confirmation(self):
+        """SECURITY REQUIREMENT: Starting enrollment does not accept or require plaintext password/confirmed."""
         pipe_name = rf"\\.\pipe\PeekTestConfirm_{uuid.uuid4().hex[:8]}"
         store = SecureProfileStore(storage_dir=self.temp_dir)
-        
+
         # Pre-seed an enabled profile
         existing_profile = PeekProfile(
             profile_id=str(uuid.uuid4()),
@@ -342,29 +342,20 @@ class TestPipeHardening(unittest.TestCase):
             ready = client.read_message(timeout_seconds=2.0)
             self.assertEqual(ready.get("type"), MSG_ENROLLMENT_READY)
 
-            # 1. Attempt START_ENROLLMENT with confirmed=False and no password
-            unconfirmed_req = make_start_enrollment(confirmed=False, password=None)
-            client.send_message(unconfirmed_req)
+            # Attempt START_ENROLLMENT without confirmed/password
+            start_req = make_start_enrollment(display_name="New Enrollee")
+            self.assertNotIn("confirmed", start_req)
+            self.assertNotIn("password", start_req)
+            client.send_message(start_req)
 
-            err_resp = client.read_message(timeout_seconds=2.0)
-            self.assertIsNotNone(err_resp)
-            self.assertEqual(err_resp.get("type"), ENROLL_MSG_ERROR)
-            reason = err_resp.get("reason_code") or err_resp.get("reason")
-            self.assertEqual(reason, REASON_CONFIRMATION_REQUIRED)
-
-            # 2. Attempt with confirmed=True
-            confirmed_req = make_start_enrollment(confirmed=True)
-            client.send_message(confirmed_req)
-
-            # Should not receive CONFIRMATION_REQUIRED error
-            next_msg = client.read_message(timeout_seconds=2.0)
-            if next_msg:
-                next_reason = next_msg.get("reason_code") or next_msg.get("reason")
-                self.assertNotEqual(next_reason, REASON_CONFIRMATION_REQUIRED)
+            # Response must not be CONFIRMATION_REQUIRED
+            resp = client.read_message(timeout_seconds=2.0)
+            if resp:
+                resp_reason = resp.get("reason_code") or resp.get("reason")
+                self.assertNotEqual(resp_reason, REASON_CONFIRMATION_REQUIRED)
         finally:
             client.close()
             server.stop()
-
     # -------------------------------------------------------------------------
     # 5. Token SID Verification for Preview Frame Streaming
     # -------------------------------------------------------------------------

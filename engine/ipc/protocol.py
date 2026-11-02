@@ -37,6 +37,7 @@ MSG_AUTHENTICATED = "AUTHENTICATED"
 MSG_AUTH_FAILED = "AUTH_FAILED"
 MSG_TIMEOUT = "TIMEOUT"
 MSG_ERROR = "ERROR"
+MSG_LOCKED_OUT = "LOCKED_OUT"
 MSG_PONG = "PONG"
 
 # Valid Message Sets
@@ -57,6 +58,7 @@ VALID_SERVER_MESSAGES = {
     MSG_AUTH_FAILED,
     MSG_TIMEOUT,
     MSG_ERROR,
+    MSG_LOCKED_OUT,
     MSG_PONG,
 }
 
@@ -73,6 +75,7 @@ REASON_ENGINE_ERROR = "ENGINE_ERROR"
 REASON_INVALID_MESSAGE = "INVALID_MESSAGE"
 REASON_INTERNAL_ERROR = "INTERNAL_ERROR"
 REASON_CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
+REASON_LOCKED_OUT = "LOCKED_OUT"
 
 # Security guard: prohibited payload keys that could leak raw biometric/template data or private IDs
 PROHIBITED_PAYLOAD_KEYS = {
@@ -174,16 +177,23 @@ def parse_message(raw_data: Any) -> Dict[str, Any]:
 
 # --- Helper Constructors for Client Messages ---
 
-def make_start_auth(timeout_seconds: float = 12.0, nonce: Optional[str] = None) -> Dict[str, Any]:
+def make_start_auth(
+    timeout_seconds: float = 12.0,
+    nonce: Optional[str] = None,
+    user_sid: Optional[str] = None,
+) -> Dict[str, Any]:
     if nonce is None:
         nonce = secrets.token_hex(16)
-    return {
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_START_AUTH,
         "nonce": str(nonce),
         "timeout_seconds": float(timeout_seconds),
         "timestamp": time.time(),
     }
+    if user_sid:
+        msg["user_sid"] = str(user_sid)
+    return msg
 
 
 def make_cancel_auth(reason: str = "USER_CANCELLED") -> Dict[str, Any]:
@@ -205,39 +215,49 @@ def make_ping() -> Dict[str, Any]:
 
 # --- Helper Constructors for Server Messages ---
 
-def make_engine_ready(message: str = "Engine ready for authentication") -> Dict[str, Any]:
-    return {
+def make_engine_ready(message: str = "Engine ready for authentication", nonce: Optional[str] = None) -> Dict[str, Any]:
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_ENGINE_READY,
         "message": message,
         "timestamp": time.time(),
     }
+    if nonce is not None:
+        msg["nonce"] = str(nonce)
+    return msg
 
 
-def make_camera_starting(message: str = "Acquiring camera device...") -> Dict[str, Any]:
-    return {
+def make_camera_starting(message: str = "Acquiring camera device...", nonce: Optional[str] = None) -> Dict[str, Any]:
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_CAMERA_STARTING,
         "message": message,
         "timestamp": time.time(),
     }
+    if nonce is not None:
+        msg["nonce"] = str(nonce)
+    return msg
 
 
-def make_searching(detail: str = "Looking for user face...") -> Dict[str, Any]:
-    return {
+def make_searching(detail: str = "Looking for user face...", nonce: Optional[str] = None) -> Dict[str, Any]:
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_SEARCHING,
         "detail": detail,
         "timestamp": time.time(),
     }
+    if nonce is not None:
+        msg["nonce"] = str(nonce)
+    return msg
 
 
 def make_face_found(
     track_id: Optional[int] = None,
     estimated_pose: Optional[str] = None,
-    detail: str = "Face detected, tracking active"
+    detail: str = "Face detected, tracking active",
+    nonce: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return {
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_FACE_FOUND,
         "track_id": track_id,
@@ -245,14 +265,18 @@ def make_face_found(
         "detail": detail,
         "timestamp": time.time(),
     }
+    if nonce is not None:
+        msg["nonce"] = str(nonce)
+    return msg
 
 
 def make_verifying(
     track_id: Optional[int] = None,
     progress: Optional[str] = None,
-    detail: str = "Verifying identity..."
+    detail: str = "Verifying identity...",
+    nonce: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return {
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_VERIFYING,
         "track_id": track_id,
@@ -260,14 +284,18 @@ def make_verifying(
         "detail": detail,
         "timestamp": time.time(),
     }
+    if nonce is not None:
+        msg["nonce"] = str(nonce)
+    return msg
 
 
 def make_liveness_check(
     track_id: Optional[int] = None,
     prompt_text: Optional[str] = None,
-    detail: str = "Evaluating passive/active liveness..."
+    detail: str = "Evaluating passive/active liveness...",
+    nonce: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return {
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_LIVENESS_CHECK,
         "track_id": track_id,
@@ -275,6 +303,9 @@ def make_liveness_check(
         "detail": detail,
         "timestamp": time.time(),
     }
+    if nonce is not None:
+        msg["nonce"] = str(nonce)
+    return msg
 
 
 def make_authenticated(
@@ -312,34 +343,69 @@ def make_authenticated(
     }
 
 
-def make_auth_failed(reason_code: str, detail: str = "Authentication failed") -> Dict[str, Any]:
-    return {
+def make_auth_failed(
+    reason_code: str,
+    detail: str = "Authentication failed",
+    nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_AUTH_FAILED,
         "reason_code": str(reason_code),
         "detail": str(detail),
         "timestamp": time.time(),
     }
+    if nonce is not None:
+        msg["nonce"] = str(nonce)
+    return msg
 
 
-def make_timeout(detail: str = "Authentication timed out") -> Dict[str, Any]:
-    return {
+def make_timeout(detail: str = "Authentication timed out", nonce: Optional[str] = None) -> Dict[str, Any]:
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_TIMEOUT,
         "reason_code": REASON_TIMEOUT,
         "detail": str(detail),
         "timestamp": time.time(),
     }
+    if nonce is not None:
+        msg["nonce"] = str(nonce)
+    return msg
 
 
-def make_error(reason_code: str, detail: str = "Internal engine error") -> Dict[str, Any]:
-    return {
+def make_error(
+    reason_code: str,
+    detail: str = "Internal engine error",
+    nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_ERROR,
         "reason_code": str(reason_code),
         "detail": str(detail),
         "timestamp": time.time(),
     }
+    if nonce is not None:
+        msg["nonce"] = str(nonce)
+    return msg
+
+
+def make_locked_out(
+    detail: str = "Sign in with your PIN or password",
+    retry_after: float = 300.0,
+    nonce: Optional[str] = None,
+) -> Dict[str, Any]:
+    msg = {
+        "protocol_version": PROTOCOL_VERSION,
+        "type": MSG_LOCKED_OUT,
+        "reason_code": REASON_LOCKED_OUT,
+        "detail": str(detail),
+        "retry_after": float(retry_after),
+        "timestamp": time.time(),
+    }
+    if nonce is not None:
+        msg["nonce"] = str(nonce)
+    return msg
 
 
 def make_pong() -> Dict[str, Any]:

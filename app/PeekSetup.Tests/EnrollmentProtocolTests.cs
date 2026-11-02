@@ -26,16 +26,17 @@ namespace PeekSetup.Tests
         }
 
         [Fact]
-        public void CreateStartEnrollment_WithConfirmed_ProducesValidJson()
+        public void CreateStartEnrollment_DoesNotIncludePasswordOrConfirmed()
         {
-            string json = EnrollmentProtocol.CreateStartEnrollment("Alice Smith", confirmed: true);
+            string json = EnrollmentProtocol.CreateStartEnrollment("Alice Smith");
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
             Assert.Equal("1.0", root.GetProperty("protocol_version").GetString());
             Assert.Equal(EnrollmentProtocol.MsgStartEnrollment, root.GetProperty("type").GetString());
             Assert.Equal("Alice Smith", root.GetProperty("display_name").GetString());
-            Assert.True(root.GetProperty("confirmed").GetBoolean());
+            Assert.False(root.TryGetProperty("password", out _));
+            Assert.False(root.TryGetProperty("confirmed", out _));
         }
 
         [Fact]

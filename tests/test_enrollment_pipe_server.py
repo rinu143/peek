@@ -96,7 +96,7 @@ class MockEnrollmentRunner:
     def stop_camera(self):
         self.stopped = True
 
-    def start(self, display_name: Optional[str] = None, confirmed: bool = False, password: Optional[str] = None):
+    def start(self, display_name: Optional[str] = None, **kwargs):
         if display_name:
             self.display_name = display_name
         self.started = True

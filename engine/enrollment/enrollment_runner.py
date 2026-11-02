@@ -253,8 +253,6 @@ class EnrollmentRunner:
         candidates_per_pose: int = 2,
         keep_best_per_pose: int = 1,
         camera_index: int = 0,
-        confirmed: bool = False,
-        password: Optional[str] = None,
         keep_existing: bool = True,
         profile_id: Optional[str] = None,
         blur_background: bool = True,
@@ -271,8 +269,6 @@ class EnrollmentRunner:
         self._camera_owned = camera is None
         self.session = session or self._create_default_session()
 
-        self.confirmed = confirmed
-        self.confirmation_password = password
         self.keep_existing = keep_existing
         self.target_profile_id = profile_id
         self._cancelled = False
@@ -322,17 +318,12 @@ class EnrollmentRunner:
     def start(
         self,
         display_name: Optional[str] = None,
-        confirmed: bool = False,
-        password: Optional[str] = None,
         keep_existing: bool = True,
         profile_id: Optional[str] = None,
     ):
         """Starts or restarts the enrollment session."""
         if display_name:
             self.display_name = display_name
-        self.confirmed = confirmed
-        if password is not None:
-            self.confirmation_password = password
         self.keep_existing = keep_existing
         if profile_id is not None:
             self.target_profile_id = profile_id
@@ -587,8 +578,6 @@ class EnrollmentRunner:
                     self.saved_profile = self.session.finalize_and_save_profile(
                         display_name=self.display_name,
                         profile_id=self.target_profile_id,
-                        confirmed=self.confirmed,
-                        password=self.confirmation_password,
                         keep_existing=self.keep_existing,
                     )
                     logger.info("Enrollment finished and profile '%s' secured via DPAPI.", self.display_name)

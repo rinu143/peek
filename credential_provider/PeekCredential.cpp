@@ -753,8 +753,9 @@ HRESULT PeekCredential::GetUserSid(PWSTR* ppszSid)
     {
         HRESULT hr = CoTaskMemAllocString(sid.c_str(), ppszSid);
         wchar_t szBuf[256] = {};
-        swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekCredential::GetUserSid: SID='%s' -> hr=0x%08X", sid.c_str(), hr);
+        swprintf_s(szBuf, ARRAYSIZE(szBuf), L"PeekCredential::GetUserSid: hr=0x%08X", hr);
         Logger::LogInfo(szBuf);
+        Logger::LogDebug(L"PeekCredential::GetUserSid: SID='" + sid + L"'");
         return hr;
     }
 

@@ -211,5 +211,16 @@ class TestEnrollmentProtocol(unittest.TestCase):
         self.assertIn("detail", err_msg)
 
 
+    def test_start_enrollment_does_not_contain_password_or_confirmed(self):
+        """SECURITY REQUIREMENT: Plaintext password and confirmed fields removed from enrollment protocol."""
+        msg = make_start_enrollment(display_name="Secure User")
+        self.assertNotIn("password", msg)
+        self.assertNotIn("confirmed", msg)
+        payload = serialize_message(msg)
+        parsed = parse_message(payload)
+        self.assertNotIn("password", parsed)
+        self.assertNotIn("confirmed", parsed)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -32,6 +32,16 @@ namespace PeekJson
         return wideStr;
     }
 
+    static inline std::string WideToUtf8(const std::wstring& wideStr)
+    {
+        if (wideStr.empty()) return "";
+        int cbNeeded = WideCharToMultiByte(CP_UTF8, 0, wideStr.c_str(), (int)wideStr.size(), nullptr, 0, nullptr, nullptr);
+        if (cbNeeded <= 0) return "";
+        std::string utf8Str(cbNeeded, 0);
+        WideCharToMultiByte(CP_UTF8, 0, wideStr.c_str(), (int)wideStr.size(), &utf8Str[0], cbNeeded, nullptr, nullptr);
+        return utf8Str;
+    }
+
     class JsonValue
     {
     public:

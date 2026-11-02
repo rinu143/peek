@@ -15,7 +15,7 @@ Rationale:
 4. Preview frames are transient, in-memory JPEG buffers streamed strictly to the verified enrolled user process.
 5. Biometric templates are encrypted via Windows DPAPI before persistent storage.
 6. Mutually exclusive with the authentication pipe via SessionCoordinator.
-7. Explicit confirmation or password verification required to replace an existing enabled profile.
+7. Secure single-user replacement and multi-identity enrollment.
 8. Strict IO limits: max line length 4 KB, max buffer 8 KB.
 9. Continuous listening: keep one instance created/listening at all times, fail startup closed with FILE_FLAG_FIRST_PIPE_INSTANCE.
 """
@@ -345,8 +345,6 @@ class EnrollmentPipeServer:
     def _ensure_runner(
         self,
         display_name: str = "Primary User",
-        confirmed: bool = False,
-        password: Optional[str] = None,
         keep_existing: bool = True,
         profile_id: Optional[str] = None,
         blur_background: bool = True,
@@ -368,16 +366,12 @@ class EnrollmentPipeServer:
                     display_name=display_name,
                     camera=self._injected_camera,
                     profile_store=self.profile_store,
-                    confirmed=confirmed,
-                    password=password,
                     keep_existing=keep_existing,
                     profile_id=profile_id,
                     blur_background=blur_background,
                 )
             else:
                 self._active_runner.display_name = display_name
-                self._active_runner.confirmed = confirmed
-                self._active_runner.confirmation_password = password
                 self._active_runner.keep_existing = keep_existing
                 self._active_runner.target_profile_id = profile_id
                 if hasattr(self._active_runner, "blur_background"):
@@ -616,36 +610,8 @@ class EnrollmentPipeServer:
 
                 try:
                     display_name = msg.get("display_name", "Primary User")
-                    confirmed = bool(msg.get("confirmed", False))
-                    password = msg.get("password")
                     keep_existing = bool(msg.get("keep_existing", False))
                     profile_id = msg.get("profile_id")
-
-                    # Requirement 6: Require explicit confirmation to replace an existing enabled profile
-                    try:
-                        existing_profiles = self.profile_store.list_profiles()
-                        has_enabled = any(p.enabled for p in existing_profiles)
-                    except Exception as ex:
-                        logger.error(f"Failed to check existing profiles: {ex}")
-                        has_enabled = False
-
-                    if has_enabled and not keep_existing:
-                        is_confirmed = False
-                        if password:
-                            from engine.enrollment.enrollment_session import verify_windows_password
-                            if verify_windows_password(password):
-                                is_confirmed = True
-                            else:
-                                logger.warning("Enrollment replacement rejected: invalid password")
-                                session.write_message(make_error(REASON_CONFIRMATION_REQUIRED, "Password verification failed"))
-                                continue
-                        elif confirmed:
-                            is_confirmed = True
-
-                        if not is_confirmed:
-                            logger.warning("Enrollment replacement rejected: active enabled profile exists and no confirmation provided.")
-                            session.write_message(make_error(REASON_CONFIRMATION_REQUIRED, "Confirmation required to replace existing profile"))
-                            continue
 
                     clean_preview = bool(msg.get("clean_preview", True))
                     blur_background = bool(msg.get("blur_background", True))
@@ -653,8 +619,6 @@ class EnrollmentPipeServer:
                     self._run_enrollment_session(
                         session,
                         display_name=display_name,
-                        confirmed=confirmed,
-                        password=password,
                         clean_preview=clean_preview,
                         keep_existing=keep_existing,
                         profile_id=profile_id,
@@ -676,8 +640,6 @@ class EnrollmentPipeServer:
         self,
         session: EnrollmentPipeClientSession,
         display_name: str,
-        confirmed: bool = False,
-        password: Optional[str] = None,
         clean_preview: bool = False,
         keep_existing: bool = False,
         profile_id: Optional[str] = None,
@@ -697,17 +659,13 @@ class EnrollmentPipeServer:
         client_sid = get_client_process_sid(session.handle)
         if self.enrolled_user_sid and self.enrolled_user_sid != "S-1-5-18" and client_sid:
             if client_sid != self.enrolled_user_sid and client_sid != "S-1-5-18":
-                logger.warning(
-                    "Client process SID '%s' does not match enrolled user SID '%s'. Dropping connection without streaming frames.",
-                    client_sid, self.enrolled_user_sid
-                )
+                logger.warning("Client process SID does not match enrolled user SID. Dropping connection without streaming frames.")
+                logger.debug(f"Client SID: {client_sid}, Enrolled user SID: {self.enrolled_user_sid}")
                 session.write_message(make_error(REASON_INVALID_MESSAGE, "Unauthorized client"))
                 return
 
         runner = self._ensure_runner(
             display_name=display_name,
-            confirmed=confirmed,
-            password=password,
             keep_existing=keep_existing,
             profile_id=profile_id,
             blur_background=blur_background,
@@ -721,8 +679,6 @@ class EnrollmentPipeServer:
         try:
             runner.start(
                 display_name=display_name,
-                confirmed=confirmed,
-                password=password,
                 keep_existing=keep_existing,
                 profile_id=profile_id,
             )

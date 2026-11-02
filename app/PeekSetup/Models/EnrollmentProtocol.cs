@@ -95,8 +95,6 @@ namespace PeekSetup.Models
 
         public static string CreateStartEnrollment(
             string displayName,
-            bool confirmed = false,
-            string? password = null,
             bool cleanPreview = true,
             bool keepExisting = true,
             string? profileId = null,
@@ -107,12 +105,10 @@ namespace PeekSetup.Models
                 protocol_version = ProtocolVersion,
                 type = MsgStartEnrollment,
                 display_name = displayName,
-                confirmed = confirmed ? (bool?)true : null,
                 clean_preview = cleanPreview ? (bool?)true : null,
                 blur_background = blurBackground ? (bool?)true : null,
                 keep_existing = keepExisting ? (bool?)true : null,
                 profile_id = profileId,
-                password = password,
                 timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
             };
             return JsonSerializer.Serialize(msg, JsonOptions);

@@ -1240,7 +1240,9 @@ int main()
     // -------------------------------------------------------------
     std::wcout << L"[Test 21] Testing Process Token Privilege Diagnostics and RAII revert...\n";
     {
+        SetEnvironmentVariableW(L"PEEK_TEST_LOG_LEVEL", L"DEBUG");
         PeekDiagnostics::RunProcessTokenDiagnostics(L"Test_Autoselect_Verification");
+        SetEnvironmentVariableW(L"PEEK_TEST_LOG_LEVEL", NULL);
 
         std::wstring logFilePath = PeekLoggerInternal::GetLogFilePath();
         HANDLE hFile = CreateFileW(logFilePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -2055,6 +2057,136 @@ int main()
         }
         else
         {
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 30: Nonce Binding across intermediate and terminal messages
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 30] Testing nonce binding (CP drops missing or mismatched nonce)...\n";
+    {
+        PeekPipeClient client;
+        std::string expectedNonce = "0123456789abcdef0123456789abcdef";
+        client.TestSetExpectedNonce(expectedNonce);
+        client.TestSetServerVerified(true);
+
+        int callbackCount = 0;
+        PeekAuthResult lastResult = {};
+        client.TestSetCallback([&](const PeekAuthResult& r) {
+            callbackCount++;
+            lastResult = r;
+        });
+
+        // 1. SEARCHING message without nonce -> dropped
+        PeekAuthResult res1 = {};
+        client.TestParseAndDispatchMessage("{\"protocol_version\":\"2.0\",\"type\":\"SEARCHING\"}", res1);
+        bool droppedNoNonce = (callbackCount == 0);
+
+        // 2. SEARCHING message with mismatched nonce -> dropped
+        PeekAuthResult res2 = {};
+        client.TestParseAndDispatchMessage("{\"protocol_version\":\"2.0\",\"type\":\"SEARCHING\",\"nonce\":\"wrongnonce0123456789abcdef\"}", res2);
+        bool droppedWrongNonce = (callbackCount == 0);
+
+        // 3. SEARCHING message with matching nonce -> dispatched
+        PeekAuthResult res3 = {};
+        client.TestParseAndDispatchMessage("{\"protocol_version\":\"2.0\",\"type\":\"SEARCHING\",\"nonce\":\"0123456789abcdef0123456789abcdef\"}", res3);
+        bool acceptedMatching = (callbackCount == 1 && lastResult.state == PeekIPCState::SEARCHING);
+
+        if (droppedNoNonce && droppedWrongNonce && acceptedMatching)
+        {
+            std::wcout << L"  PASS: CP correctly drops messages with missing or wrong nonce, and processes matching nonce\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Nonce binding check failed: droppedNo=" << droppedNoNonce
+                       << L", droppedWrong=" << droppedWrongNonce << L", accepted=" << acceptedMatching << L"\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 31: Lockout Throttling Response Handling
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 31] Testing LOCKED_OUT response handling...\n";
+    {
+        PeekPipeClient client;
+        std::string expectedNonce = "0123456789abcdef0123456789abcdef";
+        client.TestSetExpectedNonce(expectedNonce);
+        client.TestSetServerVerified(true);
+
+        int callbackCount = 0;
+        PeekAuthResult lastResult = {};
+        client.TestSetCallback([&](const PeekAuthResult& r) {
+            callbackCount++;
+            lastResult = r;
+        });
+
+        PeekAuthResult res = {};
+        client.TestParseAndDispatchMessage("{\"protocol_version\":\"2.0\",\"type\":\"LOCKED_OUT\",\"detail\":\"Sign in with your PIN or password\",\"nonce\":\"0123456789abcdef0123456789abcdef\"}", res);
+
+        bool lockedOutOk = (callbackCount == 1 &&
+                            lastResult.state == PeekIPCState::ERROR_STATE &&
+                            lastResult.reasonCode == L"LOCKED_OUT" &&
+                            lastResult.detail == L"Sign in with your PIN or password");
+
+        if (lockedOutOk)
+        {
+            std::wcout << L"  PASS: LOCKED_OUT message correctly transitions to ERROR_STATE with fallback detail\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: LOCKED_OUT handling failed: count=" << callbackCount
+                       << L", state=" << (int)lastResult.state << L", reason=" << lastResult.reasonCode << L"\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 32: Log Level Filtering (OFF, ERROR, INFO, DEBUG)
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 32] Testing LogLevel configuration and filtering...\n";
+    {
+        bool levelFilterOk = true;
+
+        // PEEK_TEST_LOG_LEVEL=ERROR should filter out Logger::LogInfo and Logger::LogDebug
+        SetEnvironmentVariableW(L"PEEK_TEST_LOG_LEVEL", L"ERROR");
+        PeekLoggerInternal::WriteToFileInner(L"INFO", L"SHOULD_BE_FILTERED_INFO_MSG_123");
+        PeekLoggerInternal::WriteToFileInner(L"ERROR", L"SHOULD_BE_WRITTEN_ERROR_MSG_456");
+
+        std::wstring logFilePath = PeekLoggerInternal::GetLogFilePath();
+        HANDLE hFile = CreateFileW(logFilePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE)
+        {
+            DWORD dwSize = GetFileSize(hFile, NULL);
+            std::vector<char> buffer(dwSize + 1, 0);
+            DWORD bytesRead = 0;
+            ReadFile(hFile, buffer.data(), dwSize, &bytesRead, NULL);
+            CloseHandle(hFile);
+
+            std::string content(buffer.data(), bytesRead);
+            bool hasFiltered = (content.find("SHOULD_BE_FILTERED_INFO_MSG_123") != std::string::npos);
+            bool hasWritten = (content.find("SHOULD_BE_WRITTEN_ERROR_MSG_456") != std::string::npos);
+
+            if (hasFiltered || !hasWritten)
+            {
+                levelFilterOk = false;
+            }
+        }
+        else
+        {
+            levelFilterOk = false;
+        }
+
+        SetEnvironmentVariableW(L"PEEK_TEST_LOG_LEVEL", NULL);
+
+        if (levelFilterOk)
+        {
+            std::wcout << L"  PASS: Log level filtering correctly suppresses messages below configured threshold\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Log level filtering check failed\n";
             failed++;
         }
     }

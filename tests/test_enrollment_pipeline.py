@@ -231,12 +231,8 @@ class TestEnrollmentPipeline(unittest.TestCase):
             )
             for p in session2.poses
         ]
-        # Without confirmation, replacement must be rejected
-        with self.assertRaises(PermissionError):
-            session2.finalize_and_save_profile("User Two", profile_id="profile_second")
-
-        # With explicit confirmation, replacement succeeds
-        profile2 = session2.finalize_and_save_profile("User Two", profile_id="profile_second", confirmed=True)
+        # Single-user replacement automatically disables previous active profile
+        profile2 = session2.finalize_and_save_profile("User Two", profile_id="profile_second", keep_existing=False)
         self.assertTrue(profile2.enabled)
 
         # Verify profile 1 was disabled, NOT deleted

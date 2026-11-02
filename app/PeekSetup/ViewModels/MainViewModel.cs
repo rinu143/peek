@@ -1295,7 +1295,6 @@ namespace PeekSetup.ViewModels
                 RunOnUi(() => EnrollmentMode = EnrollmentViewMode.Enrolling);
                 await _pipeClient.StartEnrollmentAsync(
                     DisplayName,
-                    confirmed: isConfirmed,
                     keepExisting: keepExisting,
                     profileId: profileId);
             }
@@ -2066,8 +2065,8 @@ namespace PeekSetup.ViewModels
         {
             if (e.ReasonCode == EnrollmentProtocol.ReasonConfirmationRequired)
             {
-                // Auto-confirm re-enrollment when user initiated enrollment from setup UI
-                _ = _pipeClient.StartEnrollmentAsync(DisplayName, confirmed: true);
+                // Retry enrollment without confirmed parameter
+                _ = _pipeClient.StartEnrollmentAsync(DisplayName);
                 return;
             }
 

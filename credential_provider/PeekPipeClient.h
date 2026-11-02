@@ -70,6 +70,13 @@ public:
     // Generates a 128-bit random challenge nonce formatted as 32 hex chars
     static std::string GenerateChallengeNonce();
 
+#ifdef PEEK_TEST_BUILD
+    void TestSetExpectedNonce(const std::string& nonce) { m_expectedNonce = nonce; }
+    void TestSetServerVerified(bool verified) { m_isServerVerified = verified; }
+    void TestSetCallback(PeekStateCallback callback) { m_callback = callback; }
+    void TestParseAndDispatchMessage(const std::string& line, PeekAuthResult& result) { ParseAndDispatchMessage(line, result); }
+#endif
+
 private:
     static DWORD WINAPI WorkerThreadProc(LPVOID lpParam);
     void RunWorker();

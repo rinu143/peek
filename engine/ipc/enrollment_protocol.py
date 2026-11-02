@@ -147,23 +147,17 @@ def parse_message(raw_data: Any) -> Dict[str, Any]:
 
 def make_start_enrollment(
     display_name: str = "Primary User",
-    confirmed: bool = False,
-    password: Optional[str] = None,
     clean_preview: bool = True,
     blur_background: bool = True,
 ) -> Dict[str, Any]:
-    msg = {
+    return {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_START_ENROLLMENT,
         "display_name": str(display_name),
-        "confirmed": bool(confirmed),
         "clean_preview": bool(clean_preview),
         "blur_background": bool(blur_background),
         "timestamp": time.time(),
     }
-    if password is not None:
-        msg["password"] = str(password)
-    return msg
 
 
 def make_cancel_enrollment(reason: str = "USER_CANCELLED") -> Dict[str, Any]:

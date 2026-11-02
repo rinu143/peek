@@ -69,10 +69,90 @@ namespace PeekLoggerInternal
         return L"C:\\ProgramData\\Peek\\logs\\credential_provider.log";
     }
 
+    enum class CpLogLevel
+    {
+        LEVEL_OFF = 0,
+        LEVEL_ERROR = 1,
+        LEVEL_WARN = 2,
+        LEVEL_INFO = 3,
+        LEVEL_DEBUG = 4
+    };
+
+    inline CpLogLevel GetConfiguredLogLevel()
+    {
+#ifdef PEEK_TEST_BUILD
+        wchar_t szEnvLevel[64] = {};
+        DWORD dwEnv = GetEnvironmentVariableW(L"PEEK_TEST_LOG_LEVEL", szEnvLevel, ARRAYSIZE(szEnvLevel));
+        if (dwEnv > 0 && dwEnv < ARRAYSIZE(szEnvLevel))
+        {
+            if (_wcsicmp(szEnvLevel, L"OFF") == 0 || _wcsicmp(szEnvLevel, L"0") == 0) return CpLogLevel::LEVEL_OFF;
+            if (_wcsicmp(szEnvLevel, L"ERROR") == 0 || _wcsicmp(szEnvLevel, L"1") == 0) return CpLogLevel::LEVEL_ERROR;
+            if (_wcsicmp(szEnvLevel, L"WARN") == 0 || _wcsicmp(szEnvLevel, L"WARNING") == 0 || _wcsicmp(szEnvLevel, L"2") == 0) return CpLogLevel::LEVEL_WARN;
+            if (_wcsicmp(szEnvLevel, L"INFO") == 0 || _wcsicmp(szEnvLevel, L"3") == 0) return CpLogLevel::LEVEL_INFO;
+            if (_wcsicmp(szEnvLevel, L"DEBUG") == 0 || _wcsicmp(szEnvLevel, L"4") == 0) return CpLogLevel::LEVEL_DEBUG;
+        }
+        return CpLogLevel::LEVEL_INFO;
+#else
+        HKEY hKey = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Peek", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+        {
+            DWORD dwType = 0;
+            BYTE data[128] = {};
+            DWORD cbData = sizeof(data);
+            if (RegQueryValueExW(hKey, L"LogLevel", nullptr, &dwType, data, &cbData) == ERROR_SUCCESS)
+            {
+                RegCloseKey(hKey);
+                if (dwType == REG_DWORD && cbData >= sizeof(DWORD))
+                {
+                    DWORD dwVal = *reinterpret_cast<DWORD*>(data);
+                    switch (dwVal)
+                    {
+                    case 0: return CpLogLevel::LEVEL_OFF;
+                    case 1: return CpLogLevel::LEVEL_ERROR;
+                    case 2: return CpLogLevel::LEVEL_WARN;
+                    case 3: return CpLogLevel::LEVEL_INFO;
+                    case 4: return CpLogLevel::LEVEL_DEBUG;
+                    default: return CpLogLevel::LEVEL_ERROR;
+                    }
+                }
+                else if (dwType == REG_SZ || dwType == REG_EXPAND_SZ)
+                {
+                    const wchar_t* pszVal = reinterpret_cast<const wchar_t*>(data);
+                    if (_wcsicmp(pszVal, L"OFF") == 0 || _wcsicmp(pszVal, L"0") == 0) return CpLogLevel::LEVEL_OFF;
+                    if (_wcsicmp(pszVal, L"ERROR") == 0 || _wcsicmp(pszVal, L"1") == 0) return CpLogLevel::LEVEL_ERROR;
+                    if (_wcsicmp(pszVal, L"WARN") == 0 || _wcsicmp(pszVal, L"WARNING") == 0 || _wcsicmp(pszVal, L"2") == 0) return CpLogLevel::LEVEL_WARN;
+                    if (_wcsicmp(pszVal, L"INFO") == 0 || _wcsicmp(pszVal, L"3") == 0) return CpLogLevel::LEVEL_INFO;
+                    if (_wcsicmp(pszVal, L"DEBUG") == 0 || _wcsicmp(pszVal, L"4") == 0) return CpLogLevel::LEVEL_DEBUG;
+                }
+            }
+            else
+            {
+                RegCloseKey(hKey);
+            }
+        }
+        return CpLogLevel::LEVEL_ERROR;
+#endif
+    }
+
     inline void WriteToFileInner(const wchar_t* pwszLevel, const wchar_t* pwszMsg)
     {
         try
         {
+            CpLogLevel msgLevel = CpLogLevel::LEVEL_INFO;
+            if (pwszLevel)
+            {
+                if (_wcsicmp(pwszLevel, L"ERROR") == 0) msgLevel = CpLogLevel::LEVEL_ERROR;
+                else if (_wcsicmp(pwszLevel, L"WARN") == 0 || _wcsicmp(pwszLevel, L"WARNING") == 0) msgLevel = CpLogLevel::LEVEL_WARN;
+                else if (_wcsicmp(pwszLevel, L"INFO") == 0) msgLevel = CpLogLevel::LEVEL_INFO;
+                else if (_wcsicmp(pwszLevel, L"DEBUG") == 0) msgLevel = CpLogLevel::LEVEL_DEBUG;
+            }
+
+            CpLogLevel configuredLevel = GetConfiguredLogLevel();
+            if (configuredLevel == CpLogLevel::LEVEL_OFF || msgLevel > configuredLevel)
+            {
+                return;
+            }
+
             CRITICAL_SECTION* pCS = GetLock();
             EnterCriticalSection(pCS);
             struct AutoLeave {
@@ -266,6 +346,37 @@ public:
     {
         LogError(msg.c_str());
     }
+    static void LogDebug(const char* pszMsg)
+    {
+        if (pszMsg)
+        {
+            OutputDebugStringA("[PeekCP][DEBUG] ");
+            OutputDebugStringA(pszMsg);
+            OutputDebugStringA("\n");
+
+            int cchW = MultiByteToWideChar(CP_ACP, 0, pszMsg, -1, NULL, 0);
+            if (cchW > 0)
+            {
+                std::vector<wchar_t> wbuf(cchW);
+                MultiByteToWideChar(CP_ACP, 0, pszMsg, -1, wbuf.data(), cchW);
+                PeekLoggerInternal::SafeWriteToFile(L"DEBUG", wbuf.data());
+            }
+        }
+    }
+    static void LogDebug(const wchar_t* pwszMsg)
+    {
+        if (pwszMsg)
+        {
+            OutputDebugStringW(L"[PeekCP][DEBUG] ");
+            OutputDebugStringW(pwszMsg);
+            OutputDebugStringW(L"\n");
+            PeekLoggerInternal::SafeWriteToFile(L"DEBUG", pwszMsg);
+        }
+    }
+    static void LogDebug(const std::wstring& msg)
+    {
+        LogDebug(msg.c_str());
+    }
 };
 
 #ifdef PEEK_DIAG
@@ -391,7 +502,7 @@ namespace PeekDiagnostics
                     swprintf_s(szUserMsg, ARRAYSIZE(szUserMsg),
                         L"[PeekDiag] Process Token User: SID='%s', Account='%s'",
                         strSid.c_str(), strAccount.c_str());
-                    Logger::LogInfo(szUserMsg);
+                    Logger::LogDebug(szUserMsg);
                 }
             }
 

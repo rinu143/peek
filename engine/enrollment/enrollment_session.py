@@ -29,29 +29,7 @@ from storage.template_store import SecureProfileStore, PeekProfile, PeekTemplate
 logger = logging.getLogger("Peek.EnrollmentSession")
 
 
-def verify_windows_password(password: str, username: Optional[str] = None, domain: Optional[str] = None) -> bool:
-    """Verifies a Windows password using LogonUserW."""
-    if not password:
-        return False
-    try:
-        import win32security
-        import win32con
-        user = username or os.environ.get("USERNAME", "")
-        dom = domain or os.environ.get("USERDOMAIN", "")
-        handle = win32security.LogonUser(
-            user,
-            dom if dom else None,
-            password,
-            win32con.LOGON32_LOGON_INTERACTIVE,
-            win32con.LOGON32_PROVIDER_DEFAULT
-        )
-        if handle:
-            handle.Close()
-            return True
-        return False
-    except Exception as ex:
-        logger.debug(f"LogonUser validation failed: {ex}")
-        return False
+
 
 
 class EnrollmentState(str, Enum):
@@ -294,16 +272,11 @@ class EnrollmentSession:
         self,
         display_name: str = "Primary User",
         profile_id: Optional[str] = None,
-        confirmed: bool = False,
-        password: Optional[str] = None,
         user_sid: Optional[str] = None,
         keep_existing: bool = False,
     ) -> PeekProfile:
         """
         Creates and encrypts the completed PeekProfile with Windows DPAPI.
-        CRITICAL SECURITY REQUIREMENT:
-        Replacing an existing enabled profile requires explicit confirmation
-        (confirmed=True or validated Windows password).
         When keep_existing=True, existing enabled profiles are preserved for multi-identity support.
         """
         if not self.final_templates:
@@ -311,14 +284,6 @@ class EnrollmentSession:
 
         existing_profiles = self.profile_store.list_profiles()
         enabled_existing = [p for p in existing_profiles if p.enabled]
-
-        if enabled_existing and not confirmed and not keep_existing:
-            if password:
-                if not verify_windows_password(password):
-                    raise PermissionError("Confirmation failed: invalid Windows password")
-                confirmed = True
-            else:
-                raise PermissionError("Explicit confirmation required to replace an existing enabled profile")
 
         if not keep_existing:
             for prev_profile in enabled_existing:

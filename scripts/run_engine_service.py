@@ -12,6 +12,7 @@ import sys
 import time
 import signal
 import logging
+from logging.handlers import RotatingFileHandler
 import argparse
 
 # In windowless GUI / background service mode (e.g. PyInstaller console=False),
@@ -58,7 +59,7 @@ def setup_logging(debug: bool = False):
             if not os.path.exists(ld):
                 os.makedirs(ld, exist_ok=True)
             log_file = os.path.join(ld, "engine.log")
-            handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+            handlers.append(RotatingFileHandler(log_file, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8"))
             break
         except Exception:
             continue
@@ -156,8 +157,12 @@ def main():
     logger.info(f"Services ready. Press Ctrl+C to terminate.")
 
     # Start both servers in background listener threads
-    auth_server.start()
-    enrollment_server.start()
+    try:
+        auth_server.start()
+        enrollment_server.start()
+    except Exception as ex:
+        logger.critical(f"FATAL: Engine failed to start IPC servers: {ex}")
+        sys.exit(1)
 
     try:
         while True:

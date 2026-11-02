@@ -119,8 +119,6 @@ namespace PeekSetup.Services
         Task<StatusResponseData?> RequestStatusAsync(int timeoutMs = 2000, CancellationToken ct = default);
         Task StartEnrollmentAsync(
             string displayName,
-            bool confirmed = false,
-            string? password = null,
             bool keepExisting = true,
             string? profileId = null,
             CancellationToken ct = default);

@@ -216,10 +216,42 @@ python scripts/verify_phase4.py
 | **Phase 2: Peek-Style Enrollment** | 9-direction guided enrollment, head-pose estimation, multi-frame quality gating | **Completed** |
 | **Phase 3: Recognition Hardening** | Dominant-face tracking, temporal verification window, threshold calibration | **Completed** |
 | **Phase 4: Liveness & Hardening** | Veto-based fusion, phone bezel detector, 3D parallax, challenge-response | **Completed** |
-| **Phase 5: Windows Credential Provider** | Native C++/Win32/COM credential provider tile integration | Next |
-| **Phase 6: Engine ↔ CP IPC** | Named Pipe (`\\.\pipe\PeekEngine`) secure request/response protocol | Planned |
-| **Phase 7: Lock-Screen UX** | Visual state flow (Searching → Found → Verifying → Liveness → Unlock) | Planned |
-| **Phase 8: Performance & Security** | Latency, CPU/RAM benchmarks, attack resistance, and sleep/wake recovery | Planned |
+| **Phase 5: Windows Credential Provider** | Native C++/Win32/COM credential provider tile integration | **Completed** |
+| **Phase 6: Engine ↔ CP IPC** | Hardened Named Pipe (`\\.\pipe\PeekEngine`) protocol & server verification | **Completed** |
+| **Phase 7: Lock-Screen UX** | Visual state flow (Searching → Found → Verifying → Liveness → Unlock) | **Completed** |
+| **Phase 8: Enterprise Trust & Hardening** | Nonce binding, attempt throttling, log hygiene, anti-squatting, fail-open verification | **Completed** |
+
+---
+
+## Lock-Screen IPC Hardening & Trust Architecture
+
+Peek bridges the user-facing Windows LogonUI / Credential Provider with the background face engine through a hardened, mutually verified IPC channel:
+
+1. **Server Process & Token User SID Verification**:
+   - Upon connecting to `\\.\pipe\PeekEngine`, the Credential Provider queries the pipe server PID via `GetNamedPipeServerProcessId`.
+   - The CP opens the process with `PROCESS_QUERY_LIMITED_INFORMATION` and verifies:
+     - The process executable image strictly matches the admin-configured path in `HKLM\SOFTWARE\Peek\InstallPath` (written by `install.ps1`, with normalized path comparison).
+     - The process token user SID equals the locked user's SID (or genuine `NT AUTHORITY\SYSTEM`).
+     - Any mismatch immediately drops the connection and fails open to PIN/password.
+2. **Anti-Pipe-Squatting**:
+   - The engine creates the named pipe using `FILE_FLAG_FIRST_PIPE_INSTANCE`.
+   - If an unprivileged user process or rogue service attempts to squat on the pipe name, the engine detects this, logs the security event, and safely refuses to start.
+3. **Cryptographic Nonce Binding**:
+   - In `START_AUTH`, the Credential Provider generates and transmits a random 128-bit challenge nonce (32 hex characters).
+   - The engine echoes this nonce in every intermediate state update (`CAMERA_STARTING`, `SEARCHING`, `FACE_FOUND`, `VERIFYING`, `LIVENESS_CHECK`) and terminal result message (`AUTHENTICATED`, `AUTH_FAILED`, `TIMEOUT`, `LOCKED_OUT`, `ERROR`).
+   - The CP drops and ignores any message missing or mismatched with the expected nonce, completely mitigating injection and replay attacks.
+4. **Attempt Throttling & Lockout Protection**:
+   - The engine maintains a rolling sliding-window lockout tracker per user account.
+   - If 5 consecutive failed or timed-out sessions occur within a 10-minute window, the engine enters a 5-minute lockout state and responds `LOCKED_OUT` to incoming `START_AUTH` requests.
+   - The Credential Provider immediately displays *"Sign in with your PIN or password"* without activating the camera. Lockout resets upon successful authentication.
+5. **Plaintext-Free Biometric Enrollment**:
+   - The enrollment protocol is purely biometric (`START_ENROLLMENT`, `ENROLLMENT_PROGRESS`, `ENROLLMENT_COMPLETED`); plaintext password parameters and confirmation fields are removed from wire protocols and in-memory session handlers.
+6. **Log Hygiene & Rotation**:
+   - User SIDs, secrets, and raw authentication tokens are excluded from `INFO` and `WARN` logs and moved to `DEBUG`.
+   - Credential Provider file logging is governed by an admin-only registry value `HKLM\SOFTWARE\Peek\LogLevel` (defaulting to `ERROR`/`OFF`).
+   - Both the engine and Credential Provider enforce automatic log rotation at 2 MB with backups.
+7. **Bounded Fail-Open Reliability**:
+   - All failure conditions (engine crashed or killed mid-session, camera disconnected, corrupt profile, pipe squatter present, LSA read failure) guarantee a bounded transition to the standard Windows PIN/password sign-in screen within 1 second.
 
 ---
 

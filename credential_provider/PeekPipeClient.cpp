@@ -116,7 +116,7 @@ bool PeekPipeClient::VerifyServerProcess(HANDLE hPipe, const std::wstring& expec
         return false;
     }
 
-    // 1. Verify image path is genuine %ProgramFiles%\Peek\PeekEngine.exe
+    // 1. Verify image path equals installed PeekEngine.exe path read from admin-only registry HKLM\SOFTWARE\Peek\InstallPath
     wchar_t szImagePath[MAX_PATH * 2] = {};
     DWORD dwSize = ARRAYSIZE(szImagePath);
     if (!QueryFullProcessImageNameW(hProc, 0, szImagePath, &dwSize))
@@ -127,7 +127,29 @@ bool PeekPipeClient::VerifyServerProcess(HANDLE hPipe, const std::wstring& expec
     }
 
     wchar_t szExpectedImage[MAX_PATH * 2] = {};
-    ExpandEnvironmentStringsW(L"%ProgramFiles%\\Peek\\PeekEngine.exe", szExpectedImage, ARRAYSIZE(szExpectedImage));
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Peek", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        DWORD dwType = 0;
+        DWORD cbData = sizeof(szExpectedImage);
+        if (RegQueryValueExW(hKey, L"InstallPath", nullptr, &dwType, reinterpret_cast<LPBYTE>(szExpectedImage), &cbData) == ERROR_SUCCESS)
+        {
+            if (dwType == REG_EXPAND_SZ)
+            {
+                wchar_t szTemp[MAX_PATH * 2] = {};
+                if (ExpandEnvironmentStringsW(szExpectedImage, szTemp, ARRAYSIZE(szTemp)) > 0)
+                {
+                    wcscpy_s(szExpectedImage, szTemp);
+                }
+            }
+        }
+        RegCloseKey(hKey);
+    }
+
+    if (szExpectedImage[0] == L'\0')
+    {
+        ExpandEnvironmentStringsW(L"%ProgramFiles%\\Peek\\PeekEngine.exe", szExpectedImage, ARRAYSIZE(szExpectedImage));
+    }
 
     // Normalize both paths using GetLongPathNameW to avoid short-path / 8.3 mismatch (e.g. PROGRA~1)
     wchar_t szActualLong[MAX_PATH * 2] = {};
@@ -228,11 +250,13 @@ bool PeekPipeClient::VerifyServerProcess(HANDLE hPipe, const std::wstring& expec
 
     if (!bSidMatch)
     {
-        Logger::LogError(L"VerifyServerProcess: Token user SID mismatch. Server SID='" + serverSid + L"', Expected SID='" + expectedSid + L"'");
+        Logger::LogError("VerifyServerProcess: Token user SID mismatch; failing open to standard sign-in");
+        Logger::LogDebug(L"VerifyServerProcess: Token user SID mismatch. Server SID='" + serverSid + L"', Expected SID='" + expectedSid + L"'");
         return false;
     }
 
-    Logger::LogInfo(L"VerifyServerProcess: Server verified successfully (PID=" + std::to_wstring(serverPid) + L", SID=" + serverSid + L")");
+    Logger::LogInfo(("VerifyServerProcess: Server verified successfully (PID=" + std::to_string(serverPid) + ")").c_str());
+    Logger::LogDebug(L"VerifyServerProcess: Server SID verified: " + serverSid);
     return true;
 }
 
@@ -440,6 +464,18 @@ void PeekPipeClient::ParseAndDispatchMessage(const std::string& line, PeekAuthRe
         return;
     }
 
+    // REQUIREMENT 3: Nonce binding
+    // CP ignores messages with a missing or wrong nonce once challenge is issued.
+    if (!m_expectedNonce.empty())
+    {
+        std::wstring expectedNonceWide = PeekJson::Utf8ToWide(m_expectedNonce);
+        if (msg.nonce.empty() || _wcsicmp(msg.nonce.c_str(), expectedNonceWide.c_str()) != 0)
+        {
+            Logger::LogInfo(L"ParseAndDispatchMessage: Dropping message with missing or mismatched challenge nonce. Type=" + msg.type);
+            return;
+        }
+    }
+
     result.detail = msg.detail;
     result.displayName = msg.displayName;
     result.reasonCode = msg.reasonCode;
@@ -506,6 +542,13 @@ void PeekPipeClient::ParseAndDispatchMessage(const std::string& line, PeekAuthRe
         Logger::LogInfo(L"ParseAndDispatchMessage: Received verified AUTHENTICATED with valid challenge nonce");
         result.state = PeekIPCState::AUTHENTICATED;
     }
+    else if (msg.type == L"LOCKED_OUT")
+    {
+        Logger::LogInfo(L"ParseAndDispatchMessage: Received LOCKED_OUT");
+        result.state = PeekIPCState::ERROR_STATE;
+        result.reasonCode = L"LOCKED_OUT";
+        result.detail = L"Sign in with your PIN or password";
+    }
     else if (msg.type == L"AUTH_FAILED")
     {
         Logger::LogInfo(L"ParseAndDispatchMessage: Received AUTH_FAILED");
@@ -571,7 +614,13 @@ void PeekPipeClient::RunWorker()
     std::ostringstream ss;
     ss << "{\"protocol_version\":\"2.0\",\"type\":\"START_AUTH\",\"nonce\":\""
        << m_expectedNonce << "\",\"timeout_seconds\":"
-       << m_timeoutSeconds << "}\n";
+       << m_timeoutSeconds;
+    if (!m_expectedSid.empty())
+    {
+        std::string sidUtf8 = PeekJson::WideToUtf8(m_expectedSid);
+        ss << ",\"user_sid\":\"" << sidUtf8 << "\"";
+    }
+    ss << "}\n";
     if (!SendMessageString(ss.str()))
     {
         result.state = PeekIPCState::ERROR_STATE;
@@ -586,6 +635,7 @@ void PeekPipeClient::RunWorker()
 
     // 4. Stream responses until completion or cancel
     std::string line;
+    bool receivedTerminalState = false;
     while (m_isRunning.load() && WaitForSingleObject(m_hCancelEvent, 0) != WAIT_OBJECT_0)
     {
         if (!ReadNextMessage(line))
@@ -602,9 +652,19 @@ void PeekPipeClient::RunWorker()
             result.state == PeekIPCState::TIMEOUT ||
             result.state == PeekIPCState::ERROR_STATE)
         {
+            receivedTerminalState = true;
             Logger::LogInfo("Terminal authentication state reached, exiting loop");
             break;
         }
+    }
+
+    if (!receivedTerminalState && WaitForSingleObject(m_hCancelEvent, 0) != WAIT_OBJECT_0)
+    {
+        Logger::LogInfo("Pipe disconnected without terminal message; failing open to fallback");
+        result.state = PeekIPCState::DISCONNECTED;
+        result.reasonCode = L"ENGINE_DISCONNECTED";
+        result.detail = L"Sign in with your PIN or password";
+        if (m_callback) m_callback(result);
     }
 
     if (m_hPipe != INVALID_HANDLE_VALUE)
