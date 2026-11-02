@@ -256,6 +256,8 @@ class EnrollmentRunner:
         keep_existing: bool = True,
         profile_id: Optional[str] = None,
         blur_background: bool = True,
+        user_sid: Optional[str] = None,
+        activate: bool = True,
     ):
         self.display_name = display_name
         self.profile_store = profile_store or SecureProfileStore()
@@ -271,9 +273,12 @@ class EnrollmentRunner:
 
         self.keep_existing = keep_existing
         self.target_profile_id = profile_id
+        self.target_user_sid = user_sid
+        self.activate = activate
         self._cancelled = False
         self._advance_requested = False
         self.saved_profile: Optional[PeekProfile] = None
+        self._error: Optional[Exception] = None
         self._last_progress: Optional[EnrollmentProgress] = None
         self._last_hint: str = "none"
         self._prev_pose_idx = 0
@@ -320,6 +325,8 @@ class EnrollmentRunner:
         display_name: Optional[str] = None,
         keep_existing: bool = True,
         profile_id: Optional[str] = None,
+        user_sid: Optional[str] = None,
+        activate: bool = True,
     ):
         """Starts or restarts the enrollment session."""
         if display_name:
@@ -327,9 +334,13 @@ class EnrollmentRunner:
         self.keep_existing = keep_existing
         if profile_id is not None:
             self.target_profile_id = profile_id
+        if user_sid is not None:
+            self.target_user_sid = user_sid
+        self.activate = activate
         self._cancelled = False
         self._advance_requested = False
         self.saved_profile = None
+        self._error = None
         self._prev_pose_idx = 0
 
         self.start_camera()
@@ -578,10 +589,13 @@ class EnrollmentRunner:
                     self.saved_profile = self.session.finalize_and_save_profile(
                         display_name=self.display_name,
                         profile_id=self.target_profile_id,
+                        user_sid=self.target_user_sid,
                         keep_existing=self.keep_existing,
+                        activate=self.activate,
                     )
                     logger.info("Enrollment finished and profile '%s' secured via DPAPI.", self.display_name)
                 except Exception as ex:
+                    self._error = ex
                     logger.error("Failed to finalize and save profile: %s", ex, exc_info=True)
 
             if self.saved_profile is not None:

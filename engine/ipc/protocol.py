@@ -312,14 +312,15 @@ def make_authenticated(
     display_name: str,
     nonce: Optional[str] = None,
     is_authorized_to_unlock: bool = True,
-    detail: str = "Authentication successful"
+    detail: str = "Authentication successful",
+    profile_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     CRITICAL SECURITY INVARIANTS:
     1. is_authorized_to_unlock must strictly be True.
     2. display_name must be non-empty.
     3. nonce must match the per-attempt 128-bit challenge from START_AUTH.
-    4. profile_id is NEVER emitted across the pipe.
+    4. profile_id identifies the authenticated profile for Credential Provider authorization.
     """
     if not is_authorized_to_unlock:
         raise ValueError("Cannot construct AUTHENTICATED message with is_authorized_to_unlock=False")
@@ -332,7 +333,7 @@ def make_authenticated(
     elif not nonce or not isinstance(nonce, str):
         raise ValueError("AUTHENTICATED message requires a valid non-empty nonce")
 
-    return {
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_AUTHENTICATED,
         "is_authorized_to_unlock": True,
@@ -341,6 +342,9 @@ def make_authenticated(
         "detail": detail,
         "timestamp": time.time(),
     }
+    if profile_id is not None:
+        msg["profile_id"] = str(profile_id)
+    return msg
 
 
 def make_auth_failed(

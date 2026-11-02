@@ -34,6 +34,8 @@ namespace PeekSetup.Models
         public const string ReasonQualityFailed = "QUALITY_FAILED";
         public const string ReasonTimeout = "TIMEOUT";
         public const string ReasonConfirmationRequired = "CONFIRMATION_REQUIRED";
+        public const string ReasonIdentityLimit = "IDENTITY_LIMIT";
+        public const string ReasonDuplicateIdentity = "DUPLICATE_IDENTITY";
 
         // Poses
         public const string PoseCenter = "CENTER";
@@ -98,7 +100,8 @@ namespace PeekSetup.Models
             bool cleanPreview = true,
             bool keepExisting = true,
             string? profileId = null,
-            bool blurBackground = true)
+            bool blurBackground = true,
+            bool activate = true)
         {
             var msg = new
             {
@@ -109,6 +112,7 @@ namespace PeekSetup.Models
                 blur_background = blurBackground ? (bool?)true : null,
                 keep_existing = keepExisting ? (bool?)true : null,
                 profile_id = profileId,
+                activate = activate,
                 timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
             };
             return JsonSerializer.Serialize(msg, JsonOptions);

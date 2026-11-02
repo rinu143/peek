@@ -15,6 +15,7 @@ import cv2
 import time
 import numpy as np
 import logging
+import platform
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -31,6 +32,72 @@ from engine.quality.quality_checker import FaceQualityChecker, QualityCheckResul
 from storage.template_store import SecureProfileStore, PeekProfile, PeekTemplate
 
 logger = logging.getLogger("Peek.FaceEngine")
+
+def get_current_process_user_sid() -> Optional[str]:
+    """Retrieves current Windows user SID or checks PEEK_USER_SID env."""
+    sid_env = os.environ.get("PEEK_USER_SID")
+    if sid_env:
+        return sid_env
+    if platform.system() == "Windows":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            advapi32 = ctypes.windll.advapi32
+            kernel32 = ctypes.windll.kernel32
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+            advapi32.OpenProcessToken.restype = wintypes.BOOL
+            advapi32.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_uint, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+            advapi32.GetTokenInformation.restype = wintypes.BOOL
+            advapi32.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+            advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+
+            token = wintypes.HANDLE()
+            if advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)):
+                try:
+                    cb = wintypes.DWORD(0)
+                    advapi32.GetTokenInformation(token, 1, None, 0, ctypes.byref(cb))
+                    buf = ctypes.create_string_buffer(cb.value)
+                    if advapi32.GetTokenInformation(token, 1, buf, cb.value, ctypes.byref(cb)):
+                        pSid = ctypes.cast(buf, ctypes.POINTER(ctypes.c_void_p))[0]
+                        pStr = wintypes.LPWSTR()
+                        if advapi32.ConvertSidToStringSidW(pSid, ctypes.byref(pStr)):
+                            sid_val = pStr.value
+                            kernel32.LocalFree(pStr)
+                            return sid_val
+                finally:
+                    kernel32.CloseHandle(token)
+        except Exception as ex:
+            logger.debug(f"Process SID resolution error: {ex}")
+    return None
+
+def get_authorized_identities_from_registry(user_sid: str) -> Optional[List[str]]:
+    """
+    Reads HKLM\\SOFTWARE\\Peek\\Identities\\<user_sid> value "Authorized".
+    Returns List[str] (capped at 5) if key exists; None if key does not exist (legacy v1 install).
+    """
+    if not user_sid or platform.system() != "Windows":
+        return None
+    try:
+        import winreg
+        key_path = rf"SOFTWARE\Peek\Identities\{user_sid}"
+        access = winreg.KEY_READ | winreg.KEY_WOW64_64KEY
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, access) as key:
+            try:
+                val, _ = winreg.QueryValueEx(key, "Authorized")
+                if isinstance(val, list):
+                    return [x for x in val if x][:5]
+                elif isinstance(val, str) and val:
+                    return [val][:5]
+                return []
+            except FileNotFoundError:
+                return []
+    except FileNotFoundError:
+        # Key does not exist -> legacy v1 install!
+        return None
+    except Exception as ex:
+        logger.debug(f"Failed to read authorized identities registry key: {ex}")
+        return None
 
 @dataclass
 class EngineFrameResult:
@@ -49,6 +116,8 @@ class EngineFrameResult:
     state_label: str = "SEARCHING"
     # SECURITY FLAG: True ONLY when both biometric match AND independent liveness pass
     is_authorized_to_unlock: bool = False
+    matched_profile_id: Optional[str] = None
+    matched_profile_name: Optional[str] = None
     details: str = ""
 
 
@@ -135,10 +204,24 @@ class FaceEngine:
         self.cached_template_poses: List[str] = []
         self.reload_active_profile()
 
-    def reload_active_profile(self):
-        """Loads enabled profiles from DPAPI storage and caches template embeddings."""
+    def reload_active_profile(self, user_sid: Optional[str] = None):
+        """
+        Loads enabled profiles from DPAPI storage and caches template embeddings.
+        REQUIREMENT 5a:
+        Load only profiles that are enabled AND on the Authorized list for the current user SID.
+        If the Identities key does not exist (legacy v1 install) keep old behavior (load enabled profiles).
+        """
+        target_sid = user_sid or get_current_process_user_sid()
+        authorized_ids = get_authorized_identities_from_registry(target_sid) if target_sid else None
+
         profiles = self.profile_store.list_profiles()
-        self.enabled_profiles = [p for p in profiles if p.enabled]
+        if authorized_ids is not None:
+            auth_set = set(authorized_ids[:5])
+            self.enabled_profiles = [p for p in profiles if p.enabled and p.profile_id in auth_set]
+            logger.info(f"Loaded {len(self.enabled_profiles)} authorized profile(s) for SID {target_sid}")
+        else:
+            self.enabled_profiles = [p for p in profiles if p.enabled]
+            logger.info(f"Legacy v1 install: Loaded {len(self.enabled_profiles)} enabled profile(s)")
         
         if self.enabled_profiles:
             self.active_profile = self.enabled_profiles[0]
@@ -372,18 +455,21 @@ class FaceEngine:
             estimated_pose=pose_label,
             threshold=self.active_profile.matching_threshold if self.active_profile else None
         )
+        matched_profile = None
         if match_result.is_match and match_result.best_template_idx is not None:
             if hasattr(self, '_template_profile_map') and match_result.best_template_idx < len(self._template_profile_map):
-                self.active_profile = self._template_profile_map[match_result.best_template_idx]
+                matched_profile = self._template_profile_map[match_result.best_template_idx]
 
-        # Step 7: Rolling temporal verification confirmation (M-of-N sliding window)
+        # Step 7: Rolling temporal verification confirmation (M-of-N sliding window per-identity)
         temporal_res = self.temporal_verifier.update(
             track_id=dominant_target.track_id,
             is_frame_match=match_result.is_match,
-            frame_confidence=match_result.confidence
+            frame_confidence=match_result.confidence,
+            profile_id=matched_profile.profile_id if matched_profile else None
         )
 
         # Step 8: Quality Gate & Independent Liveness Detection
+        confirmed_profile = None
         quality_res = self.quality_checker.evaluate(frame, [dominant_detection])
         if not quality_res.passed:
             # FIQA quality check failed: do NOT call liveness_detector.update(),
@@ -447,9 +533,17 @@ class FaceEngine:
                     )
 
             # Step 9: Dual-Gate Authorization Logic
-            # NON-NEGOTIABLE CONSTRAINT #1:
-            # Biometric matching alone can NEVER unlock. Independent liveness is mandatory.
-            is_biometric_pass = temporal_res.is_temporally_confirmed and match_result.is_match
+            # Identify temporally confirmed profile
+            confirmed_profile = None
+            if temporal_res.is_temporally_confirmed and temporal_res.confirmed_profile_id:
+                for prof in self.enabled_profiles:
+                    if prof.profile_id == temporal_res.confirmed_profile_id:
+                        confirmed_profile = prof
+                        break
+            elif temporal_res.is_temporally_confirmed and self.enabled_profiles:
+                confirmed_profile = self.active_profile or self.enabled_profiles[0]
+
+            is_biometric_pass = bool(temporal_res.is_temporally_confirmed and confirmed_profile is not None)
             is_live_pass = liveness_res.is_live
             if challenge_mode_enabled and not in_grace_window:
                 is_challenge_pass = bool(challenge_res is not None and challenge_res.passed)
@@ -479,7 +573,8 @@ class FaceEngine:
                 details = f"Action Required: {challenge_res.prompt_text}"
             elif is_authorized:
                 state_label = "SUCCESS"
-                details = f"✓ Welcome! Unlocked ({temporal_res.details})"
+                user_greet = confirmed_profile.display_name if confirmed_profile else "User"
+                details = f"✓ Welcome, {user_greet}! Unlocked ({temporal_res.details})"
             elif is_biometric_pass:
                 state_label = "LIVENESS_CHECK"
                 details = f"Face Matched — Checking Liveness ({liveness_res.details})"
@@ -497,6 +592,8 @@ class FaceEngine:
         if len(all_tracks) > 1:
             details += f" ({len(all_tracks)} faces tracked)"
 
+        matched_prof_id = confirmed_profile.profile_id if confirmed_profile else None
+        matched_prof_name = confirmed_profile.display_name if confirmed_profile else None
 
         return EngineFrameResult(
             has_face=True,
@@ -513,6 +610,8 @@ class FaceEngine:
             challenge_result=challenge_res,
             state_label=state_label,
             is_authorized_to_unlock=is_authorized,
+            matched_profile_id=matched_prof_id,
+            matched_profile_name=matched_prof_name,
             details=details
         )
 

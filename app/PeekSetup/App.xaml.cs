@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using System.Security.Principal;
 using System.Windows;
 using PeekSetup.Services;
 
@@ -22,12 +24,91 @@ namespace PeekSetup
             if (HasArg(args, "--unlink"))
             {
                 string? sid = GetArgValue(args, "--sid");
-                if (!string.IsNullOrEmpty(sid))
+                if (string.IsNullOrWhiteSpace(sid))
                 {
-                    var linker = new PasswordLinker();
-                    linker.UnlinkPassword(sid);
+                    Environment.Exit(PasswordLinker.ExitError); // 3
+                    return;
                 }
-                Environment.Exit(0);
+
+                var linker = new PasswordLinker();
+                linker.UnlinkPassword(sid);
+                Environment.Exit(PasswordLinker.ExitOk); // 0
+                return;
+            }
+
+            // Check for --revoke-identity --sid <SID> --profile-id <id>
+            if (HasArg(args, "--revoke-identity"))
+            {
+                string? sid = GetArgValue(args, "--sid");
+                string? profileId = GetArgValue(args, "--profile-id");
+
+                if (string.IsNullOrWhiteSpace(sid) || string.IsNullOrWhiteSpace(profileId))
+                {
+                    Environment.Exit(PasswordLinker.ExitError); // 3
+                    return;
+                }
+
+                var linker = new PasswordLinker();
+                int exitCode = linker.RevokeIdentity(profileId, sid);
+                Environment.Exit(exitCode);
+                return;
+            }
+
+            // Check for --authorize-identity --sid <SID> --profile-id <id> [--user <user>]
+            if (HasArg(args, "--authorize-identity"))
+            {
+                string? sid = GetArgValue(args, "--sid");
+                string? profileId = GetArgValue(args, "--profile-id");
+                string? user = GetArgValue(args, "--user");
+
+                if (string.IsNullOrWhiteSpace(sid) || string.IsNullOrWhiteSpace(profileId))
+                {
+                    Environment.Exit(PasswordLinker.ExitError); // 3
+                    return;
+                }
+
+                var authStore = new RegistryAuthorizationStore();
+                var existing = authStore.GetAuthorizedIdentities(sid);
+
+                // Require that a link already exists (registry list non-empty, otherwise exit 6)
+                if (existing == null || existing.Length == 0)
+                {
+                    Environment.Exit(PasswordLinker.ExitNotLinkedYet); // 6
+                    return;
+                }
+
+                // Identity limit check (cap 5)
+                if (!existing.Contains(profileId, StringComparer.OrdinalIgnoreCase) && existing.Length >= RegistryAuthorizationStore.MaxAuthorizedIdentities)
+                {
+                    Environment.Exit(PasswordLinker.ExitIdentityLimit); // 5
+                    return;
+                }
+
+                var resolver = new AccountSidResolver();
+                if (string.IsNullOrWhiteSpace(user))
+                {
+                    try
+                    {
+                        var secId = new SecurityIdentifier(sid);
+                        user = ((NTAccount)secId.Translate(typeof(NTAccount))).Value;
+                    }
+                    catch
+                    {
+                        user = Environment.UserName;
+                    }
+                }
+                else
+                {
+                    if (!resolver.ValidateUserSid(user, sid))
+                    {
+                        Environment.Exit(PasswordLinker.ExitError); // 3
+                        return;
+                    }
+                }
+
+                var window = new LinkPasswordWindow(user, sid, profileId, null, LinkPasswordMode.AuthorizeIdentity);
+                window.ShowDialog();
+                Environment.Exit(window.ExitCode);
                 return;
             }
 
@@ -38,21 +119,36 @@ namespace PeekSetup
                 string? sid = GetArgValue(args, "--sid");
                 string? profileId = GetArgValue(args, "--profile-id");
 
-                if (string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(sid) || string.IsNullOrWhiteSpace(profileId))
+                if (string.IsNullOrWhiteSpace(sid) || string.IsNullOrWhiteSpace(profileId))
                 {
-                    Environment.Exit(3); // 3 other failure
+                    Environment.Exit(PasswordLinker.ExitError); // 3 other failure
                     return;
                 }
 
-                // Verify user resolves to sid
                 var resolver = new AccountSidResolver();
-                if (!resolver.ValidateUserSid(user, sid))
+                if (string.IsNullOrWhiteSpace(user))
                 {
-                    Environment.Exit(3); // other failure / account mismatch
-                    return;
+                    try
+                    {
+                        var secId = new SecurityIdentifier(sid);
+                        user = ((NTAccount)secId.Translate(typeof(NTAccount))).Value;
+                    }
+                    catch
+                    {
+                        user = Environment.UserName;
+                    }
+                }
+                else
+                {
+                    // Verify user resolves to sid
+                    if (!resolver.ValidateUserSid(user, sid))
+                    {
+                        Environment.Exit(PasswordLinker.ExitError); // 3 account mismatch
+                        return;
+                    }
                 }
 
-                var window = new LinkPasswordWindow(user, sid, profileId);
+                var window = new LinkPasswordWindow(user, sid, profileId, null, LinkPasswordMode.LinkPassword);
                 window.ShowDialog();
                 Environment.Exit(window.ExitCode);
                 return;

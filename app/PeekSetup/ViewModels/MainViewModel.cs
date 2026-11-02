@@ -1296,7 +1296,8 @@ namespace PeekSetup.ViewModels
                 await _pipeClient.StartEnrollmentAsync(
                     DisplayName,
                     keepExisting: keepExisting,
-                    profileId: profileId);
+                    profileId: profileId,
+                    activate: true);
             }
             catch (EngineUnavailableException ex)
             {
@@ -1427,6 +1428,10 @@ namespace PeekSetup.ViewModels
                 }
 
                 int exitCode = await _linkLauncher.LaunchLinkPasswordAsync(username, sid, profileId);
+                if (exitCode == 0)
+                {
+                    await _profileManager.ToggleProfileAsync(profileId, true).ConfigureAwait(false);
+                }
                 HandleLinkExitCode(exitCode);
             }
             catch (Exception ex)
@@ -1448,6 +1453,11 @@ namespace PeekSetup.ViewModels
                     IsPasswordLinked = true;
                     HasPasswordError = false;
                     PasswordErrorMessage = string.Empty;
+                    string linkedId = !string.IsNullOrEmpty(EnrolledProfileId) ? EnrolledProfileId : ExistingProfileId;
+                    if (!string.IsNullOrEmpty(linkedId))
+                    {
+                        _ = _profileManager.ToggleProfileAsync(linkedId, true);
+                    }
                     _ = RefreshIdentitiesAsync();
                     if (CurrentStep == SetupStep.PasswordLink)
                     {
@@ -1473,6 +1483,16 @@ namespace PeekSetup.ViewModels
                 case 4:
                     HasPasswordError = true;
                     PasswordErrorMessage = "Administrator permission (UAC) was declined. Windows LSA requires elevation to link password.";
+                    break;
+
+                case 5:
+                    HasPasswordError = true;
+                    PasswordErrorMessage = "Identity limit reached. A maximum of 5 identities can be authorized to unlock this account.";
+                    break;
+
+                case 6:
+                    HasPasswordError = true;
+                    PasswordErrorMessage = "This Windows account is not linked yet. Link a primary password before authorizing additional identities.";
                     break;
 
                 default:
@@ -2032,6 +2052,10 @@ namespace PeekSetup.ViewModels
             {
                 IsPoseCheckActive = false;
                 IsEnrollmentCompleteRing = false;
+                if (!string.IsNullOrEmpty(e.ProfileId))
+                {
+                    await _profileManager.ToggleProfileAsync(e.ProfileId, true).ConfigureAwait(false);
+                }
                 if (_isAddingSecondaryFace || Identities.Count > 0)
                 {
                     _isAddingSecondaryFace = false;

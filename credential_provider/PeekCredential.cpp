@@ -880,6 +880,10 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
             {
                 m_displayName = result.displayName;
             }
+            if (!result.profileId.empty())
+            {
+                m_profileId = result.profileId;
+            }
             std::wstring enrolledName = m_displayName;
             std::wstring rawUser = m_username;
             LeaveCriticalSection(&m_cs);

@@ -1,4 +1,4 @@
-// Test file for SecretVault functionality with LSA private-data store
+// Test file for SecretVault functionality with LSA private-data store and multi-identity authorization
 #include "SecretVault.h"
 #include <iostream>
 #include <windows.h>
@@ -17,25 +17,39 @@ int main()
     int failedTests = 0;
 
     auto fakeStore = std::make_shared<PeekSecretVault::InMemoryLsaSecretStore>();
+    auto fakeIdStore = std::make_shared<PeekSecretVault::InMemoryIdentityStore>();
     PeekSecretVault::SetLsaSecretStore(fakeStore);
+    PeekSecretVault::SetIdentityStore(fakeIdStore);
 
     const std::wstring validSid = L"S-1-5-21-12345678-1001";
     const std::wstring validProfileId = L"profile_alice_123";
     const std::wstring validPassword = L"CorrectHorseBatteryStaple!";
 
     // -------------------------------------------------------------
-    // Test 1: Payload Building and Parsing Round-Trip
+    // Test 1: Payload Building and Parsing Round-Trip (v1 and v2)
     // -------------------------------------------------------------
-    std::wcout << L"[Test 1] Testing Payload Building and Parsing Round-Trip...\n";
+    std::wcout << L"[Test 1] Testing Payload Building and Parsing Round-Trip (v1 and v2)...\n";
     {
-        std::vector<BYTE> payload;
-        bool buildOk = PeekSecretVault::BuildSecretPayload(validProfileId, validPassword, payload);
-        std::wstring parsedPassword;
-        bool parseOk = PeekSecretVault::ParseSecretPayload(payload.data(), static_cast<DWORD>(payload.size()), validProfileId, parsedPassword);
+        // 1a: v2 payload building and parsing
+        std::vector<BYTE> payloadV2;
+        bool buildV2Ok = PeekSecretVault::BuildSecretPayload(validPassword, payloadV2);
+        DWORD verV2 = 0;
+        std::wstring parsedProfV2;
+        std::wstring parsedPwV2;
+        bool parseV2Ok = PeekSecretVault::ParseSecretPayload(payloadV2.data(), static_cast<DWORD>(payloadV2.size()), verV2, parsedProfV2, parsedPwV2);
 
-        if (buildOk && parseOk && parsedPassword == validPassword)
+        // 1b: v1 payload building and parsing
+        std::vector<BYTE> payloadV1;
+        bool buildV1Ok = PeekSecretVault::BuildSecretPayloadV1(validProfileId, validPassword, payloadV1);
+        DWORD verV1 = 0;
+        std::wstring parsedProfV1;
+        std::wstring parsedPwV1;
+        bool parseV1Ok = PeekSecretVault::ParseSecretPayload(payloadV1.data(), static_cast<DWORD>(payloadV1.size()), verV1, parsedProfV1, parsedPwV1);
+
+        if (buildV2Ok && parseV2Ok && verV2 == 2 && parsedPwV2 == validPassword &&
+            buildV1Ok && parseV1Ok && verV1 == 1 && parsedProfV1 == validProfileId && parsedPwV1 == validPassword)
         {
-            std::wcout << L"  PASS: Payload built and parsed correctly\n";
+            std::wcout << L"  PASS: Both v1 and v2 payloads built and parsed correctly\n";
         }
         else
         {
@@ -45,20 +59,21 @@ int main()
     }
 
     // -------------------------------------------------------------
-    // Test 2: Parser Tests (Bad version, Truncated, Oversize, Wrong ProfileId)
+    // Test 2: Parser Tests (Bad version, Truncated, Oversize, Corrupt)
     // -------------------------------------------------------------
-    std::wcout << L"[Test 2] Testing Parser Validation & Rejection...\n";
+    std::wcout << L"[Test 2] Testing Parser Validation & Rejection (Corrupt / Bad Versions)...\n";
     {
-        // 2a: Bad version (version = 2)
+        // 2a: Bad version (version = 0 or 3)
         std::vector<BYTE> payload;
-        PeekSecretVault::BuildSecretPayload(validProfileId, validPassword, payload);
-        DWORD badVersion = 2;
+        PeekSecretVault::BuildSecretPayload(validPassword, payload);
+        DWORD badVersion = 3;
         memcpy(payload.data(), &badVersion, sizeof(DWORD));
-        std::wstring outPw;
-        bool badVerResult = PeekSecretVault::ParseSecretPayload(payload.data(), static_cast<DWORD>(payload.size()), validProfileId, outPw);
+        DWORD verOut = 0;
+        std::wstring outProf, outPw;
+        bool badVerResult = PeekSecretVault::ParseSecretPayload(payload.data(), static_cast<DWORD>(payload.size()), verOut, outProf, outPw);
         if (!badVerResult && outPw.empty())
         {
-            std::wcout << L"  PASS: Bad version (2) cleanly rejected\n";
+            std::wcout << L"  PASS: Bad version (3) cleanly rejected\n";
         }
         else
         {
@@ -66,13 +81,13 @@ int main()
             failedTests++;
         }
 
-        // 2b: Truncated header (less than 3 DWORDs)
-        BYTE tinyBuf[8] = { 1, 0, 0, 0, 4, 0, 0, 0 };
+        // 2b: Truncated header (< 8 bytes)
+        BYTE tinyBuf[4] = { 2, 0, 0, 0 };
         outPw.clear();
-        bool truncHeader = PeekSecretVault::ParseSecretPayload(tinyBuf, sizeof(tinyBuf), validProfileId, outPw);
+        bool truncHeader = PeekSecretVault::ParseSecretPayload(tinyBuf, sizeof(tinyBuf), verOut, outProf, outPw);
         if (!truncHeader)
         {
-            std::wcout << L"  PASS: Truncated header (<12 bytes) cleanly rejected\n";
+            std::wcout << L"  PASS: Truncated header (<8 bytes) cleanly rejected\n";
         }
         else
         {
@@ -80,14 +95,14 @@ int main()
             failedTests++;
         }
 
-        // 2c: Truncated body (payload claiming large profileId but truncated)
-        std::vector<BYTE> truncPayload(20, 0);
-        DWORD ver = 1;
-        DWORD claimedProfLen = 100;
+        // 2c: Truncated body (payload claiming large password length but truncated)
+        std::vector<BYTE> truncPayload(12, 0);
+        DWORD ver = 2;
+        DWORD claimedPwLen = 100;
         memcpy(truncPayload.data(), &ver, 4);
-        memcpy(truncPayload.data() + 4, &claimedProfLen, 4);
+        memcpy(truncPayload.data() + 4, &claimedPwLen, 4);
         outPw.clear();
-        bool truncBody = PeekSecretVault::ParseSecretPayload(truncPayload.data(), static_cast<DWORD>(truncPayload.size()), validProfileId, outPw);
+        bool truncBody = PeekSecretVault::ParseSecretPayload(truncPayload.data(), static_cast<DWORD>(truncPayload.size()), verOut, outProf, outPw);
         if (!truncBody)
         {
             std::wcout << L"  PASS: Truncated payload body cleanly rejected\n";
@@ -101,7 +116,7 @@ int main()
         // 2d: Oversize payload (> 4096 bytes)
         std::vector<BYTE> oversizePayload(4097, 0);
         outPw.clear();
-        bool oversizeResult = PeekSecretVault::ParseSecretPayload(oversizePayload.data(), static_cast<DWORD>(oversizePayload.size()), validProfileId, outPw);
+        bool oversizeResult = PeekSecretVault::ParseSecretPayload(oversizePayload.data(), static_cast<DWORD>(oversizePayload.size()), verOut, outProf, outPw);
         if (!oversizeResult)
         {
             std::wcout << L"  PASS: Oversize payload (>4096 bytes) cleanly rejected\n";
@@ -112,97 +127,165 @@ int main()
             failedTests++;
         }
 
-        // 2e: Wrong profile_id binding check
-        PeekSecretVault::BuildSecretPayload(validProfileId, validPassword, payload);
+        // 2e: v1 mismatch expected profile id
+        std::vector<BYTE> v1Payload;
+        PeekSecretVault::BuildSecretPayloadV1(validProfileId, validPassword, v1Payload);
         outPw.clear();
-        bool mismatchProf = PeekSecretVault::ParseSecretPayload(payload.data(), static_cast<DWORD>(payload.size()), L"different_profile_999", outPw);
+        bool mismatchProf = PeekSecretVault::ParseSecretPayload(v1Payload.data(), static_cast<DWORD>(v1Payload.size()), L"different_profile_999", outPw);
         if (!mismatchProf && outPw.empty())
         {
-            std::wcout << L"  PASS: Profile ID binding mismatch cleanly rejected\n";
+            std::wcout << L"  PASS: v1 Profile ID binding mismatch cleanly rejected\n";
         }
         else
         {
-            std::wcout << L"  FAIL: Profile ID mismatch accepted\n";
+            std::wcout << L"  FAIL: v1 Profile ID mismatch accepted\n";
             failedTests++;
         }
     }
 
     // -------------------------------------------------------------
-    // Test 3: Store and Retrieve via Fake LSA Secret Store
+    // Test 3: Multi-Identity v2 Authorization (id in list / not in list / key missing / cap)
     // -------------------------------------------------------------
-    std::wcout << L"[Test 3] Testing Store and ReadPasswordSecret via fake store...\n";
+    std::wcout << L"[Test 3] Testing Multi-Identity v2 Authorization...\n";
     {
         fakeStore->Clear();
-        bool storeOk = PeekSecretVault::StorePasswordSecret(validSid, validProfileId, validPassword, fakeStore.get());
-        if (storeOk)
+        fakeIdStore->Clear();
+
+        // 3a: Write v2 secret
+        bool storeOk = PeekSecretVault::StorePasswordSecret(validSid, validPassword, fakeStore.get());
+        if (!storeOk)
         {
-            std::wcout << L"  PASS: StorePasswordSecret succeeded\n";
-        }
-        else
-        {
-            std::wcout << L"  FAIL: StorePasswordSecret failed\n";
+            std::wcout << L"  FAIL: StorePasswordSecret v2 failed\n";
             failedTests++;
         }
 
-        // Retrieve with correct SID and profile ID
-        std::wstring retrievedPw;
-        bool readOk = PeekSecretVault::ReadPasswordSecret(validSid, validProfileId, retrievedPw, fakeStore.get());
-        if (readOk && retrievedPw == validPassword)
+        // 3b: Key missing (no identities registered in store for SID)
+        std::wstring outPwMissing;
+        bool keyMissingOk = !PeekSecretVault::ReadPasswordSecret(validSid, validProfileId, outPwMissing, fakeStore.get(), fakeIdStore.get());
+        if (keyMissingOk && outPwMissing.empty())
         {
-            std::wcout << L"  PASS: ReadPasswordSecret returned valid password for matching SID & profile\n";
+            std::wcout << L"  PASS: Key missing cleanly rejected (fail-open)\n";
         }
         else
         {
-            std::wcout << L"  FAIL: ReadPasswordSecret failed or returned wrong password\n";
+            std::wcout << L"  FAIL: Key missing was accepted\n";
             failedTests++;
         }
 
-        // Retrieve with wrong SID -> should fail
-        std::wstring wrongSidPw;
-        bool wrongSidRead = PeekSecretVault::ReadPasswordSecret(L"S-1-5-21-WRONG-SID", validProfileId, wrongSidPw, fakeStore.get());
-        if (!wrongSidRead && wrongSidPw.empty())
+        // 3c: ID in list
+        fakeIdStore->SetAuthorizedIdentities(validSid, { validProfileId, L"profile_bob_456" });
+        std::wstring outPwAuthorized;
+        bool idInListOk = PeekSecretVault::ReadPasswordSecret(validSid, validProfileId, outPwAuthorized, fakeStore.get(), fakeIdStore.get());
+        if (idInListOk && outPwAuthorized == validPassword)
         {
-            std::wcout << L"  PASS: Wrong SID returned false (fail open)\n";
+            std::wcout << L"  PASS: ID in authorized list successfully unlocked\n";
         }
         else
         {
-            std::wcout << L"  FAIL: Wrong SID should return false\n";
+            std::wcout << L"  FAIL: ID in authorized list failed to unlock\n";
             failedTests++;
         }
 
-        // Retrieve with wrong ProfileId -> should fail
-        std::wstring wrongProfPw;
-        bool wrongProfRead = PeekSecretVault::ReadPasswordSecret(validSid, L"attacker_profile_id", wrongProfPw, fakeStore.get());
-        if (!wrongProfRead && wrongProfPw.empty())
+        // 3d: ID not in list
+        std::wstring outPwUnauthorized;
+        bool idNotInListOk = !PeekSecretVault::ReadPasswordSecret(validSid, L"profile_eve_999", outPwUnauthorized, fakeStore.get(), fakeIdStore.get());
+        if (idNotInListOk && outPwUnauthorized.empty())
         {
-            std::wcout << L"  PASS: Wrong profile_id returned false (profile binding enforced)\n";
+            std::wcout << L"  PASS: ID not in authorized list cleanly rejected\n";
         }
         else
         {
-            std::wcout << L"  FAIL: Wrong profile_id should return false\n";
+            std::wcout << L"  FAIL: ID not in authorized list was accepted\n";
+            failedTests++;
+        }
+
+        // 3e: Cap test (max 5 authorized identities)
+        // Set 6 identities in store: id1, id2, id3, id4, id5, id6
+        std::vector<std::wstring> sixIds = {
+            L"id_1", L"id_2", L"id_3", L"id_4", L"id_5", L"id_6"
+        };
+        fakeIdStore->SetAuthorizedIdentities(validSid, sixIds);
+
+        // id_5 (5th) should be authorized (within cap of 5)
+        std::wstring outPw5;
+        bool id5Ok = PeekSecretVault::ReadPasswordSecret(validSid, L"id_5", outPw5, fakeStore.get(), fakeIdStore.get());
+        // id_6 (6th) should be rejected (exceeds cap of 5)
+        std::wstring outPw6;
+        bool id6Ok = !PeekSecretVault::ReadPasswordSecret(validSid, L"id_6", outPw6, fakeStore.get(), fakeIdStore.get());
+
+        if (id5Ok && id6Ok && outPw5 == validPassword && outPw6.empty())
+        {
+            std::wcout << L"  PASS: Identity cap of 5 strictly enforced (5th allowed, 6th rejected)\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Identity cap enforcement failed (id5Ok=" << id5Ok << L", id6Ok=" << id6Ok << L")\n";
             failedTests++;
         }
     }
 
     // -------------------------------------------------------------
-    // Test 4: Fail-Open Tests (Missing Key, Corrupt Payload, Empty Input)
+    // Test 4: Legacy v1 Secret Backward Compatibility
     // -------------------------------------------------------------
-    std::wcout << L"[Test 4] Testing Fail-Open Graceful Failure...\n";
+    std::wcout << L"[Test 4] Testing Legacy v1 Secret Compatibility...\n";
+    {
+        fakeStore->Clear();
+        fakeIdStore->Clear(); // No registry key needed for v1!
+
+        // Write legacy v1 secret with validProfileId
+        bool storeV1Ok = PeekSecretVault::StorePasswordSecretV1(validSid, validProfileId, validPassword, fakeStore.get());
+        if (!storeV1Ok)
+        {
+            std::wcout << L"  FAIL: StorePasswordSecretV1 failed\n";
+            failedTests++;
+        }
+
+        // Matching profile ID succeeds without registry key
+        std::wstring outPwV1;
+        bool readV1Match = PeekSecretVault::ReadPasswordSecret(validSid, validProfileId, outPwV1, fakeStore.get(), fakeIdStore.get());
+        if (readV1Match && outPwV1 == validPassword)
+        {
+            std::wcout << L"  PASS: Legacy v1 secret unlocked without registry key\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Legacy v1 secret unlock failed\n";
+            failedTests++;
+        }
+
+        // Mismatched profile ID fails
+        std::wstring outPwMismatch;
+        bool readV1Mismatch = !PeekSecretVault::ReadPasswordSecret(validSid, L"other_profile", outPwMismatch, fakeStore.get(), fakeIdStore.get());
+        if (readV1Mismatch && outPwMismatch.empty())
+        {
+            std::wcout << L"  PASS: Legacy v1 secret rejected mismatched profile ID\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Legacy v1 secret accepted mismatched profile ID\n";
+            failedTests++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 5: Fail-Open Tests (Missing Key, Corrupt Payload, Empty Input)
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 5] Testing Fail-Open Graceful Failure...\n";
     {
         fakeStore->Clear();
         std::wstring outPw;
 
         // Missing key in store
-        bool missingKeyOk = !PeekSecretVault::ReadPasswordSecret(validSid, validProfileId, outPw, fakeStore.get());
+        bool missingKeyOk = !PeekSecretVault::ReadPasswordSecret(validSid, validProfileId, outPw, fakeStore.get(), fakeIdStore.get());
         
         // Empty parameters
-        bool emptySidOk = !PeekSecretVault::ReadPasswordSecret(L"", validProfileId, outPw, fakeStore.get());
-        bool emptyProfOk = !PeekSecretVault::ReadPasswordSecret(validSid, L"", outPw, fakeStore.get());
+        bool emptySidOk = !PeekSecretVault::ReadPasswordSecret(L"", validProfileId, outPw, fakeStore.get(), fakeIdStore.get());
+        bool emptyProfOk = !PeekSecretVault::ReadPasswordSecret(validSid, L"", outPw, fakeStore.get(), fakeIdStore.get());
 
         // Corrupt data stored under the key
         const BYTE corruptBytes[] = { 0xDE, 0xAD, 0xBE, 0xEF };
         fakeStore->StoreSecret(PeekSecretVault::GetSecretKeyName(validSid), corruptBytes, sizeof(corruptBytes));
-        bool corruptOk = !PeekSecretVault::ReadPasswordSecret(validSid, validProfileId, outPw, fakeStore.get());
+        bool corruptOk = !PeekSecretVault::ReadPasswordSecret(validSid, validProfileId, outPw, fakeStore.get(), fakeIdStore.get());
 
         if (missingKeyOk && emptySidOk && emptyProfOk && corruptOk && outPw.empty())
         {
@@ -216,16 +299,15 @@ int main()
     }
 
     // -------------------------------------------------------------
-    // Test 5: Delete-Only-On-ERROR_LOGON_FAILURE Tests
+    // Test 6: Delete-Only-On-ERROR_LOGON_FAILURE Tests
     // -------------------------------------------------------------
-    std::wcout << L"[Test 5] Testing Delete-Only-On-ERROR_LOGON_FAILURE...\n";
+    std::wcout << L"[Test 6] Testing Delete-Only-On-ERROR_LOGON_FAILURE...\n";
     {
-        // 5a: Non-ERROR_LOGON_FAILURE errors (e.g. ERROR_ACCOUNT_LOCKED_OUT) must NOT delete the secret
         fakeStore->Clear();
-        PeekSecretVault::StorePasswordSecret(validSid, validProfileId, validPassword, fakeStore.get());
+        PeekSecretVault::StorePasswordSecret(validSid, validPassword, fakeStore.get());
         assert(fakeStore->HasSecret(PeekSecretVault::GetSecretKeyName(validSid)));
 
-        // Simulate a validator returning ERROR_ACCOUNT_LOCKED_OUT
+        // 6a: Non-ERROR_LOGON_FAILURE errors (e.g. ERROR_ACCOUNT_LOCKED_OUT) must NOT delete the secret
         DWORD simulatedError = ERROR_ACCOUNT_LOCKED_OUT;
         if (simulatedError == ERROR_LOGON_FAILURE)
         {
@@ -242,7 +324,7 @@ int main()
             failedTests++;
         }
 
-        // 5b: ERROR_PASSWORD_EXPIRED must NOT delete the secret
+        // 6b: ERROR_PASSWORD_EXPIRED must NOT delete the secret
         simulatedError = ERROR_PASSWORD_EXPIRED;
         if (simulatedError == ERROR_LOGON_FAILURE)
         {
@@ -259,7 +341,7 @@ int main()
             failedTests++;
         }
 
-        // 5c: ERROR_ACCOUNT_DISABLED must NOT delete the secret
+        // 6c: ERROR_ACCOUNT_DISABLED must NOT delete the secret
         simulatedError = ERROR_ACCOUNT_DISABLED;
         if (simulatedError == ERROR_LOGON_FAILURE)
         {
@@ -276,7 +358,7 @@ int main()
             failedTests++;
         }
 
-        // 5d: ERROR_LOGON_FAILURE (wrong password) MUST delete the secret
+        // 6d: ERROR_LOGON_FAILURE (wrong password) MUST delete the secret
         simulatedError = ERROR_LOGON_FAILURE;
         if (simulatedError == ERROR_LOGON_FAILURE)
         {
@@ -295,12 +377,11 @@ int main()
     }
 
     // -------------------------------------------------------------
-    // Test 6: Idempotent Secret Deletion
+    // Test 7: Idempotent Secret Deletion
     // -------------------------------------------------------------
-    std::wcout << L"[Test 6] Testing Idempotent Secret Deletion...\n";
+    std::wcout << L"[Test 7] Testing Idempotent Secret Deletion...\n";
     {
         fakeStore->Clear();
-        // Deleting when key does not exist should return true without error
         bool del1 = PeekSecretVault::DeletePasswordSecret(validSid, fakeStore.get());
         bool del2 = PeekSecretVault::DeletePasswordSecret(validSid, fakeStore.get());
 
@@ -316,9 +397,9 @@ int main()
     }
 
     // -------------------------------------------------------------
-    // Test 7: Default Password Validator
+    // Test 8: Default Password Validator
     // -------------------------------------------------------------
-    std::wcout << L"[Test 7] Testing ValidatePassword error code reporting...\n";
+    std::wcout << L"[Test 8] Testing ValidatePassword error code reporting...\n";
     {
         DWORD errCode = 0;
         bool bRes = PeekSecretVault::ValidatePassword(L"NonExistentUser12345", L"", L"WrongPass!", &errCode);
@@ -334,20 +415,21 @@ int main()
     }
 
     // -------------------------------------------------------------
-    // Test 8: Direct Profile ID Extraction and Unbound Read
+    // Test 9: Direct Profile ID Extraction and Unbound Read
     // -------------------------------------------------------------
-    std::wcout << L"[Test 8] Testing Direct Profile ID Extraction and Unbound Read...\n";
+    std::wcout << L"[Test 9] Testing Direct Profile ID Extraction and Unbound Read...\n";
     {
         const std::wstring testUuid = L"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d";
         const std::wstring testPw = L"SecretPassword123!";
-        PeekSecretVault::StorePasswordSecret(validSid, testUuid, testPw);
+        fakeIdStore->SetAuthorizedIdentities(validSid, { testUuid });
+        PeekSecretVault::StorePasswordSecret(validSid, testPw, fakeStore.get());
 
         std::wstring extractedProfileId;
-        bool okGet = PeekSecretVault::GetStoredProfileId(validSid, extractedProfileId);
+        bool okGet = PeekSecretVault::GetStoredProfileId(validSid, extractedProfileId, fakeStore.get());
 
         std::wstring unboundPw;
         std::wstring unboundProfileId;
-        bool okRead = PeekSecretVault::ReadPasswordSecret(validSid, unboundPw, &unboundProfileId);
+        bool okRead = PeekSecretVault::ReadPasswordSecret(validSid, unboundPw, &unboundProfileId, fakeStore.get());
 
         if (okGet && extractedProfileId == testUuid && okRead && unboundPw == testPw && unboundProfileId == testUuid)
         {
@@ -362,7 +444,9 @@ int main()
 
     // Cleanup
     fakeStore->Clear();
+    fakeIdStore->Clear();
     PeekSecretVault::SetLsaSecretStore(nullptr);
+    PeekSecretVault::SetIdentityStore(nullptr);
     PeekSecretVault::SetPasswordValidator(nullptr);
 
     std::wcout << L"=========================================\n";

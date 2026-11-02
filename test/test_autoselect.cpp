@@ -831,9 +831,12 @@ int main()
         PeekProvider::SetTestSessionId(1);
         PeekProvider::SetTestConsoleUserSid(testSid);
 
-        // Configure fake in-memory LSA store and validator for test
+        // Configure fake in-memory LSA store, identity store, and validator for test
         auto fakeStore = std::make_shared<PeekSecretVault::InMemoryLsaSecretStore>();
+        auto fakeIdStore = std::make_shared<PeekSecretVault::InMemoryIdentityStore>();
+        fakeIdStore->SetAuthorizedIdentities(testSid, { testProfileId });
         PeekSecretVault::SetLsaSecretStore(fakeStore);
+        PeekSecretVault::SetIdentityStore(fakeIdStore);
         PeekSecretVault::StorePasswordSecret(testSid, testProfileId, testPassword, fakeStore.get());
         PeekSecretVault::SetPasswordValidator([](PCWSTR, PCWSTR, PCWSTR, DWORD* pdwErr) -> bool {
             if (pdwErr) *pdwErr = ERROR_SUCCESS;
@@ -896,6 +899,7 @@ int main()
 
         PeekSecretVault::SetPasswordValidator(nullptr);
         PeekSecretVault::SetLsaSecretStore(nullptr);
+        PeekSecretVault::SetIdentityStore(nullptr);
         PeekProvider::ClearTestOverrides();
         pArray->Release();
 
@@ -1336,10 +1340,10 @@ int main()
             t22Ok = false;
         }
 
-        // AUTHENTICATED message with profile_id rejected
+        // AUTHENTICATED message with profile_id parsed and accepted
         PeekJson::PeekProtocolMessage msgAuthWithProf;
         std::string jsonAuthWithProf = "{\"protocol_version\":\"2.0\",\"type\":\"AUTHENTICATED\",\"is_authorized_to_unlock\":true,\"nonce\":\"0123456789abcdef0123456789abcdef\",\"profile_id\":\"profile_123\"}";
-        if (PeekJson::ProtocolSchemaValidator::ValidateAndParse(jsonAuthWithProf, msgAuthWithProf))
+        if (!PeekJson::ProtocolSchemaValidator::ValidateAndParse(jsonAuthWithProf, msgAuthWithProf) || msgAuthWithProf.profileId != L"profile_123")
         {
             t22Ok = false;
         }
@@ -1370,7 +1374,7 @@ int main()
 
         if (t22Ok)
         {
-            std::wcout << L"  PASS: Strict JSON parser rejected outdated versions, trailing garbage, biometric leakage, and profile_id in AUTHENTICATED\n";
+            std::wcout << L"  PASS: Strict JSON parser rejected outdated versions, trailing garbage, biometric leakage, and parsed profile_id in AUTHENTICATED\n";
         }
         else
         {
@@ -1509,7 +1513,7 @@ int main()
         std::wstring testUuid = L"b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e";
         std::wstring testPassword = L"HardenedPhase7SecretPassword!";
 
-        PeekSecretVault::StorePasswordSecret(testSid, testUuid, testPassword);
+        PeekSecretVault::StorePasswordSecretV1(testSid, testUuid, testPassword);
 
         CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR rgcpfd[PFI_COUNT] = {
             { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
@@ -1557,6 +1561,71 @@ int main()
         else
         {
             std::wcout << L"  FAIL: LSA profile ID extraction failed: serOk=" << serOk << L", pwMatch=" << pwMatch << L"\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 25b: Multi-Identity v2 Authorized Store in GetSerialization
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 25b] Testing v2 Authorized Profile ID Verification in GetSerialization...\n";
+    {
+        auto fakeLsa = std::make_shared<PeekSecretVault::InMemoryLsaSecretStore>();
+        auto fakeIdStore = std::make_shared<PeekSecretVault::InMemoryIdentityStore>();
+        PeekSecretVault::SetLsaSecretStore(fakeLsa);
+        PeekSecretVault::SetIdentityStore(fakeIdStore);
+        PeekSecretVault::SetPasswordValidator([](PCWSTR, PCWSTR, PCWSTR, DWORD* pdwErr) -> bool {
+            if (pdwErr) *pdwErr = ERROR_SUCCESS;
+            return true;
+        });
+
+        std::wstring testSid = L"S-1-5-21-999999-1006";
+        std::wstring testPassword = L"MultiIdentityV2SecretPassword!";
+        std::wstring authProfA = L"profile_alice";
+        std::wstring authProfB = L"profile_bob";
+        std::wstring unauthProf = L"profile_eve";
+
+        fakeIdStore->SetAuthorizedIdentities(testSid, { authProfA, authProfB });
+        PeekSecretVault::StorePasswordSecret(testSid, testPassword, fakeLsa.get());
+
+        CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR rgcpfd[PFI_COUNT] = {
+            { PFI_LOGO,         CPFT_TILE_IMAGE, const_cast<PWSTR>(L"Logo"),   CPFG_CREDENTIAL_PROVIDER_LOGO },
+            { PFI_LABEL,        CPFT_SMALL_TEXT, const_cast<PWSTR>(L"PEEK"), CPFG_CREDENTIAL_PROVIDER_LABEL },
+            { PFI_DISPLAY_NAME, CPFT_LARGE_TEXT, const_cast<PWSTR>(L"User"),   GUID_NULL },
+            { PFI_STATUS_TEXT,  CPFT_SMALL_TEXT, const_cast<PWSTR>(L"Status"), GUID_NULL },
+        };
+
+        // Profile A (authorized)
+        PeekCredential credA;
+        credA.Initialize(CPUS_UNLOCK_WORKSTATION, rgcpfd, PFI_COUNT, L"SecureUser", L"DOMAIN", testSid.c_str(), true);
+        credA.TestSetAuthenticated(true, authProfA);
+        CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE respA = CPGSR_NO_CREDENTIAL_FINISHED;
+        CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION cpcsA = {};
+        HRESULT hrA = credA.GetSerialization(&respA, &cpcsA, nullptr, nullptr);
+        bool okA = (SUCCEEDED(hrA) && respA == CPGSR_RETURN_CREDENTIAL_FINISHED && cpcsA.rgbSerialization != nullptr);
+        if (cpcsA.rgbSerialization) CoTaskMemFree(cpcsA.rgbSerialization);
+
+        // Profile Eve (unauthorized) -> must fail open
+        PeekCredential credEve;
+        credEve.Initialize(CPUS_UNLOCK_WORKSTATION, rgcpfd, PFI_COUNT, L"SecureUser", L"DOMAIN", testSid.c_str(), true);
+        credEve.TestSetAuthenticated(true, unauthProf);
+        CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE respEve = CPGSR_NO_CREDENTIAL_FINISHED;
+        CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION cpcsEve = {};
+        HRESULT hrEve = credEve.GetSerialization(&respEve, &cpcsEve, nullptr, nullptr);
+        bool okEve = (SUCCEEDED(hrEve) && respEve == CPGSR_NO_CREDENTIAL_FINISHED && cpcsEve.rgbSerialization == nullptr);
+
+        fakeLsa->Clear();
+        PeekSecretVault::SetLsaSecretStore(nullptr);
+        PeekSecretVault::SetIdentityStore(nullptr);
+        PeekSecretVault::SetPasswordValidator(nullptr);
+
+        if (okA && okEve)
+        {
+            std::wcout << L"  PASS: v2 authorized profile unlocked; unauthorized profile failed open\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Multi-identity v2 check failed: okA=" << okA << L", okEve=" << okEve << L"\n";
             failed++;
         }
     }

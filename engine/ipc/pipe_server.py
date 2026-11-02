@@ -608,7 +608,8 @@ class PipeServer:
 
                 try:
                     timeout_sec = float(msg.get("timeout_seconds", self.default_auth_timeout))
-                    self._run_auth_session(session, timeout_seconds=timeout_sec, nonce=nonce, user_id=user_id)
+                    user_sid = msg.get("user_sid")
+                    self._run_auth_session(session, timeout_seconds=timeout_sec, nonce=nonce, user_id=user_id, user_sid=user_sid)
                 finally:
                     if self.coordinator is not None:
                         self.coordinator.release_auth()
@@ -661,6 +662,7 @@ class PipeServer:
         timeout_seconds: float,
         nonce: str,
         user_id: str = "default_user",
+        user_sid: Optional[str] = None,
     ):
         """
         Executes a live authentication session:
@@ -682,10 +684,14 @@ class PipeServer:
             return
 
         engine = self._ensure_face_engine()
-        engine.reload_active_profile()
+        try:
+            engine.reload_active_profile(user_sid=user_sid)
+        except TypeError:
+            engine.reload_active_profile()
 
         # Check if an active profile exists
-        if engine.active_profile is None:
+        has_profiles = bool(getattr(engine, "enabled_profiles", None)) or (getattr(engine, "active_profile", None) is not None)
+        if not has_profiles:
             logger.warning("Authentication requested but no profile is enrolled in storage.")
             self._release_camera()
             self.lockout_tracker.record_failure(user_id)
@@ -739,11 +745,15 @@ class PipeServer:
 
                 # 5. Dual-Gate Authorization Check (NON-NEGOTIABLE SECURITY INVARIANT)
                 if result.is_authorized_to_unlock:
-                    display_name = (
-                        engine.active_profile.display_name
-                        if engine.active_profile and engine.active_profile.display_name
-                        else "Enrolled User"
-                    )
+                    matched_name = getattr(result, "matched_profile_name", None)
+                    if not matched_name and getattr(engine, "active_profile", None):
+                        matched_name = engine.active_profile.display_name
+                    display_name = matched_name or "Enrolled User"
+
+                    matched_id = getattr(result, "matched_profile_id", None)
+                    if not matched_id and getattr(engine, "active_profile", None):
+                        matched_id = engine.active_profile.profile_id
+
                     logger.info(f"Authentication verified for user '{display_name}'. Emitting AUTHENTICATED.")
                     self.lockout_tracker.record_success(user_id)
                     session.write_message(
@@ -751,7 +761,8 @@ class PipeServer:
                             display_name=display_name,
                             nonce=nonce,
                             is_authorized_to_unlock=True,
-                            detail="Biometric & liveness verification confirmed"
+                            detail="Biometric & liveness verification confirmed",
+                            profile_id=matched_id,
                         )
                     )
                     logger.info("AUTHENTICATED message sent to client")

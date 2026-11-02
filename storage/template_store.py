@@ -205,8 +205,23 @@ class SecureProfileStore:
         encrypted_data = dpapi_encrypt(raw_json, description=f"PeekProfile_{profile.profile_id}")
         
         file_path = self._get_profile_path(profile.profile_id)
-        with open(file_path, "wb") as f:
-            f.write(encrypted_data)
+        temp_path = os.path.join(self.storage_dir, f".tmp.{profile.profile_id}.{uuid.uuid4().hex}")
+        try:
+            with open(temp_path, "wb") as f:
+                f.write(encrypted_data)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+            os.replace(temp_path, file_path)
+        except Exception:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+            raise
 
         logger.info(f"Saved DPAPI-encrypted profile '{profile.display_name}' ({profile.profile_id}) to {file_path}")
         return file_path

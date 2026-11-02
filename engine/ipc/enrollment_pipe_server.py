@@ -59,6 +59,8 @@ from engine.ipc.enrollment_protocol import (
     REASON_INVALID_MESSAGE,
     REASON_INTERNAL_ERROR,
     REASON_CONFIRMATION_REQUIRED,
+    REASON_IDENTITY_LIMIT,
+    REASON_DUPLICATE_IDENTITY,
     ProtocolError,
     serialize_message,
     parse_message,
@@ -72,7 +74,7 @@ from engine.ipc.enrollment_protocol import (
     make_status_response,
 )
 from engine.enrollment.enrollment_runner import EnrollmentRunner, EnrollmentStepResult
-from engine.enrollment.enrollment_session import EnrollmentState
+from engine.enrollment.enrollment_session import EnrollmentState, IdentityLimitError, DuplicateIdentityError
 from storage.template_store import SecureProfileStore
 from engine.ipc.session_coordinator import SessionCoordinator
 
@@ -348,6 +350,8 @@ class EnrollmentPipeServer:
         keep_existing: bool = True,
         profile_id: Optional[str] = None,
         blur_background: bool = True,
+        user_sid: Optional[str] = None,
+        activate: bool = True,
     ) -> EnrollmentRunner:
         with self._runner_lock:
             if self._runner is not None:
@@ -358,6 +362,10 @@ class EnrollmentPipeServer:
                     self._runner.target_profile_id = profile_id
                 if hasattr(self._runner, "blur_background"):
                     self._runner.blur_background = blur_background
+                if hasattr(self._runner, "target_user_sid"):
+                    self._runner.target_user_sid = user_sid
+                if hasattr(self._runner, "activate"):
+                    self._runner.activate = activate
                 self._active_runner = self._runner
                 return self._runner
 
@@ -369,6 +377,8 @@ class EnrollmentPipeServer:
                     keep_existing=keep_existing,
                     profile_id=profile_id,
                     blur_background=blur_background,
+                    user_sid=user_sid,
+                    activate=activate,
                 )
             else:
                 self._active_runner.display_name = display_name
@@ -376,6 +386,10 @@ class EnrollmentPipeServer:
                 self._active_runner.target_profile_id = profile_id
                 if hasattr(self._active_runner, "blur_background"):
                     self._active_runner.blur_background = blur_background
+                if hasattr(self._active_runner, "target_user_sid"):
+                    self._active_runner.target_user_sid = user_sid
+                if hasattr(self._active_runner, "activate"):
+                    self._active_runner.activate = activate
 
             return self._active_runner
 
@@ -610,11 +624,22 @@ class EnrollmentPipeServer:
 
                 try:
                     display_name = msg.get("display_name", "Primary User")
-                    keep_existing = bool(msg.get("keep_existing", False))
+                    keep_existing = bool(msg.get("keep_existing", True))
                     profile_id = msg.get("profile_id")
+                    activate = bool(msg.get("activate", True))
 
                     clean_preview = bool(msg.get("clean_preview", True))
                     blur_background = bool(msg.get("blur_background", True))
+
+                    store = getattr(self, "profile_store", None) or SecureProfileStore()
+                    existing_profiles = store.list_profiles()
+                    is_recapture = bool(profile_id and any(p.profile_id == profile_id for p in existing_profiles))
+                    if not is_recapture and len(existing_profiles) >= 5:
+                        logger.warning("Rejecting START_ENROLLMENT: maximum identity limit (5) reached.")
+                        session.write_message(
+                            make_enrollment_failed(REASON_IDENTITY_LIMIT, "Identity limit reached (maximum 5 identities)")
+                        )
+                        continue
 
                     self._run_enrollment_session(
                         session,
@@ -623,6 +648,7 @@ class EnrollmentPipeServer:
                         keep_existing=keep_existing,
                         profile_id=profile_id,
                         blur_background=blur_background,
+                        activate=activate,
                     )
                 finally:
                     if self.coordinator is not None:
@@ -641,9 +667,10 @@ class EnrollmentPipeServer:
         session: EnrollmentPipeClientSession,
         display_name: str,
         clean_preview: bool = False,
-        keep_existing: bool = False,
+        keep_existing: bool = True,
         profile_id: Optional[str] = None,
         blur_background: bool = True,
+        activate: bool = True,
     ):
         """
         Executes a live guided enrollment session:
@@ -653,7 +680,7 @@ class EnrollmentPipeServer:
         4. Streams PREVIEW_FRAME messages only to verified client.
         5. Emits POSE_COMPLETE and ENROLLMENT_COMPLETE.
         """
-        logger.info(f"Starting enrollment session for display_name='{display_name}' (clean_preview={clean_preview}, keep_existing={keep_existing}, blur_background={blur_background})")
+        logger.info(f"Starting enrollment session for display_name='{display_name}' (clean_preview={clean_preview}, keep_existing={keep_existing}, blur_background={blur_background}, activate={activate})")
 
         # Requirement 6: Verify client process SID matches enrolled user before streaming frames
         client_sid = get_client_process_sid(session.handle)
@@ -669,6 +696,8 @@ class EnrollmentPipeServer:
             keep_existing=keep_existing,
             profile_id=profile_id,
             blur_background=blur_background,
+            user_sid=self.enrolled_user_sid,
+            activate=activate,
         )
 
         if hasattr(runner, "start_camera") and not runner.start_camera():
@@ -681,6 +710,8 @@ class EnrollmentPipeServer:
                 display_name=display_name,
                 keep_existing=keep_existing,
                 profile_id=profile_id,
+                user_sid=self.enrolled_user_sid,
+                activate=activate,
             )
         except TypeError:
             runner.start(display_name=display_name)
@@ -801,10 +832,22 @@ class EnrollmentPipeServer:
                             runner.saved_profile.profile_id,
                         )
                     else:
-                        logger.error("Enrollment reached complete state but profile could not be saved.")
-                        session.write_message(
-                            make_enrollment_failed(REASON_INTERNAL_ERROR, "Failed to save biometric profile")
-                        )
+                        runner_err = getattr(runner, "_error", None)
+                        if isinstance(runner_err, DuplicateIdentityError):
+                            logger.warning(f"Enrollment rejected due to duplicate identity: {runner_err}")
+                            session.write_message(
+                                make_enrollment_failed(REASON_DUPLICATE_IDENTITY, str(runner_err))
+                            )
+                        elif isinstance(runner_err, IdentityLimitError):
+                            logger.warning(f"Enrollment rejected due to identity limit: {runner_err}")
+                            session.write_message(
+                                make_enrollment_failed(REASON_IDENTITY_LIMIT, str(runner_err))
+                            )
+                        else:
+                            logger.error(f"Enrollment reached complete state but profile could not be saved: {runner_err}")
+                            session.write_message(
+                                make_enrollment_failed(REASON_INTERNAL_ERROR, "Failed to save biometric profile")
+                            )
                     break
 
                 elapsed = time.time() - loop_start

@@ -9,12 +9,7 @@ namespace PeekSetup.Services
     {
         public async Task<int> LaunchLinkPasswordAsync(string username, string sid, string profileId)
         {
-            string? exePath = Environment.ProcessPath;
-            if (string.IsNullOrEmpty(exePath))
-            {
-                exePath = Process.GetCurrentProcess().MainModule?.FileName;
-            }
-
+            string? exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
             var startInfo = new ProcessStartInfo
             {
                 FileName = exePath,
@@ -23,21 +18,39 @@ namespace PeekSetup.Services
                 Verb = "runas"
             };
 
-            try
+            return await RunElevatedProcessAsync(startInfo);
+        }
+
+        public async Task<int> LaunchAuthorizeIdentityAsync(string sid, string profileId, string? username = null)
+        {
+            string? exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+            string args = string.IsNullOrWhiteSpace(username)
+                ? $"--authorize-identity --sid \"{sid}\" --profile-id \"{profileId}\""
+                : $"--authorize-identity --sid \"{sid}\" --profile-id \"{profileId}\" --user \"{username}\"";
+
+            var startInfo = new ProcessStartInfo
             {
-                using var proc = Process.Start(startInfo);
-                if (proc == null) return 3; // other failure
-                await proc.WaitForExitAsync();
-                return proc.ExitCode;
-            }
-            catch (Win32Exception ex) when (ex.NativeErrorCode == 1223) // ERROR_CANCELLED (UAC declined)
+                FileName = exePath,
+                Arguments = args,
+                UseShellExecute = true,
+                Verb = "runas"
+            };
+
+            return await RunElevatedProcessAsync(startInfo);
+        }
+
+        public async Task<int> LaunchRevokeIdentityAsync(string sid, string profileId)
+        {
+            string? exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+            var startInfo = new ProcessStartInfo
             {
-                return 4; // UAC declined
-            }
-            catch
-            {
-                return 3; // other failure
-            }
+                FileName = exePath,
+                Arguments = $"--revoke-identity --sid \"{sid}\" --profile-id \"{profileId}\"",
+                UseShellExecute = true,
+                Verb = "runas"
+            };
+
+            return await RunElevatedProcessAsync(startInfo);
         }
 
         public async Task<int> LaunchUnlinkAsync(string sid)
@@ -51,20 +64,25 @@ namespace PeekSetup.Services
                 Verb = "runas"
             };
 
+            return await RunElevatedProcessAsync(startInfo);
+        }
+
+        private static async Task<int> RunElevatedProcessAsync(ProcessStartInfo startInfo)
+        {
             try
             {
                 using var proc = Process.Start(startInfo);
-                if (proc == null) return 3;
+                if (proc == null) return PasswordLinker.ExitError; // 3 other failure
                 await proc.WaitForExitAsync();
                 return proc.ExitCode;
             }
-            catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+            catch (Win32Exception ex) when (ex.NativeErrorCode == 1223) // ERROR_CANCELLED (UAC declined)
             {
-                return 4;
+                return PasswordLinker.ExitUacDeclined; // 4 UAC declined
             }
             catch
             {
-                return 3;
+                return PasswordLinker.ExitError; // 3 other failure
             }
         }
     }

@@ -58,11 +58,14 @@ namespace PeekSetup.Tests
         public bool LastStartedKeepExisting { get; private set; }
         public string? LastStartedProfileId { get; private set; }
 
-        public Task StartEnrollmentAsync(string displayName, bool keepExisting = true, string? profileId = null, CancellationToken ct = default)
+        public bool LastStartedActivate { get; private set; }
+
+        public Task StartEnrollmentAsync(string displayName, bool keepExisting = true, string? profileId = null, bool activate = true, CancellationToken ct = default)
         {
             LastStartedDisplayName = displayName;
             LastStartedKeepExisting = keepExisting;
             LastStartedProfileId = profileId;
+            LastStartedActivate = activate;
             return Task.CompletedTask;
         }
 
@@ -132,6 +135,18 @@ namespace PeekSetup.Tests
             CallCount++;
             LastProfileId = profileId;
             return ShouldLinkSucceed;
+        }
+
+        public int AuthorizeIdentity(string profileId, SecureString password, string? username = null, string? sid = null)
+        {
+            CallCount++;
+            LastProfileId = profileId;
+            return ShouldLinkSucceed ? 0 : 2;
+        }
+
+        public int RevokeIdentity(string profileId, string sid)
+        {
+            return 0;
         }
 
         public bool UnlinkPassword(string sid)

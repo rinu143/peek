@@ -478,6 +478,7 @@ void PeekPipeClient::ParseAndDispatchMessage(const std::string& line, PeekAuthRe
 
     result.detail = msg.detail;
     result.displayName = msg.displayName;
+    result.profileId = msg.profileId;
     result.reasonCode = msg.reasonCode;
     result.promptText = msg.promptText;
     result.isAuthorizedToUnlock = msg.isAuthorizedToUnlock;

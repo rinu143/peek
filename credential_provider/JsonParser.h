@@ -464,6 +464,7 @@ namespace PeekJson
         std::wstring protocolVersion;
         std::wstring nonce;
         std::wstring displayName;
+        std::wstring profileId;
         std::wstring detail;
         std::wstring reasonCode;
         std::wstring promptText;
@@ -538,6 +539,7 @@ namespace PeekJson
             // 4. Extract optional generic fields
             root.GetString("detail", outMsg.detail);
             root.GetString("display_name", outMsg.displayName);
+            root.GetString("profile_id", outMsg.profileId);
             root.GetString("reason_code", outMsg.reasonCode);
             root.GetString("prompt_text", outMsg.promptText);
             root.GetString("nonce", outMsg.nonce);
@@ -547,14 +549,6 @@ namespace PeekJson
             // 5. Strict schema enforcement for AUTHENTICATED messages
             if (outMsg.type == L"AUTHENTICATED")
             {
-                // CRITICAL SECURITY CONSTRAINT: profile_id must NOT be present in AUTHENTICATED
-                if (root.HasKey("profile_id"))
-                {
-                    outMsg.isValid = false;
-                    outMsg.parseError = L"Security violation: 'profile_id' received in AUTHENTICATED message";
-                    return false;
-                }
-
                 // is_authorized_to_unlock must be true
                 if (!outMsg.isAuthorizedToUnlock)
                 {

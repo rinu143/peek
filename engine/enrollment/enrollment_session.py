@@ -7,7 +7,7 @@ SECURITY CONSTRAINTS:
 2. Only 512-D float vectors and minimal quality metrics are persisted.
 3. Templates are encrypted via Windows DPAPI before touching disk.
 4. Profile IDs are generated as UUID4.
-5. Explicit confirmation is strictly required to replace an existing enabled profile.
+5. Multi-identity architecture: new identities or recapture of existing identity.
 """
 
 import os
@@ -29,7 +29,17 @@ from storage.template_store import SecureProfileStore, PeekProfile, PeekTemplate
 logger = logging.getLogger("Peek.EnrollmentSession")
 
 
+class IdentityLimitError(Exception):
+    """Raised when the maximum number of identities (5) is reached."""
+    pass
 
+
+class DuplicateIdentityError(Exception):
+    """Raised when a new identity duplicates an existing enrolled identity."""
+    def __init__(self, message: str, duplicate_name: str = "", duplicate_id: str = ""):
+        super().__init__(message)
+        self.duplicate_name = duplicate_name
+        self.duplicate_id = duplicate_id
 
 
 class EnrollmentState(str, Enum):
@@ -273,38 +283,83 @@ class EnrollmentSession:
         display_name: str = "Primary User",
         profile_id: Optional[str] = None,
         user_sid: Optional[str] = None,
-        keep_existing: bool = False,
+        keep_existing: bool = True,
+        activate: bool = True,
+        matching_threshold: float = 0.50,
     ) -> PeekProfile:
         """
         Creates and encrypts the completed PeekProfile with Windows DPAPI.
-        When keep_existing=True, existing enabled profiles are preserved for multi-identity support.
+        Handles recapture of existing profiles atomically, or creates new profiles
+        with duplicate and identity limit checks.
         """
         if not self.final_templates:
             raise ValueError("No templates enrolled to create a profile.")
 
         existing_profiles = self.profile_store.list_profiles()
-        enabled_existing = [p for p in existing_profiles if p.enabled]
 
-        if not keep_existing:
-            for prev_profile in enabled_existing:
-                prev_profile.enabled = False
-                self.profile_store.save_profile(prev_profile)
-                logger.info(
-                    "Disabled previous active profile '%s' (%s) for single-user replacement.",
-                    prev_profile.display_name,
-                    prev_profile.profile_id,
-                )
+        # Check for recapture
+        recapture_target: Optional[PeekProfile] = None
+        if profile_id:
+            for ep in existing_profiles:
+                if ep.profile_id == profile_id:
+                    recapture_target = ep
+                    break
+
+        if recapture_target is not None:
+            # Recapture: build new templates in memory and replace the file atomically;
+            # keep enabled, created_at, user_sid and display_name.
+            recapture_target.templates = self.final_templates
+            self.profile_store.save_profile(recapture_target)
+            logger.info(
+                "Recaptured and saved profile '%s' (UUID=%s) with %d templates.",
+                recapture_target.display_name,
+                recapture_target.profile_id,
+                len(recapture_target.templates),
+            )
+            return recapture_target
+
+        # New identity: enforce maximum limit
+        if len(existing_profiles) >= 5:
+            raise IdentityLimitError("Maximum number of identities (5) reached")
+
+        # Duplicate check against existing templates
+        new_embs = [np.asarray(t.embedding, dtype=np.float32) for t in self.final_templates]
+        for ep in existing_profiles:
+            threshold = ep.matching_threshold or matching_threshold
+            for et in ep.templates:
+                e_vec = np.asarray(et.embedding, dtype=np.float32)
+                for n_vec in new_embs:
+                    sim = float(np.dot(n_vec, e_vec))
+                    if sim >= threshold:
+                        logger.warning(
+                            "Duplicate identity detected: new templates match profile '%s' (%s) with similarity %.3f (threshold %.3f)",
+                            ep.display_name, ep.profile_id, sim, threshold
+                        )
+                        raise DuplicateIdentityError(
+                            f"Duplicate identity detected matching '{ep.display_name}'",
+                            duplicate_name=ep.display_name,
+                            duplicate_id=ep.profile_id,
+                        )
 
         pid = profile_id or str(uuid.uuid4())
+        should_enable = bool(activate)
+
         profile = PeekProfile(
             profile_id=pid,
             display_name=display_name,
-            matching_threshold=0.50,
+            matching_threshold=matching_threshold,
             templates=self.final_templates,
-            enabled=True,
+            enabled=should_enable,
             user_sid=user_sid,
+            created_at=time.time(),
         )
 
         self.profile_store.save_profile(profile)
-        logger.info("Encrypted and saved multi-pose profile '%s' (UUID=%s) with %d templates.", display_name, pid, len(profile.templates))
+        logger.info(
+            "Encrypted and saved multi-pose profile '%s' (UUID=%s, enabled=%s) with %d templates.",
+            display_name,
+            pid,
+            should_enable,
+            len(profile.templates),
+        )
         return profile

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Security;
 using System.Security.Cryptography;
 using System.Security.Principal;
@@ -11,15 +12,26 @@ namespace PeekSetup.Services
         private readonly IPasswordValidator _validator;
         private readonly ILsaSecretStore _secretStore;
         private readonly IAccountSidResolver _sidResolver;
+        private readonly IAuthorizationStore _authStore;
+
+        public const int ExitOk = 0;
+        public const int ExitCancelled = 1;
+        public const int ExitWrongPassword = 2;
+        public const int ExitError = 3;
+        public const int ExitUacDeclined = 4;
+        public const int ExitIdentityLimit = 5;
+        public const int ExitNotLinkedYet = 6;
 
         public PasswordLinker(
             IPasswordValidator? validator = null,
             ILsaSecretStore? secretStore = null,
-            IAccountSidResolver? sidResolver = null)
+            IAccountSidResolver? sidResolver = null,
+            IAuthorizationStore? authStore = null)
         {
             _validator = validator ?? new WindowsPasswordValidator();
             _secretStore = secretStore ?? new LsaSecretStore();
             _sidResolver = sidResolver ?? new AccountSidResolver();
+            _authStore = authStore ?? new RegistryAuthorizationStore();
         }
 
         public bool LinkPassword(string profileId, SecureString password, string? username = null, string? sid = null)
@@ -49,11 +61,8 @@ namespace PeekSetup.Services
                 return false;
             }
 
-            // 3. Build binary payload:
-            // [DWORD version (=1)]
-            // [DWORD profileIdBytes] + [UTF-16LE profile_id]
-            // [DWORD passwordBytes] + [UTF-16LE password]
-            byte[] payload = SecretPayloadBuilder.BuildPayload(profileId, password);
+            // 3. Build binary v2 payload: [DWORD version=2][DWORD passwordBytes][UTF-16LE password]
+            byte[] payload = SecretPayloadBuilder.BuildPayload(password);
 
             try
             {
@@ -63,6 +72,9 @@ namespace PeekSetup.Services
 
                 if (success)
                 {
+                    // 5. Set Authorized = [profile_id] in authorization store
+                    _authStore.SetAuthorizedIdentities(targetSid, new[] { profileId });
+
                     // Clean up obsolete legacy DPAPI .secret file if present
                     DeleteLegacySecretFile(profileId);
                 }
@@ -77,6 +89,105 @@ namespace PeekSetup.Services
             }
         }
 
+        public int AuthorizeIdentity(string profileId, SecureString password, string? username = null, string? sid = null)
+        {
+            if (string.IsNullOrWhiteSpace(profileId) || password == null || password.Length == 0)
+            {
+                return ExitError;
+            }
+
+            string targetSid = sid ?? WindowsIdentity.GetCurrent().User?.Value ?? string.Empty;
+            if (string.IsNullOrEmpty(targetSid))
+            {
+                return ExitError;
+            }
+
+            string user = string.IsNullOrWhiteSpace(username) ? Environment.UserName : username;
+
+            // 1. Resolve and validate that username maps to targetSid if username was supplied
+            if (!string.IsNullOrWhiteSpace(username) && !_sidResolver.ValidateUserSid(user, targetSid))
+            {
+                return ExitError;
+            }
+
+            // 2. Require that a link already exists (registry list non-empty, otherwise exit 6)
+            var authorized = _authStore.GetAuthorizedIdentities(targetSid);
+            if (authorized == null || authorized.Length == 0)
+            {
+                return ExitNotLinkedYet; // 6: not linked yet
+            }
+
+            // 3. Check cap of 5: if not already in list and already 5 identities, return 5
+            if (!authorized.Contains(profileId, StringComparer.OrdinalIgnoreCase) && authorized.Length >= RegistryAuthorizationStore.MaxAuthorizedIdentities)
+            {
+                return ExitIdentityLimit; // 5: identity limit
+            }
+
+            // 4. Verify password for target user with LogonUserW (3 attempts handled by caller)
+            if (!_validator.Validate(user, password))
+            {
+                return ExitWrongPassword; // 2: wrong password
+            }
+
+            // 5. Rewrite v2 secret with verified password
+            byte[] payload = SecretPayloadBuilder.BuildPayload(password);
+            try
+            {
+                string keyName = SecretPayloadBuilder.GetSecretKeyName(targetSid);
+                bool success = _secretStore.StoreSecret(keyName, payload);
+                if (!success)
+                {
+                    return ExitError;
+                }
+
+                // 6. Append the id (dedupe, cap 5)
+                bool added = _authStore.AddAuthorizedIdentity(targetSid, profileId);
+                if (!added)
+                {
+                    return ExitIdentityLimit;
+                }
+
+                DeleteLegacySecretFile(profileId);
+                return ExitOk; // 0: ok
+            }
+            catch
+            {
+                return ExitError;
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(payload);
+            }
+        }
+
+        public int RevokeIdentity(string profileId, string sid)
+        {
+            if (string.IsNullOrWhiteSpace(profileId) || string.IsNullOrWhiteSpace(sid))
+            {
+                return ExitError;
+            }
+
+            try
+            {
+                _authStore.RemoveAuthorizedIdentity(sid, profileId);
+
+                // If the list becomes empty remove the secret as well
+                var remaining = _authStore.GetAuthorizedIdentities(sid);
+                if (remaining == null || remaining.Length == 0)
+                {
+                    string keyName = SecretPayloadBuilder.GetSecretKeyName(sid);
+                    _secretStore.DeleteSecret(keyName);
+                    _authStore.DeleteIdentitiesKey(sid);
+                }
+
+                return ExitOk;
+            }
+            catch
+            {
+                return ExitError;
+            }
+        }
+
         public bool UnlinkPassword(string sid)
         {
             if (string.IsNullOrWhiteSpace(sid))
@@ -85,7 +196,10 @@ namespace PeekSetup.Services
             }
 
             string keyName = SecretPayloadBuilder.GetSecretKeyName(sid);
-            return _secretStore.DeleteSecret(keyName);
+            bool secretDeleted = _secretStore.DeleteSecret(keyName);
+            bool storeDeleted = _authStore.DeleteIdentitiesKey(sid);
+
+            return secretDeleted || storeDeleted;
         }
 
         public static void DeleteLegacySecretFile(string profileId)
@@ -101,7 +215,7 @@ namespace PeekSetup.Services
             }
             catch
             {
-                // Non-fatal cleanup
+                // Best-effort cleanup
             }
         }
     }

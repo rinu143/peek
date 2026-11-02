@@ -134,6 +134,7 @@ namespace PeekSetup.Services
             string displayName,
             bool keepExisting = true,
             string? profileId = null,
+            bool activate = true,
             CancellationToken ct = default)
         {
             if (!IsConnected || _writer == null)
@@ -145,7 +146,8 @@ namespace PeekSetup.Services
                 displayName,
                 cleanPreview: true,
                 keepExisting: keepExisting,
-                profileId: profileId);
+                profileId: profileId,
+                activate: activate);
             await SendLineAsync(message, ct).ConfigureAwait(false);
         }
 

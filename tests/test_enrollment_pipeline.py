@@ -176,22 +176,24 @@ class TestEnrollmentPipeline(unittest.TestCase):
         self.assertEqual(loaded.templates[0].pose_label, "CENTER")
         self.assertEqual(loaded.templates[1].pose_label, "LEFT")
 
-    def test_re_enrollment_replaces_and_disables_previous_profile(self):
+    def test_multi_identity_enrollment_and_recapture(self):
         """
-        Validates active-profile replacement semantics:
-        Enrolling a second profile sets any existing profile's enabled flag to False,
-        persists that change, and ensures exactly one profile is enabled afterward.
-        Old profiles are NOT deleted outright (retaining recoverability).
+        Validates multi-identity enrollment semantics:
+        1. New identities saved with activate=False are pending (enabled=False), and
+           existing profiles remain untouched (NOT disabled).
+        2. Recapture replaces templates atomically while preserving enabled, created_at, and display_name.
+        3. Enrolling a duplicate identity raises DuplicateIdentityError.
         """
         from storage.template_store import PeekTemplate
+        from engine.enrollment.enrollment_session import DuplicateIdentityError, IdentityLimitError
 
         aligner = FaceAligner()
         embedder = ArcFaceEmbedder(self.emb_path)
 
-        dummy_embedding = np.random.randn(512).astype(np.float32)
-        dummy_embedding /= np.linalg.norm(dummy_embedding)
+        dummy_embedding1 = np.random.randn(512).astype(np.float32)
+        dummy_embedding1 /= np.linalg.norm(dummy_embedding1)
 
-        # 1. Enroll First Profile
+        # 1. Enroll First Profile (active)
         session1 = EnrollmentSession(
             detector=None,
             aligner=aligner,
@@ -201,21 +203,19 @@ class TestEnrollmentPipeline(unittest.TestCase):
         session1.final_templates = [
             PeekTemplate(
                 template_id=f"tmpl1_{p.value.lower()}",
-                embedding=dummy_embedding.tolist(),
+                embedding=dummy_embedding1.tolist(),
                 pose_label=p.value,
                 quality_score=0.95
             )
             for p in session1.poses
         ]
-        profile1 = session1.finalize_and_save_profile("User One", profile_id="profile_first")
+        profile1 = session1.finalize_and_save_profile("User One", profile_id="profile_first", activate=True)
         self.assertTrue(profile1.enabled)
 
-        # Verify profile 1 is enabled on disk
-        stored_p1 = self.profile_store.load_profile("profile_first")
-        self.assertIsNotNone(stored_p1)
-        self.assertTrue(stored_p1.enabled)
+        # 2. Enroll Second Profile (New identity, activate=False by default)
+        dummy_embedding2 = np.random.randn(512).astype(np.float32)
+        dummy_embedding2 /= np.linalg.norm(dummy_embedding2)
 
-        # 2. Enroll Second Profile (Re-enrollment)
         session2 = EnrollmentSession(
             detector=None,
             aligner=aligner,
@@ -225,33 +225,63 @@ class TestEnrollmentPipeline(unittest.TestCase):
         session2.final_templates = [
             PeekTemplate(
                 template_id=f"tmpl2_{p.value.lower()}",
-                embedding=dummy_embedding.tolist(),
+                embedding=dummy_embedding2.tolist(),
                 pose_label=p.value,
                 quality_score=0.95
             )
             for p in session2.poses
         ]
-        # Single-user replacement automatically disables previous active profile
-        profile2 = session2.finalize_and_save_profile("User Two", profile_id="profile_second", keep_existing=False)
-        self.assertTrue(profile2.enabled)
+        profile2 = session2.finalize_and_save_profile("User Two", profile_id="profile_second", activate=False)
+        self.assertFalse(profile2.enabled, "New identity must be saved enabled=False (pending)")
 
-        # Verify profile 1 was disabled, NOT deleted
-        reloaded_p1 = self.profile_store.load_profile("profile_first")
-        self.assertIsNotNone(reloaded_p1, "Old profile was deleted; must be retained in disabled state")
-        self.assertFalse(reloaded_p1.enabled, "Old profile was not disabled")
+        # Verify profile 1 is still enabled and profile 2 is pending
+        p1 = self.profile_store.load_profile("profile_first")
+        p2 = self.profile_store.load_profile("profile_second")
+        self.assertTrue(p1.enabled, "Existing profile must not be disabled")
+        self.assertFalse(p2.enabled, "New profile must be pending")
 
-        # Verify profile 2 is enabled
-        reloaded_p2 = self.profile_store.load_profile("profile_second")
-        self.assertIsNotNone(reloaded_p2)
-        self.assertTrue(reloaded_p2.enabled)
+        # 3. Recapture profile 1: replaces templates, keeps enabled=True, display_name="User One"
+        dummy_embedding_recap = np.random.randn(512).astype(np.float32)
+        dummy_embedding_recap /= np.linalg.norm(dummy_embedding_recap)
 
-        # Verify list_profiles has both profiles, but exactly ONE is enabled
-        all_profiles = self.profile_store.list_profiles()
-        self.assertEqual(len(all_profiles), 2)
-        enabled_profiles = [p for p in all_profiles if p.enabled]
-        self.assertEqual(len(enabled_profiles), 1)
-        self.assertEqual(enabled_profiles[0].profile_id, "profile_second")
-        self.assertEqual(enabled_profiles[0].display_name, "User Two")
+        session_recap = EnrollmentSession(
+            detector=None,
+            aligner=aligner,
+            embedder=embedder,
+            profile_store=self.profile_store,
+        )
+        session_recap.final_templates = [
+            PeekTemplate(
+                template_id=f"tmpl_recap_{p.value.lower()}",
+                embedding=dummy_embedding_recap.tolist(),
+                pose_label=p.value,
+                quality_score=0.98
+            )
+            for p in session_recap.poses
+        ]
+        recap_profile = session_recap.finalize_and_save_profile("Ignored Name", profile_id="profile_first")
+        self.assertTrue(recap_profile.enabled)
+        self.assertEqual(recap_profile.display_name, "User One")
+        self.assertEqual(recap_profile.templates[0].quality_score, 0.98)
+
+        # 4. Duplicate identity check: trying to enroll new profile matching profile 1's templates
+        session_dup = EnrollmentSession(
+            detector=None,
+            aligner=aligner,
+            embedder=embedder,
+            profile_store=self.profile_store,
+        )
+        session_dup.final_templates = [
+            PeekTemplate(
+                template_id=f"tmpl_dup_{p.value.lower()}",
+                embedding=dummy_embedding_recap.tolist(),
+                pose_label=p.value,
+                quality_score=0.95
+            )
+            for p in session_dup.poses
+        ]
+        with self.assertRaises(DuplicateIdentityError):
+            session_dup.finalize_and_save_profile("Duplicate User", profile_id="profile_dup")
 
 
 if __name__ == "__main__":

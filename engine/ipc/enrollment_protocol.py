@@ -10,8 +10,8 @@ SECURITY & DESIGN PRINCIPLES:
    without leaking raw internal stack traces across the pipe.
 4. Profile ID and frame protection: profile_id is excluded from status responses;
    preview frames are only streamed to a client verified as the enrolled user's process.
-5. Explicit replacement confirmation: replacing an existing enabled profile requires
-   explicit user confirmation or current password verification.
+5. Multi-identity architecture: new identities or recapture of existing identity;
+   no plaintext password verification across pipes.
 """
 
 import json
@@ -65,6 +65,8 @@ REASON_INTERNAL_ERROR = "INTERNAL_ERROR"
 REASON_QUALITY_FAILED = "QUALITY_FAILED"
 REASON_TIMEOUT = "TIMEOUT"
 REASON_CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
+REASON_IDENTITY_LIMIT = "IDENTITY_LIMIT"
+REASON_DUPLICATE_IDENTITY = "DUPLICATE_IDENTITY"
 
 
 class ProtocolError(Exception):
@@ -149,15 +151,23 @@ def make_start_enrollment(
     display_name: str = "Primary User",
     clean_preview: bool = True,
     blur_background: bool = True,
+    keep_existing: bool = True,
+    profile_id: Optional[str] = None,
+    activate: bool = True,
 ) -> Dict[str, Any]:
-    return {
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_START_ENROLLMENT,
         "display_name": str(display_name),
         "clean_preview": bool(clean_preview),
         "blur_background": bool(blur_background),
+        "keep_existing": bool(keep_existing),
+        "activate": bool(activate),
         "timestamp": time.time(),
     }
+    if profile_id:
+        msg["profile_id"] = str(profile_id)
+    return msg
 
 
 def make_cancel_enrollment(reason: str = "USER_CANCELLED") -> Dict[str, Any]:
