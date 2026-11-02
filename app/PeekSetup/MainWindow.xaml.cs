@@ -50,34 +50,44 @@ namespace PeekSetup
             base.OnClosing(e);
         }
 
-        private void NewIdentityPasswordBox_PasswordChanged(object sender, RoutedEventArgs e)
-        {
-            if (DataContext is MainViewModel vm && sender is System.Windows.Controls.PasswordBox pb)
-            {
-                vm.PasswordVerificationInput = pb.Password;
-            }
-        }
-
-        private void NewIdentityPasswordBox_KeyDown(object sender, KeyEventArgs e)
+        private async void ConfirmDialogSubmitButton_Click(object sender, RoutedEventArgs e)
         {
             if (DataContext is MainViewModel vm)
             {
-                if (e.Key == Key.Enter && vm.VerifyPasswordForAddCommand.CanExecute(null))
+                var sec = ConfirmDialogPasswordBox.SecurePassword;
+                ConfirmDialogPasswordBox.Clear();
+                await vm.VerifyConfirmPasswordAsync(sec);
+            }
+        }
+
+        private async void ConfirmDialogPasswordBox_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (DataContext is MainViewModel vm)
+            {
+                if (e.Key == Key.Enter)
                 {
-                    vm.VerifyPasswordForAddCommand.Execute(null);
+                    var sec = ConfirmDialogPasswordBox.SecurePassword;
+                    ConfirmDialogPasswordBox.Clear();
+                    await vm.VerifyConfirmPasswordAsync(sec);
+                    e.Handled = true;
                 }
-                else if (e.Key == Key.Escape && vm.CancelAddIdentityCommand.CanExecute(null))
+                else if (e.Key == Key.Escape)
                 {
-                    vm.CancelAddIdentityCommand.Execute(null);
+                    ConfirmDialogPasswordBox.Clear();
+                    if (vm.CancelConfirmPasswordDialogCommand.CanExecute(null))
+                    {
+                        vm.CancelConfirmPasswordDialogCommand.Execute(null);
+                    }
+                    e.Handled = true;
                 }
             }
         }
 
-        private void NewIdentityPasswordBox_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+        private void ConfirmDialogPasswordBox_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
         {
             if (sender is System.Windows.Controls.PasswordBox pb && pb.IsVisible)
             {
-                pb.Password = string.Empty;
+                pb.Clear();
                 pb.Focus();
             }
         }

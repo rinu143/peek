@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Security;
+using System.Security.Principal;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -18,7 +19,8 @@ namespace PeekSetup.ViewModels
         Enrollment = 2,
         PasswordLink = 3,
         Done = 4,
-        AlreadyEnrolled = 5
+        AlreadyEnrolled = 5,
+        ConfirmIdentityAuthorize = 6
     }
 
     public enum EnrollmentViewMode
@@ -36,17 +38,38 @@ namespace PeekSetup.ViewModels
         private readonly IPasswordLinkLauncher _linkLauncher;
         private readonly IProfileManager _profileManager;
         private readonly IPasswordValidator _passwordValidator;
+        private readonly IAuthorizationStore _authStore;
 
         public ObservableCollection<IdentityItemViewModel> Identities { get; } = new();
 
         private bool _isAddingNewIdentity;
-        private bool _isPasswordVerifiedForAdd;
+        private bool _isPasswordVerifiedForAdd = true;
         private bool _isAddingSecondaryFace;
         private string? _recapturingProfileId;
         private string _newIdentityName = string.Empty;
         private string _passwordVerificationInput = string.Empty;
         private string _passwordVerificationError = string.Empty;
         private bool _isVerifyingPasswordForAdd;
+
+        private string _authorizeErrorMessage = string.Empty;
+        private int _authorizeExitCode;
+        private bool _isAuthorizingIdentity;
+
+        private bool _isConfirmPasswordDialogOpen;
+        private string _confirmPasswordDialogTitle = "Confirm It's You";
+        private string _confirmPasswordDialogDescription = string.Empty;
+        private string _confirmPasswordDialogError = string.Empty;
+        private int _confirmPasswordAttemptsRemaining = 3;
+        private bool _isVerifyingConfirmPassword;
+        private Func<Task>? _confirmPasswordAction;
+        private Action? _confirmPasswordCancelAction;
+
+        private bool _isDeleteConfirmationDialogOpen;
+        private IdentityItemViewModel? _deletingItem;
+        private bool _isOfferRevokeDialogOpen;
+        private string _revokingProfileId = string.Empty;
+        private string _revokingProfileName = string.Empty;
+        private bool _isOfferUnlinkDialogOpen;
 
         private SetupStep _currentStep = SetupStep.Welcome;
         private string _displayName = Environment.UserName;
@@ -140,6 +163,7 @@ namespace PeekSetup.ViewModels
                     OnPropertyChanged(nameof(IsPasswordLinkStep));
                     OnPropertyChanged(nameof(IsDoneStep));
                     OnPropertyChanged(nameof(IsAlreadyEnrolledStep));
+                    OnPropertyChanged(nameof(IsConfirmAuthorizeStep));
                     OnPropertyChanged(nameof(ShowStepIndicator));
                     OnPropertyChanged(nameof(StepNumberText));
                 }
@@ -151,8 +175,14 @@ namespace PeekSetup.ViewModels
         public bool IsPasswordLinkStep => CurrentStep == SetupStep.PasswordLink;
         public bool IsDoneStep => CurrentStep == SetupStep.Done;
         public bool IsAlreadyEnrolledStep => CurrentStep == SetupStep.AlreadyEnrolled;
-        public bool ShowStepIndicator => CurrentStep != SetupStep.AlreadyEnrolled;
-        public string StepNumberText => CurrentStep == SetupStep.AlreadyEnrolled ? "Active Profile" : $"Step {(int)CurrentStep} of 4";
+        public bool IsConfirmAuthorizeStep => CurrentStep == SetupStep.ConfirmIdentityAuthorize;
+        public bool ShowStepIndicator => CurrentStep != SetupStep.AlreadyEnrolled && CurrentStep != SetupStep.ConfirmIdentityAuthorize;
+        public string StepNumberText => CurrentStep switch
+        {
+            SetupStep.AlreadyEnrolled => "Active Profile",
+            SetupStep.ConfirmIdentityAuthorize => "Authorization",
+            _ => $"Step {(int)CurrentStep} of 4"
+        };
 
         public string ExistingProfileName
         {
@@ -1144,6 +1174,198 @@ namespace PeekSetup.ViewModels
         public string UnlockBadgeText => IsPasswordLinked ? "Password Linked" : "Password Required";
         public string UnlockBadgeColor => IsPasswordLinked ? "#10B981" : "#F59E0B";
 
+        public bool CanAddIdentity => Identities.Count < 5;
+        public bool IsIdentityLimitReached => Identities.Count >= 5;
+        public string IdentityLimitExplanation => "Maximum 5 identities reached. To add another, delete an existing identity first.";
+
+        public string WindowsPasswordStatusText => IsPasswordLinked ? "Linked" : "Not linked";
+        public string WindowsPasswordStatusColor => IsPasswordLinked ? "#30D158" : "#FF9500";
+
+        public string AuthorizeErrorMessage
+        {
+            get => _authorizeErrorMessage;
+            set
+            {
+                if (_authorizeErrorMessage != value)
+                {
+                    _authorizeErrorMessage = value;
+                    OnPropertyChanged(nameof(AuthorizeErrorMessage));
+                    OnPropertyChanged(nameof(HasAuthorizeError));
+                }
+            }
+        }
+
+        public bool HasAuthorizeError => !string.IsNullOrEmpty(_authorizeErrorMessage);
+
+        public int AuthorizeExitCode
+        {
+            get => _authorizeExitCode;
+            set
+            {
+                if (_authorizeExitCode != value)
+                {
+                    _authorizeExitCode = value;
+                    OnPropertyChanged(nameof(AuthorizeExitCode));
+                    OnPropertyChanged(nameof(IsAuthorizeNotLinkedYet));
+                }
+            }
+        }
+
+        public bool IsAuthorizeNotLinkedYet => _authorizeExitCode == PasswordLinker.ExitNotLinkedYet;
+
+        public bool IsNotAuthorizingIdentity => !IsAuthorizingIdentity;
+
+        public bool IsAuthorizingIdentity
+        {
+            get => _isAuthorizingIdentity;
+            set
+            {
+                if (_isAuthorizingIdentity != value)
+                {
+                    _isAuthorizingIdentity = value;
+                    OnPropertyChanged(nameof(IsAuthorizingIdentity));
+                    OnPropertyChanged(nameof(IsNotAuthorizingIdentity));
+                }
+            }
+        }
+
+        // In-app confirm password dialog properties
+        public bool IsConfirmPasswordDialogOpen
+        {
+            get => _isConfirmPasswordDialogOpen;
+            set
+            {
+                if (_isConfirmPasswordDialogOpen != value)
+                {
+                    _isConfirmPasswordDialogOpen = value;
+                    OnPropertyChanged(nameof(IsConfirmPasswordDialogOpen));
+                }
+            }
+        }
+
+        public string ConfirmPasswordDialogTitle
+        {
+            get => _confirmPasswordDialogTitle;
+            set
+            {
+                if (_confirmPasswordDialogTitle != value)
+                {
+                    _confirmPasswordDialogTitle = value;
+                    OnPropertyChanged(nameof(ConfirmPasswordDialogTitle));
+                }
+            }
+        }
+
+        public string ConfirmPasswordDialogDescription
+        {
+            get => _confirmPasswordDialogDescription;
+            set
+            {
+                if (_confirmPasswordDialogDescription != value)
+                {
+                    _confirmPasswordDialogDescription = value;
+                    OnPropertyChanged(nameof(ConfirmPasswordDialogDescription));
+                }
+            }
+        }
+
+        public string ConfirmPasswordDialogError
+        {
+            get => _confirmPasswordDialogError;
+            set
+            {
+                if (_confirmPasswordDialogError != value)
+                {
+                    _confirmPasswordDialogError = value;
+                    OnPropertyChanged(nameof(ConfirmPasswordDialogError));
+                    OnPropertyChanged(nameof(HasConfirmPasswordDialogError));
+                }
+            }
+        }
+
+        public bool HasConfirmPasswordDialogError => !string.IsNullOrEmpty(_confirmPasswordDialogError);
+
+        public int ConfirmPasswordAttemptsRemaining
+        {
+            get => _confirmPasswordAttemptsRemaining;
+            set
+            {
+                if (_confirmPasswordAttemptsRemaining != value)
+                {
+                    _confirmPasswordAttemptsRemaining = value;
+                    OnPropertyChanged(nameof(ConfirmPasswordAttemptsRemaining));
+                }
+            }
+        }
+
+        public bool IsVerifyingConfirmPassword
+        {
+            get => _isVerifyingConfirmPassword;
+            set
+            {
+                if (_isVerifyingConfirmPassword != value)
+                {
+                    _isVerifyingConfirmPassword = value;
+                    OnPropertyChanged(nameof(IsVerifyingConfirmPassword));
+                }
+            }
+        }
+
+        // Delete confirmation & post-delete properties
+        public bool IsDeleteConfirmationDialogOpen
+        {
+            get => _isDeleteConfirmationDialogOpen;
+            set
+            {
+                if (_isDeleteConfirmationDialogOpen != value)
+                {
+                    _isDeleteConfirmationDialogOpen = value;
+                    OnPropertyChanged(nameof(IsDeleteConfirmationDialogOpen));
+                }
+            }
+        }
+
+        public string DeletingProfileName => _deletingItem?.DisplayName ?? string.Empty;
+
+        public bool IsOfferRevokeDialogOpen
+        {
+            get => _isOfferRevokeDialogOpen;
+            set
+            {
+                if (_isOfferRevokeDialogOpen != value)
+                {
+                    _isOfferRevokeDialogOpen = value;
+                    OnPropertyChanged(nameof(IsOfferRevokeDialogOpen));
+                }
+            }
+        }
+
+        public string RevokingProfileName
+        {
+            get => _revokingProfileName;
+            set
+            {
+                if (_revokingProfileName != value)
+                {
+                    _revokingProfileName = value;
+                    OnPropertyChanged(nameof(RevokingProfileName));
+                }
+            }
+        }
+
+        public bool IsOfferUnlinkDialogOpen
+        {
+            get => _isOfferUnlinkDialogOpen;
+            set
+            {
+                if (_isOfferUnlinkDialogOpen != value)
+                {
+                    _isOfferUnlinkDialogOpen = value;
+                    OnPropertyChanged(nameof(IsOfferUnlinkDialogOpen));
+                }
+            }
+        }
+
         // Commands
         public ICommand BeginEnrollmentCommand { get; }
         public ICommand CancelEnrollmentCommand { get; }
@@ -1161,9 +1383,19 @@ namespace PeekSetup.ViewModels
         public ICommand ConfirmAddIdentityCommand { get; }
         public ICommand CancelAddIdentityCommand { get; }
         public ICommand GoToProfileSectionCommand { get; }
+        public ICommand AuthorizeEnrolledIdentityCommand { get; }
+        public ICommand CancelAuthorizeEnrolledIdentityCommand { get; }
+        public ICommand UpdatePasswordLinkCommand { get; }
+        public ICommand CancelConfirmPasswordDialogCommand { get; }
+        public ICommand ConfirmDeleteCommand { get; }
+        public ICommand CancelDeleteCommand { get; }
+        public ICommand ConfirmRevokeIdentityCommand { get; }
+        public ICommand CloseOfferRevokeCommand { get; }
+        public ICommand ConfirmUnlinkPasswordCommand { get; }
+        public ICommand CloseOfferUnlinkCommand { get; }
 
         public MainViewModel()
-            : this(null, null, null, null, null)
+            : this(null, null, null, null, null, null)
         {
         }
 
@@ -1172,13 +1404,15 @@ namespace PeekSetup.ViewModels
             IPasswordLinker? passwordLinker = null,
             IPasswordLinkLauncher? linkLauncher = null,
             IProfileManager? profileManager = null,
-            IPasswordValidator? passwordValidator = null)
+            IPasswordValidator? passwordValidator = null,
+            IAuthorizationStore? authStore = null)
         {
             _pipeClient = pipeClient ?? new EnrollmentPipeClient();
             _passwordLinker = passwordLinker ?? new PasswordLinker();
             _linkLauncher = linkLauncher ?? new PasswordLinkLauncher();
             _profileManager = profileManager ?? new ProfileManager();
             _passwordValidator = passwordValidator ?? new WindowsPasswordValidator();
+            _authStore = authStore ?? new RegistryAuthorizationStore();
 
             InitializePoses();
             InitializeTicks();
@@ -1208,6 +1442,17 @@ namespace PeekSetup.ViewModels
             ConfirmAddIdentityCommand = new AsyncRelayCommand(ConfirmAddIdentityAsync);
             CancelAddIdentityCommand = new RelayCommand(CancelAddIdentity);
             GoToProfileSectionCommand = new AsyncRelayCommand(GoToProfileSectionAsync);
+
+            AuthorizeEnrolledIdentityCommand = new AsyncRelayCommand(AuthorizeEnrolledIdentityAsync);
+            CancelAuthorizeEnrolledIdentityCommand = new AsyncRelayCommand(CancelAuthorizeEnrolledIdentityAsync);
+            UpdatePasswordLinkCommand = new AsyncRelayCommand(LinkPasswordElevatedAsync);
+            CancelConfirmPasswordDialogCommand = new RelayCommand(CancelConfirmPasswordDialog);
+            ConfirmDeleteCommand = new AsyncRelayCommand(ConfirmDeleteAsync);
+            CancelDeleteCommand = new RelayCommand(CancelDelete);
+            ConfirmRevokeIdentityCommand = new AsyncRelayCommand(ConfirmRevokeIdentityAsync);
+            CloseOfferRevokeCommand = new RelayCommand(CloseOfferRevokeDialog);
+            ConfirmUnlinkPasswordCommand = new AsyncRelayCommand(ConfirmUnlinkPasswordAsync);
+            CloseOfferUnlinkCommand = new RelayCommand(CloseOfferUnlinkDialog);
         }
 
         private void InitializePoses()
@@ -1581,6 +1826,12 @@ namespace PeekSetup.ViewModels
         {
             try
             {
+                string currentSid = WindowsIdentity.GetCurrent().User?.Value ?? string.Empty;
+                if (!string.IsNullOrEmpty(currentSid))
+                {
+                    IsPasswordLinked = _authStore.HasAuthorizedIdentities(currentSid);
+                }
+
                 var profiles = await _profileManager.GetProfilesAsync().ConfigureAwait(false);
                 RunOnUi(() =>
                 {
@@ -1591,12 +1842,21 @@ namespace PeekSetup.ViewModels
                             p.ProfileId,
                             p.DisplayName,
                             p.Enabled,
+                            p.Authorized,
                             p.QualityPercentage,
+                            p.PoseQualities,
                             onToggle: (item, enabled) => ToggleProfileAsync(item, enabled),
                             onRecapture: item => RecaptureProfileAsync(item),
                             onDelete: item => DeleteProfileAsync(item),
-                            onRename: (item, newName) => RenameProfileAsync(item, newName)));
+                            onRename: (item, newName) => RenameProfileAsync(item, newName),
+                            onActivate: item => AuthorizeProfileAsync(item)));
                     }
+
+                    OnPropertyChanged(nameof(CanAddIdentity));
+                    OnPropertyChanged(nameof(IsIdentityLimitReached));
+                    OnPropertyChanged(nameof(WindowsPasswordStatusText));
+                    OnPropertyChanged(nameof(WindowsPasswordStatusColor));
+
                     if (Identities.Count > 0 && string.IsNullOrEmpty(ExistingProfileId))
                     {
                         ExistingProfileName = Identities[0].DisplayName;
@@ -1608,11 +1868,14 @@ namespace PeekSetup.ViewModels
                             ExistingProfileId,
                             ExistingProfileName,
                             true,
+                            true,
                             75,
+                            null,
                             onToggle: (item, enabled) => ToggleProfileAsync(item, enabled),
                             onRecapture: item => RecaptureProfileAsync(item),
                             onDelete: item => DeleteProfileAsync(item),
-                            onRename: (item, newName) => RenameProfileAsync(item, newName)));
+                            onRename: (item, newName) => RenameProfileAsync(item, newName),
+                            onActivate: item => AuthorizeProfileAsync(item)));
                     }
                 });
             }
@@ -1624,10 +1887,11 @@ namespace PeekSetup.ViewModels
 
         private void StartAddIdentity()
         {
+            if (!CanAddIdentity) return;
             PasswordVerificationInput = string.Empty;
             PasswordVerificationError = string.Empty;
-            NewIdentityName = string.Empty;
-            IsPasswordVerifiedForAdd = false;
+            NewIdentityName = $"{Environment.UserName} {Identities.Count + 1}";
+            IsPasswordVerifiedForAdd = true;
             IsAddingNewIdentity = true;
         }
 
@@ -1680,7 +1944,7 @@ namespace PeekSetup.ViewModels
             _recapturingProfileId = null;
             DisplayName = name;
             IsAddingNewIdentity = false;
-            IsPasswordVerifiedForAdd = false;
+            IsPasswordVerifiedForAdd = true;
             PasswordVerificationInput = string.Empty;
             PasswordVerificationError = string.Empty;
             NewIdentityName = string.Empty;
@@ -1691,43 +1955,364 @@ namespace PeekSetup.ViewModels
         private void CancelAddIdentity()
         {
             IsAddingNewIdentity = false;
-            IsPasswordVerifiedForAdd = false;
             PasswordVerificationInput = string.Empty;
             PasswordVerificationError = string.Empty;
+            NewIdentityName = string.Empty;
         }
 
-        public async Task RecaptureProfileAsync(IdentityItemViewModel item)
+        public string GetAuthorizeErrorMessage(int exitCode)
         {
-            _isAddingSecondaryFace = true;
-            _recapturingProfileId = item.ProfileId;
-            DisplayName = item.DisplayName;
-
-            await StartEnrollmentInternalAsync(keepExisting: true, profileId: item.ProfileId).ConfigureAwait(false);
+            return exitCode switch
+            {
+                PasswordLinker.ExitCancelled => "Authorization was cancelled. This identity remains pending until activated.",
+                PasswordLinker.ExitWrongPassword => "Incorrect Windows password. Maximum attempts reached.",
+                PasswordLinker.ExitError => "An unexpected error occurred while authorizing identity in Windows.",
+                PasswordLinker.ExitUacDeclined => "Administrator permission (UAC) was declined. Windows requires elevation to authorize.",
+                PasswordLinker.ExitIdentityLimit => "Identity limit reached. A maximum of 5 identities can be authorized to unlock this account.",
+                PasswordLinker.ExitNotLinkedYet => "Link your Windows password first. This account must have a linked password before authorizing additional identities.",
+                _ => $"Authorization exited with code {exitCode}."
+            };
         }
 
-        public async Task DeleteProfileAsync(IdentityItemViewModel item)
+        public async Task AuthorizeEnrolledIdentityAsync()
         {
-            await _profileManager.DeleteProfileAsync(item.ProfileId).ConfigureAwait(false);
+            string profileId = !string.IsNullOrEmpty(EnrolledProfileId) ? EnrolledProfileId : ExistingProfileId;
+            if (string.IsNullOrEmpty(profileId))
+            {
+                AuthorizeErrorMessage = "No identity selected for authorization.";
+                return;
+            }
+
+            string? sid = WindowsIdentity.GetCurrent().User?.Value;
+            if (string.IsNullOrEmpty(sid))
+            {
+                AuthorizeErrorMessage = "Could not resolve current Windows user account SID.";
+                return;
+            }
+
+            IsAuthorizingIdentity = true;
+            AuthorizeErrorMessage = string.Empty;
+            AuthorizeExitCode = 0;
+
+            try
+            {
+                int exitCode = await _linkLauncher.LaunchAuthorizeIdentityAsync(sid, profileId).ConfigureAwait(false);
+                if (exitCode == PasswordLinker.ExitOk)
+                {
+                    await _profileManager.ToggleProfileAsync(profileId, true).ConfigureAwait(false);
+                    await RefreshIdentitiesAsync().ConfigureAwait(false);
+                    RunOnUi(() =>
+                    {
+                        _isAddingSecondaryFace = false;
+                        _recapturingProfileId = null;
+                        IsAddingNewIdentity = false;
+                        AuthorizeErrorMessage = string.Empty;
+                        AuthorizeExitCode = 0;
+                        CurrentStep = SetupStep.AlreadyEnrolled;
+                    });
+                }
+                else
+                {
+                    RunOnUi(() =>
+                    {
+                        AuthorizeExitCode = exitCode;
+                        AuthorizeErrorMessage = GetAuthorizeErrorMessage(exitCode);
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                RunOnUi(() =>
+                {
+                    AuthorizeErrorMessage = $"Failed to launch authorization: {ex.Message}";
+                });
+            }
+            finally
+            {
+                RunOnUi(() => IsAuthorizingIdentity = false);
+            }
+        }
+
+        public async Task CancelAuthorizeEnrolledIdentityAsync()
+        {
+            _isAddingSecondaryFace = false;
+            _recapturingProfileId = null;
+            IsAddingNewIdentity = false;
+            AuthorizeErrorMessage = string.Empty;
+            AuthorizeExitCode = 0;
+            await RefreshIdentitiesAsync().ConfigureAwait(false);
+            RunOnUi(() => CurrentStep = SetupStep.AlreadyEnrolled);
+        }
+
+        public async Task AuthorizeProfileAsync(IdentityItemViewModel item)
+        {
+            string? sid = WindowsIdentity.GetCurrent().User?.Value;
+            if (string.IsNullOrEmpty(sid)) return;
+
+            int exitCode = await _linkLauncher.LaunchAuthorizeIdentityAsync(sid, item.ProfileId).ConfigureAwait(false);
+            if (exitCode == PasswordLinker.ExitOk)
+            {
+                await _profileManager.ToggleProfileAsync(item.ProfileId, true).ConfigureAwait(false);
+                await RefreshIdentitiesAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                RunOnUi(() =>
+                {
+                    EnrolledProfileId = item.ProfileId;
+                    EnrolledDisplayName = item.DisplayName;
+                    AuthorizeExitCode = exitCode;
+                    AuthorizeErrorMessage = GetAuthorizeErrorMessage(exitCode);
+                    CurrentStep = SetupStep.ConfirmIdentityAuthorize;
+                });
+            }
+        }
+
+        public Task RecaptureProfileAsync(IdentityItemViewModel item)
+        {
+            OpenConfirmPasswordDialog(
+                "Confirm It's You",
+                $"Enter your Windows password to recapture face identity for '{item.DisplayName}'.",
+                async () =>
+                {
+                    _isAddingSecondaryFace = false;
+                    _recapturingProfileId = item.ProfileId;
+                    DisplayName = item.DisplayName;
+                    await StartEnrollmentInternalAsync(keepExisting: true, profileId: item.ProfileId).ConfigureAwait(false);
+                });
+            return Task.CompletedTask;
+        }
+
+        public void PromptDeleteProfile(IdentityItemViewModel item)
+        {
+            _deletingItem = item;
+            OnPropertyChanged(nameof(DeletingProfileName));
+            IsDeleteConfirmationDialogOpen = true;
+        }
+
+        public void CancelDelete()
+        {
+            _deletingItem = null;
+            IsDeleteConfirmationDialogOpen = false;
+        }
+
+        public Task DeleteProfileAsync(IdentityItemViewModel item)
+        {
+            PromptDeleteProfile(item);
+            return Task.CompletedTask;
+        }
+
+        public async Task ConfirmDeleteAsync()
+        {
+            var item = _deletingItem;
+            IsDeleteConfirmationDialogOpen = false;
+            _deletingItem = null;
+
+            if (item == null) return;
+
+            bool wasAuthorized = item.IsAuthorized;
+            string profileId = item.ProfileId;
+            string displayName = item.DisplayName;
+
+            await _profileManager.DeleteProfileAsync(profileId).ConfigureAwait(false);
+
             RunOnUi(() =>
             {
                 Identities.Remove(item);
+                OnPropertyChanged(nameof(CanAddIdentity));
+                OnPropertyChanged(nameof(IsIdentityLimitReached));
+
                 if (Identities.Count == 0)
                 {
                     ExistingProfileId = string.Empty;
                     ExistingProfileName = string.Empty;
-                    CurrentStep = SetupStep.Welcome;
+                    IsOfferUnlinkDialogOpen = true;
                 }
                 else
                 {
                     ExistingProfileId = Identities[0].ProfileId;
                     ExistingProfileName = Identities[0].DisplayName;
+                    if (wasAuthorized)
+                    {
+                        _revokingProfileId = profileId;
+                        RevokingProfileName = displayName;
+                        IsOfferRevokeDialogOpen = true;
+                    }
                 }
+            });
+        }
+
+        public async Task ConfirmRevokeIdentityAsync()
+        {
+            IsOfferRevokeDialogOpen = false;
+            string sid = WindowsIdentity.GetCurrent().User?.Value ?? string.Empty;
+            if (!string.IsNullOrEmpty(sid) && !string.IsNullOrEmpty(_revokingProfileId))
+            {
+                try
+                {
+                    await _linkLauncher.LaunchRevokeIdentityAsync(sid, _revokingProfileId).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // If declined or error, delete still succeeded
+                }
+            }
+            _revokingProfileId = string.Empty;
+            _revokingProfileName = string.Empty;
+            await RefreshIdentitiesAsync().ConfigureAwait(false);
+        }
+
+        public void CloseOfferRevokeDialog()
+        {
+            IsOfferRevokeDialogOpen = false;
+            _revokingProfileId = string.Empty;
+            _revokingProfileName = string.Empty;
+        }
+
+        public async Task ConfirmUnlinkPasswordAsync()
+        {
+            IsOfferUnlinkDialogOpen = false;
+            string sid = WindowsIdentity.GetCurrent().User?.Value ?? string.Empty;
+            if (!string.IsNullOrEmpty(sid))
+            {
+                try
+                {
+                    await _linkLauncher.LaunchUnlinkAsync(sid).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // If declined or error
+                }
+            }
+            RunOnUi(() =>
+            {
+                IsPasswordLinked = false;
+                CurrentStep = SetupStep.Welcome;
+            });
+        }
+
+        public void CloseOfferUnlinkDialog()
+        {
+            IsOfferUnlinkDialogOpen = false;
+            RunOnUi(() =>
+            {
+                CurrentStep = SetupStep.Welcome;
             });
         }
 
         public async Task ToggleProfileAsync(IdentityItemViewModel item, bool enabled)
         {
-            await _profileManager.ToggleProfileAsync(item.ProfileId, enabled).ConfigureAwait(false);
+            if (!enabled)
+            {
+                // Disable needs no password
+                await _profileManager.ToggleProfileAsync(item.ProfileId, false).ConfigureAwait(false);
+                RunOnUi(() => item.SetEnabledSilently(false));
+                return;
+            }
+
+            // Enabling an identity
+            if (!item.IsAuthorized)
+            {
+                // Enabling an identity that is not on the Authorized list launches the authorize flow instead
+                RunOnUi(() => item.SetEnabledSilently(false));
+                await AuthorizeProfileAsync(item).ConfigureAwait(false);
+                return;
+            }
+
+            // Enabling an authorized identity shows an in-app "Confirm it's you" dialog before starting
+            RunOnUi(() => item.SetEnabledSilently(false));
+            OpenConfirmPasswordDialog(
+                "Confirm It's You",
+                $"Enter your Windows password to enable face unlock for '{item.DisplayName}'.",
+                async () =>
+                {
+                    await _profileManager.ToggleProfileAsync(item.ProfileId, true).ConfigureAwait(false);
+                    RunOnUi(() => item.SetEnabledSilently(true));
+                },
+                onCancelled: () =>
+                {
+                    RunOnUi(() => item.SetEnabledSilently(false));
+                });
+        }
+
+        public void OpenConfirmPasswordDialog(string title, string description, Func<Task> onVerified, Action? onCancelled = null)
+        {
+            ConfirmPasswordDialogTitle = title;
+            ConfirmPasswordDialogDescription = description;
+            ConfirmPasswordDialogError = string.Empty;
+            ConfirmPasswordAttemptsRemaining = 3;
+            IsVerifyingConfirmPassword = false;
+            _confirmPasswordAction = onVerified;
+            _confirmPasswordCancelAction = onCancelled;
+            IsConfirmPasswordDialogOpen = true;
+        }
+
+        public void CancelConfirmPasswordDialog()
+        {
+            IsConfirmPasswordDialogOpen = false;
+            var cancel = _confirmPasswordCancelAction;
+            _confirmPasswordAction = null;
+            _confirmPasswordCancelAction = null;
+            cancel?.Invoke();
+        }
+
+        public async Task VerifyConfirmPasswordAsync(SecureString password)
+        {
+            if (password == null || password.Length == 0)
+            {
+                ConfirmPasswordDialogError = "Please enter your Windows password.";
+                return;
+            }
+
+            IsVerifyingConfirmPassword = true;
+            ConfirmPasswordDialogError = string.Empty;
+
+            try
+            {
+                bool valid = await Task.Run(() => _passwordValidator.Validate(Environment.UserName, password)).ConfigureAwait(false);
+                if (valid)
+                {
+                    RunOnUi(async () =>
+                    {
+                        IsConfirmPasswordDialogOpen = false;
+                        var action = _confirmPasswordAction;
+                        _confirmPasswordAction = null;
+                        _confirmPasswordCancelAction = null;
+                        if (action != null)
+                        {
+                            await action().ConfigureAwait(false);
+                        }
+                    });
+                }
+                else
+                {
+                    ConfirmPasswordAttemptsRemaining--;
+                    await Task.Delay(500).ConfigureAwait(false);
+                    RunOnUi(() =>
+                    {
+                        if (ConfirmPasswordAttemptsRemaining <= 0)
+                        {
+                            IsConfirmPasswordDialogOpen = false;
+                            var cancel = _confirmPasswordCancelAction;
+                            _confirmPasswordAction = null;
+                            _confirmPasswordCancelAction = null;
+                            cancel?.Invoke();
+                        }
+                        else
+                        {
+                            ConfirmPasswordDialogError = $"Incorrect password. {ConfirmPasswordAttemptsRemaining} attempt(s) remaining.";
+                        }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                RunOnUi(() => ConfirmPasswordDialogError = $"Verification error: {ex.Message}");
+            }
+            finally
+            {
+                RunOnUi(() => IsVerifyingConfirmPassword = false);
+            }
         }
 
         public async Task RenameProfileAsync(IdentityItemViewModel item, string newName)
@@ -2052,22 +2637,34 @@ namespace PeekSetup.ViewModels
             {
                 IsPoseCheckActive = false;
                 IsEnrollmentCompleteRing = false;
-                if (!string.IsNullOrEmpty(e.ProfileId))
-                {
-                    await _profileManager.ToggleProfileAsync(e.ProfileId, true).ConfigureAwait(false);
-                }
-                if (_isAddingSecondaryFace || Identities.Count > 0)
+
+                if (_isAddingSecondaryFace)
                 {
                     _isAddingSecondaryFace = false;
                     _recapturingProfileId = null;
                     IsAddingNewIdentity = false;
-                    IsPasswordVerifiedForAdd = false;
-                    await RefreshIdentitiesAsync();
+                    AuthorizeErrorMessage = string.Empty;
+                    AuthorizeExitCode = 0;
+                    CurrentStep = SetupStep.ConfirmIdentityAuthorize;
+                }
+                else if (_recapturingProfileId != null)
+                {
+                    _recapturingProfileId = null;
+                    await RefreshIdentitiesAsync().ConfigureAwait(false);
+                    CurrentStep = SetupStep.AlreadyEnrolled;
+                }
+                else if (Identities.Count > 0)
+                {
+                    await RefreshIdentitiesAsync().ConfigureAwait(false);
                     CurrentStep = SetupStep.AlreadyEnrolled;
                 }
                 else
                 {
-                    // Advance to Step 3: Password Linking (first time only)
+                    // First-time enrollment: auto-enable profile and advance to Step 3: Password Linking
+                    if (!string.IsNullOrEmpty(e.ProfileId))
+                    {
+                        await _profileManager.ToggleProfileAsync(e.ProfileId, true).ConfigureAwait(false);
+                    }
                     CurrentStep = SetupStep.PasswordLink;
                 }
             });
@@ -2078,9 +2675,20 @@ namespace PeekSetup.ViewModels
             RunOnUi(() =>
             {
                 EnrollmentMode = EnrollmentViewMode.Failed;
-                EngineErrorMessage = string.IsNullOrWhiteSpace(e.Detail)
-                    ? $"Enrollment could not be completed ({e.ReasonCode})."
-                    : e.Detail;
+                if (e.ReasonCode == EnrollmentProtocol.ReasonIdentityLimit)
+                {
+                    EngineErrorMessage = "Maximum identity limit reached (5 identities). Please delete an existing identity before adding a new one.";
+                }
+                else if (e.ReasonCode == EnrollmentProtocol.ReasonDuplicateIdentity)
+                {
+                    EngineErrorMessage = "This face is already enrolled under another identity. Each face can only be enrolled once.";
+                }
+                else
+                {
+                    EngineErrorMessage = string.IsNullOrWhiteSpace(e.Detail)
+                        ? $"Enrollment could not be completed ({e.ReasonCode})."
+                        : e.Detail;
+                }
                 RawTechnicalDetails = $"Reason Code: {e.ReasonCode}\nDetail: {e.Detail}";
             });
         }
@@ -2097,7 +2705,17 @@ namespace PeekSetup.ViewModels
             RunOnUi(() =>
             {
                 RawTechnicalDetails = $"Error Code: {e.ReasonCode}\nDetail: {e.Detail}";
-                if (e.ReasonCode == EnrollmentProtocol.ReasonCameraUnavailable ||
+                if (e.ReasonCode == EnrollmentProtocol.ReasonIdentityLimit)
+                {
+                    EnrollmentMode = EnrollmentViewMode.Failed;
+                    EngineErrorMessage = "Maximum identity limit reached (5 identities). Please delete an existing identity before adding a new one.";
+                }
+                else if (e.ReasonCode == EnrollmentProtocol.ReasonDuplicateIdentity)
+                {
+                    EnrollmentMode = EnrollmentViewMode.Failed;
+                    EngineErrorMessage = "This face is already enrolled under another identity. Each face can only be enrolled once.";
+                }
+                else if (e.ReasonCode == EnrollmentProtocol.ReasonCameraUnavailable ||
                     e.ReasonCode == EnrollmentProtocol.ReasonCameraError)
                 {
                     EnrollmentMode = EnrollmentViewMode.Failed;

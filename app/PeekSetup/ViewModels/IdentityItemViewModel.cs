@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Threading.Tasks;
@@ -13,56 +14,28 @@ namespace PeekSetup.ViewModels
         private readonly Func<IdentityItemViewModel, Task>? _onRecapture;
         private readonly Func<IdentityItemViewModel, Task>? _onDelete;
         private readonly Func<IdentityItemViewModel, string, Task>? _onRename;
+        private readonly Func<IdentityItemViewModel, Task>? _onActivate;
 
         private string _displayName = string.Empty;
         private string _editingName = string.Empty;
         private bool _isEditingName;
         private bool _isEnabled = true;
-        private int _qualityPercentage = 85;
+        private bool _isAuthorized = true;
+        private int? _qualityPercentage;
+        private List<double> _poseQualities = new();
+        private bool _suppressToggleCallback;
 
-        private static readonly Brush InactiveBrush = new SolidColorBrush(Color.FromRgb(0x2C, 0x2E, 0x35));
-
-        // 20-bar Apple/Glance-style color spectrum:
-        // Bars 0-3: #FF5B5B (coral/red)
-        // Bars 4-7: #FF8C42 (coral/orange)
-        // Bars 8-11: #FFA043 (orange)
-        // Bars 12-15: #FFD147 (gold/yellow)
-        // Bars 16-19: #4CD964 (emerald green)
-        private static readonly Brush[] GradientBrushes = new Brush[20]
-        {
-            new SolidColorBrush(Color.FromRgb(0xEB, 0x5D, 0x5D)),
-            new SolidColorBrush(Color.FromRgb(0xEE, 0x66, 0x58)),
-            new SolidColorBrush(Color.FromRgb(0xF0, 0x70, 0x52)),
-            new SolidColorBrush(Color.FromRgb(0xF3, 0x7A, 0x4D)),
-
-            new SolidColorBrush(Color.FromRgb(0xF5, 0x85, 0x48)),
-            new SolidColorBrush(Color.FromRgb(0xF7, 0x90, 0x43)),
-            new SolidColorBrush(Color.FromRgb(0xFA, 0x9B, 0x3E)),
-            new SolidColorBrush(Color.FromRgb(0xFC, 0xA6, 0x3A)),
-
-            new SolidColorBrush(Color.FromRgb(0xFE, 0xB2, 0x37)),
-            new SolidColorBrush(Color.FromRgb(0xFF, 0xBD, 0x36)),
-            new SolidColorBrush(Color.FromRgb(0xFF, 0xC7, 0x37)),
-            new SolidColorBrush(Color.FromRgb(0xFF, 0xD2, 0x3A)),
-
-            new SolidColorBrush(Color.FromRgb(0xF5, 0xD6, 0x42)),
-            new SolidColorBrush(Color.FromRgb(0xEB, 0xD9, 0x4B)),
-            new SolidColorBrush(Color.FromRgb(0xDD, 0xDC, 0x55)),
-            new SolidColorBrush(Color.FromRgb(0xCE, 0xDE, 0x5E)),
-
-            new SolidColorBrush(Color.FromRgb(0xBD, 0xDE, 0x66)),
-            new SolidColorBrush(Color.FromRgb(0xA6, 0xDD, 0x6D)),
-            new SolidColorBrush(Color.FromRgb(0x8C, 0xDB, 0x73)),
-            new SolidColorBrush(Color.FromRgb(0x4C, 0xD9, 0x64)),
-        };
+        public static readonly Brush GreenBrush = new SolidColorBrush(Color.FromRgb(0x30, 0xD1, 0x58));
+        public static readonly Brush AmberBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0x95, 0x00));
+        public static readonly Brush RedBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0x45, 0x3A));
+        public static readonly Brush GrayBrush = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x93));
 
         static IdentityItemViewModel()
         {
-            InactiveBrush.Freeze();
-            foreach (var b in GradientBrushes)
-            {
-                b.Freeze();
-            }
+            GreenBrush.Freeze();
+            AmberBrush.Freeze();
+            RedBrush.Freeze();
+            GrayBrush.Freeze();
         }
 
         public string ProfileId { get; set; } = string.Empty;
@@ -115,12 +88,46 @@ namespace PeekSetup.ViewModels
                 {
                     _isEnabled = value;
                     OnPropertyChanged(nameof(IsEnabled));
-                    _onToggle?.Invoke(this, value);
+                    if (!_suppressToggleCallback)
+                    {
+                        _onToggle?.Invoke(this, value);
+                    }
                 }
             }
         }
 
-        public int QualityPercentage
+        public void SetEnabledSilently(bool enabled)
+        {
+            _suppressToggleCallback = true;
+            try
+            {
+                IsEnabled = enabled;
+            }
+            finally
+            {
+                _suppressToggleCallback = false;
+            }
+        }
+
+        public bool IsAuthorized
+        {
+            get => _isAuthorized;
+            set
+            {
+                if (_isAuthorized != value)
+                {
+                    _isAuthorized = value;
+                    OnPropertyChanged(nameof(IsAuthorized));
+                    OnPropertyChanged(nameof(IsPending));
+                    OnPropertyChanged(nameof(StatusBadgeText));
+                }
+            }
+        }
+
+        public bool IsPending => !IsAuthorized;
+        public string StatusBadgeText => IsAuthorized ? "Active" : "Not activated";
+
+        public int? QualityPercentage
         {
             get => _qualityPercentage;
             set
@@ -135,12 +142,26 @@ namespace PeekSetup.ViewModels
             }
         }
 
-        public string CaptureQualityText => $"Capture quality • {QualityPercentage}%";
+        public IReadOnlyList<double> PoseQualities
+        {
+            get => _poseQualities;
+            set
+            {
+                _poseQualities = value != null ? new List<double>(value) : new List<double>();
+                OnPropertyChanged(nameof(PoseQualities));
+                UpdateQualityBars();
+            }
+        }
+
+        public string CaptureQualityText => QualityPercentage.HasValue
+            ? $"Capture quality • {QualityPercentage.Value}%"
+            : "Quality unknown";
 
         public ObservableCollection<QualityTickBarViewModel> QualityBars { get; } = new();
 
         public ICommand RecaptureCommand { get; }
         public ICommand DeleteCommand { get; }
+        public ICommand ActivateCommand { get; }
         public ICommand BeginEditCommand { get; }
         public ICommand SaveEditCommand { get; }
         public ICommand CancelEditCommand { get; }
@@ -149,29 +170,52 @@ namespace PeekSetup.ViewModels
             string profileId,
             string displayName,
             bool isEnabled,
-            int qualityPercentage,
+            int? qualityPercentage,
             Func<IdentityItemViewModel, bool, Task>? onToggle = null,
             Func<IdentityItemViewModel, Task>? onRecapture = null,
             Func<IdentityItemViewModel, Task>? onDelete = null,
             Func<IdentityItemViewModel, string, Task>? onRename = null)
+            : this(profileId, displayName, isEnabled, isAuthorized: true, qualityPercentage, null, onToggle, onRecapture, onDelete, onRename, null)
+        {
+        }
+
+        public IdentityItemViewModel(
+            string profileId,
+            string displayName,
+            bool isEnabled,
+            bool isAuthorized,
+            int? qualityPercentage,
+            IReadOnlyList<double>? poseQualities = null,
+            Func<IdentityItemViewModel, bool, Task>? onToggle = null,
+            Func<IdentityItemViewModel, Task>? onRecapture = null,
+            Func<IdentityItemViewModel, Task>? onDelete = null,
+            Func<IdentityItemViewModel, string, Task>? onRename = null,
+            Func<IdentityItemViewModel, Task>? onActivate = null)
         {
             ProfileId = profileId;
             _displayName = displayName;
             _editingName = displayName;
             _isEnabled = isEnabled;
+            _isAuthorized = isAuthorized;
             _qualityPercentage = qualityPercentage;
+            if (poseQualities != null)
+            {
+                _poseQualities = new List<double>(poseQualities);
+            }
             _onToggle = onToggle;
             _onRecapture = onRecapture;
             _onDelete = onDelete;
             _onRename = onRename;
+            _onActivate = onActivate;
 
             RecaptureCommand = new RelayCommand(() => _onRecapture?.Invoke(this));
             DeleteCommand = new RelayCommand(() => _onDelete?.Invoke(this));
+            ActivateCommand = new RelayCommand(() => _onActivate?.Invoke(this));
             BeginEditCommand = new RelayCommand(BeginEdit);
             SaveEditCommand = new AsyncRelayCommand(SaveEditAsync);
             CancelEditCommand = new RelayCommand(CancelEdit);
 
-            InitializeQualityBars();
+            UpdateQualityBars();
         }
 
         public void BeginEdit()
@@ -205,30 +249,46 @@ namespace PeekSetup.ViewModels
             IsEditingName = false;
         }
 
-        private void InitializeQualityBars()
+        public static Brush GetPoseBrush(double score)
         {
-            QualityBars.Clear();
-            int activeCount = (int)Math.Round((QualityPercentage / 100.0) * 20.0);
-            for (int i = 0; i < 20; i++)
-            {
-                bool isActive = i < activeCount;
-                QualityBars.Add(new QualityTickBarViewModel
-                {
-                    Index = i,
-                    IsActive = isActive,
-                    FillBrush = isActive ? GradientBrushes[i] : InactiveBrush
-                });
-            }
+            if (score < 0) return GrayBrush;
+            if (score >= 0.70) return GreenBrush;
+            if (score >= 0.50) return AmberBrush;
+            return RedBrush;
         }
 
         private void UpdateQualityBars()
         {
-            int activeCount = (int)Math.Round((QualityPercentage / 100.0) * 20.0);
-            for (int i = 0; i < QualityBars.Count; i++)
+            QualityBars.Clear();
+
+            if (_poseQualities != null && _poseQualities.Count > 0)
             {
-                bool isActive = i < activeCount;
-                QualityBars[i].IsActive = isActive;
-                QualityBars[i].FillBrush = isActive ? GradientBrushes[i] : InactiveBrush;
+                for (int i = 0; i < 9; i++)
+                {
+                    double score = i < _poseQualities.Count ? _poseQualities[i] : -1.0;
+                    QualityBars.Add(new QualityTickBarViewModel
+                    {
+                        Index = i,
+                        IsActive = true,
+                        FillBrush = GetPoseBrush(score)
+                    });
+                }
+            }
+            else
+            {
+                Brush defaultBrush = QualityPercentage.HasValue
+                    ? GetPoseBrush(QualityPercentage.Value / 100.0)
+                    : GrayBrush;
+
+                for (int i = 0; i < 9; i++)
+                {
+                    QualityBars.Add(new QualityTickBarViewModel
+                    {
+                        Index = i,
+                        IsActive = true,
+                        FillBrush = defaultBrush
+                    });
+                }
             }
         }
 

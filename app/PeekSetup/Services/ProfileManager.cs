@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -11,12 +13,31 @@ namespace PeekSetup.Services
     public class ProfileManager : IProfileManager
     {
         private readonly string _profilesDirectory;
+        private readonly IAuthorizationStore _authStore;
+        private readonly IAccountSidResolver _sidResolver;
 
-        public ProfileManager(string? profilesDir = null)
+        public ProfileManager(
+            string? profilesDir = null,
+            IAuthorizationStore? authStore = null,
+            IAccountSidResolver? sidResolver = null)
         {
             _profilesDirectory = profilesDir
                 ?? Environment.GetEnvironmentVariable("PEEK_PROFILES_DIR")
                 ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Peek", "Profiles");
+            _authStore = authStore ?? new RegistryAuthorizationStore();
+            _sidResolver = sidResolver ?? new AccountSidResolver();
+        }
+
+        private string GetCurrentUserSid()
+        {
+            try
+            {
+                return WindowsIdentity.GetCurrent().User?.Value ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
 
         public async Task<List<ProfileModel>> GetProfilesAsync()
@@ -25,6 +46,37 @@ namespace PeekSetup.Services
             if (!Directory.Exists(_profilesDirectory))
             {
                 return result;
+            }
+
+            string currentSid = GetCurrentUserSid();
+            var authorizedCache = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+            HashSet<string> GetAuthorizedForSid(string sid)
+            {
+                if (string.IsNullOrWhiteSpace(sid))
+                    return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                if (!authorizedCache.TryGetValue(sid, out var set))
+                {
+                    set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    try
+                    {
+                        var ids = _authStore.GetAuthorizedIdentities(sid);
+                        if (ids != null)
+                        {
+                            foreach (var id in ids)
+                            {
+                                set.Add(id);
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore registry errors
+                    }
+                    authorizedCache[sid] = set;
+                }
+                return set;
             }
 
             var files = Directory.GetFiles(_profilesDirectory, "*.peek");
@@ -45,6 +97,7 @@ namespace PeekSetup.Services
                     double createdAt = root.TryGetProperty("created_at", out var catProp) ? catProp.GetDouble() : 0.0;
                     string? userSid = root.TryGetProperty("user_sid", out var sidProp) ? sidProp.GetString() : null;
 
+                    var poseQualities = new List<double>();
                     double totalQuality = 0;
                     int count = 0;
                     if (root.TryGetProperty("templates", out var tProp) && tProp.ValueKind == JsonValueKind.Array)
@@ -53,25 +106,33 @@ namespace PeekSetup.Services
                         {
                             if (tmpl.TryGetProperty("quality_score", out var qsProp))
                             {
-                                totalQuality += qsProp.GetDouble();
+                                double q = qsProp.GetDouble();
+                                poseQualities.Add(q);
+                                totalQuality += q;
                                 count++;
                             }
                         }
                     }
 
-                    int qualityPct = 85;
+                    int? qualityPct = null;
                     if (count > 0)
                     {
                         double avg = totalQuality / count;
                         qualityPct = (int)Math.Clamp(Math.Round(avg * 100), 10, 100);
                     }
 
+                    string effectiveSid = !string.IsNullOrWhiteSpace(userSid) ? userSid : currentSid;
+                    var authSet = GetAuthorizedForSid(effectiveSid);
+                    bool isAuthorized = authSet.Contains(id);
+
                     result.Add(new ProfileModel
                     {
                         ProfileId = id,
                         DisplayName = name,
                         Enabled = enabled,
+                        Authorized = isAuthorized,
                         QualityPercentage = qualityPct,
+                        PoseQualities = poseQualities,
                         TemplateCount = count,
                         CreatedAt = createdAt,
                         UserSid = userSid
@@ -85,6 +146,52 @@ namespace PeekSetup.Services
 
             result.Sort((a, b) => a.CreatedAt.CompareTo(b.CreatedAt));
             return result;
+        }
+
+        private async Task AtomicWriteProfileAsync(string path, byte[] encryptedData)
+        {
+            string dir = Path.GetDirectoryName(path) ?? _profilesDirectory;
+            if (!Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            string tempPath = Path.Combine(dir, $"{Path.GetFileNameWithoutExtension(path)}_{Guid.NewGuid():N}.tmp");
+            try
+            {
+                await File.WriteAllBytesAsync(tempPath, encryptedData).ConfigureAwait(false);
+                if (File.Exists(path))
+                {
+                    File.Replace(tempPath, path, null, ignoreMetadataErrors: true);
+                }
+                else
+                {
+                    File.Move(tempPath, path, overwrite: true);
+                }
+            }
+            catch
+            {
+                if (File.Exists(tempPath))
+                {
+                    try { File.Delete(tempPath); } catch { }
+                }
+                throw;
+            }
+        }
+
+        public async Task<bool> SaveProfileAsync(string profileId, byte[] encryptedData)
+        {
+            if (string.IsNullOrWhiteSpace(profileId) || encryptedData == null) return false;
+            string path = Path.Combine(_profilesDirectory, $"{profileId}.peek");
+            try
+            {
+                await AtomicWriteProfileAsync(path, encryptedData).ConfigureAwait(false);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public async Task<bool> ToggleProfileAsync(string profileId, bool enabled)
@@ -125,7 +232,7 @@ namespace PeekSetup.Services
 
                 byte[] updatedJson = stream.ToArray();
                 byte[] updatedEncrypted = ProtectedData.Protect(updatedJson, null, DataProtectionScope.CurrentUser);
-                await File.WriteAllBytesAsync(path, updatedEncrypted).ConfigureAwait(false);
+                await AtomicWriteProfileAsync(path, updatedEncrypted).ConfigureAwait(false);
                 return true;
             }
             catch
@@ -191,7 +298,7 @@ namespace PeekSetup.Services
 
                 byte[] updatedJson = stream.ToArray();
                 byte[] updatedEncrypted = ProtectedData.Protect(updatedJson, null, DataProtectionScope.CurrentUser);
-                await File.WriteAllBytesAsync(path, updatedEncrypted).ConfigureAwait(false);
+                await AtomicWriteProfileAsync(path, updatedEncrypted).ConfigureAwait(false);
                 return true;
             }
             catch

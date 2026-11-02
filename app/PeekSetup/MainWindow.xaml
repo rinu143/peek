@@ -137,101 +137,83 @@
 
                 <!-- SCREEN: ALREADY ENROLLED (PROFILE SECTION MATCHING SCREENSHOT) -->
                 <Grid Visibility="{Binding IsAlreadyEnrolledStep, Converter={StaticResource BoolToVis}}"
-                      VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <StackPanel HorizontalAlignment="Center" Width="480" MaxWidth="520" Margin="0,12,0,12">
+                      VerticalAlignment="Stretch" HorizontalAlignment="Center">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel HorizontalAlignment="Center" Width="480" MaxWidth="520" Margin="0,12,0,12">
 
-                        <!-- 1. "Face encrypted" Card -->
-                        <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
-                                BorderThickness="1" CornerRadius="18" Padding="20,16" Margin="0,0,0,18">
-                            <StackPanel>
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Path Data="{StaticResource GeoLock}" Stroke="{DynamicResource TextSecondaryBrush}"
-                                          StrokeThickness="1.5" Stretch="Uniform" Width="13" Height="13" Margin="0,0,8,0" VerticalAlignment="Center" />
-                                    <TextBlock Text="Face encrypted" FontSize="14" FontWeight="SemiBold"
-                                               Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
-                                </StackPanel>
-                                <TextBlock Text="Enroll separate identities to use Peek with different looks (such as glasses), facial expressions, or new team members. This improves recognition quality."
-                                           FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"
-                                           TextWrapping="Wrap" LineHeight="18" Margin="0,8,0,0" />
-                            </StackPanel>
-                        </Border>
-
-                        <!-- 2. "Identities" Header with '+' Button -->
-                        <Grid Margin="2,0,2,10">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Identities" FontSize="14" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
-                            <Button Grid.Column="1" Style="{StaticResource CircleIconButtonStyle}"
-                                    Command="{Binding StartAddIdentityCommand}"
-                                    ToolTip="Add Identity" Width="28" Height="28"
-                                    AutomationProperties.Name="Add face identity">
-                                <Path Data="{StaticResource GeoPlus}" Stroke="{DynamicResource TextPrimaryBrush}"
-                                      StrokeThickness="1.8" Stretch="Uniform" Width="11" Height="11"
-                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Button>
-                        </Grid>
-
-                        <!-- 3. Password Verification Card (when adding new identity) -->
-                        <Border Visibility="{Binding IsAddingNewIdentity, Converter={StaticResource BoolToVis}}"
-                                Background="{DynamicResource SurfaceDarkBrush}" BorderBrush="{DynamicResource AccentBrush}"
-                                BorderThickness="1.5" CornerRadius="18" Padding="22,20" Margin="0,0,0,18">
-                            <StackPanel>
-                                <!-- Substep A: Enter System Password -->
+                            <!-- 1. "Face encrypted" Card -->
+                            <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                                    BorderThickness="1" CornerRadius="18" Padding="20,16" Margin="0,0,0,14">
                                 <StackPanel>
-                                    <StackPanel.Style>
-                                        <Style TargetType="StackPanel">
-                                            <Setter Property="Visibility" Value="Visible" />
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsPasswordVerifiedForAdd}" Value="True">
-                                                    <Setter Property="Visibility" Value="Collapsed" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </StackPanel.Style>
-
-                                    <Grid Margin="0,0,0,8">
-                                        <TextBlock Text="Verify System Password" FontSize="15" FontWeight="SemiBold"
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Path Data="{StaticResource GeoLock}" Stroke="{DynamicResource TextSecondaryBrush}"
+                                              StrokeThickness="1.5" Stretch="Uniform" Width="13" Height="13" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                        <TextBlock Text="Face encrypted" FontSize="14" FontWeight="SemiBold"
                                                    Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
-                                        <Button Style="{StaticResource MinimalCloseButtonStyle}" Command="{Binding CancelAddIdentityCommand}"
-                                                HorizontalAlignment="Right" Width="24" Height="24" ToolTip="Cancel">
-                                            <Path Data="M 6,6 L 14,14 M 14,6 L 6,14" Stroke="{DynamicResource TextSecondaryBrush}"
-                                                  StrokeThickness="1.6" Stretch="Uniform" Width="10" Height="10" />
-                                        </Button>
-                                    </Grid>
-                                    <TextBlock Text="Enter your Windows password to authorize adding a new face identity."
-                                               FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,16" LineHeight="18" />
-
-                                    <PasswordBox x:Name="NewIdentityPasswordBox"
-                                                 PasswordChanged="NewIdentityPasswordBox_PasswordChanged"
-                                                 KeyDown="NewIdentityPasswordBox_KeyDown"
-                                                 IsVisibleChanged="NewIdentityPasswordBox_IsVisibleChanged"
-                                                 Style="{StaticResource ModernPasswordBoxStyle}"
-                                                 Height="42" FontSize="14" Margin="0,0,0,8"
-                                                 TabIndex="1" />
-
-                                    <TextBlock Text="{Binding PasswordVerificationError}"
-                                               Foreground="{DynamicResource DangerBrush}" FontSize="12"
-                                               Visibility="{Binding HasPasswordVerificationError, Converter={StaticResource BoolToVis}}"
-                                               Margin="0,0,0,10" />
-
-                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-                                        <Button Style="{StaticResource SecondaryButtonStyle}"
-                                                Command="{Binding CancelAddIdentityCommand}"
-                                                Content="Cancel" Height="36" Padding="18,0" Margin="0,0,10,0"
-                                                FontSize="13" TabIndex="2" />
-                                        <Button Style="{StaticResource PrimaryButtonStyle}"
-                                                Command="{Binding VerifyPasswordForAddCommand}"
-                                                Content="Verify" Height="36" Padding="24,0"
-                                                FontSize="13" TabIndex="3"
-                                                IsEnabled="{Binding CanVerifyPasswordForAdd, FallbackValue=True}" />
                                     </StackPanel>
+                                    <TextBlock Text="Enroll separate identities to use Peek with different looks (such as glasses), facial expressions, or new team members. This improves recognition quality."
+                                               FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"
+                                               TextWrapping="Wrap" LineHeight="18" Margin="0,8,0,0" />
                                 </StackPanel>
+                            </Border>
 
-                                <!-- Substep B: Enter Name & Start Enrollment -->
-                                <StackPanel Visibility="{Binding IsPasswordVerifiedForAdd, Converter={StaticResource BoolToVis}}">
+                            <!-- 2. Windows Password Linked / Not Linked Card -->
+                            <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                                    BorderThickness="1" CornerRadius="18" Padding="20,14" Margin="0,0,0,18">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Path Data="{StaticResource GeoKey}" Stroke="{DynamicResource TextSecondaryBrush}"
+                                                  StrokeThickness="1.5" Stretch="Uniform" Width="13" Height="13" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                            <TextBlock Text="Windows password:" FontSize="13" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                            <TextBlock Text="{Binding WindowsPasswordStatusText}" FontSize="13" FontWeight="Bold"
+                                                       Foreground="{Binding WindowsPasswordStatusColor}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <TextBlock Text="Required to automatically release Windows credentials."
+                                                   FontSize="11" Foreground="{DynamicResource TextMutedBrush}" Margin="21,3,0,0" />
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Style="{StaticResource SecondaryButtonStyle}"
+                                            Command="{Binding UpdatePasswordLinkCommand}"
+                                            Content="Update" Height="32" Padding="16,0" FontSize="12"
+                                            VerticalAlignment="Center" ToolTip="Update linked Windows password" />
+                                </Grid>
+                            </Border>
+
+                            <!-- 3. "Identities" Header with '+' Button -->
+                            <Grid Margin="2,0,2,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="Identities" FontSize="14" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <TextBlock Text="{Binding Identities.Count, StringFormat='({0}/5)'}" FontSize="12"
+                                               Foreground="{DynamicResource TextMutedBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <TextBlock Text="• Maximum reached" FontSize="11" Foreground="{DynamicResource DangerBrush}"
+                                               VerticalAlignment="Center" Visibility="{Binding IsIdentityLimitReached, Converter={StaticResource BoolToVis}}" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Style="{StaticResource CircleIconButtonStyle}"
+                                        Command="{Binding StartAddIdentityCommand}"
+                                        IsEnabled="{Binding CanAddIdentity}"
+                                        ToolTip="{Binding IdentityLimitExplanation}" Width="28" Height="28"
+                                        AutomationProperties.Name="Add face identity">
+                                    <Path Data="{StaticResource GeoPlus}" Stroke="{DynamicResource TextPrimaryBrush}"
+                                          StrokeThickness="1.8" Stretch="Uniform" Width="11" Height="11"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Button>
+                            </Grid>
+
+                            <!-- 4. Add Face Identity Card (Name input only, no password gate) -->
+                            <Border Visibility="{Binding IsAddingNewIdentity, Converter={StaticResource BoolToVis}}"
+                                    Background="{DynamicResource SurfaceDarkBrush}" BorderBrush="{DynamicResource AccentBrush}"
+                                    BorderThickness="1.5" CornerRadius="18" Padding="22,20" Margin="0,0,0,18">
+                                <StackPanel>
                                     <Grid Margin="0,0,0,8">
                                         <TextBlock Text="Add Face Identity" FontSize="15" FontWeight="SemiBold"
                                                    Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
@@ -259,164 +241,273 @@
                                                 FontSize="13" TabIndex="2" />
                                         <Button Style="{StaticResource PrimaryButtonStyle}"
                                                 Command="{Binding ConfirmAddIdentityCommand}"
-                                                Content="Enroll Face" Height="36" Padding="24,0"
+                                                Content="Scan Face" Height="36" Padding="24,0"
                                                 FontSize="13" TabIndex="3" />
                                     </StackPanel>
                                 </StackPanel>
-                            </StackPanel>
-                        </Border>
+                            </Border>
 
-                        <!-- 4. Identities List -->
-                        <ItemsControl ItemsSource="{Binding Identities}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
-                                            BorderThickness="1" CornerRadius="18" Padding="18,14" Margin="0,0,0,12">
-                                        <StackPanel>
-                                            <!-- Top Row: Name Pill (or inline Edit Box) + Toggle -->
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
+                            <!-- 5. Identities List -->
+                            <ItemsControl ItemsSource="{Binding Identities}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                                                BorderThickness="1" CornerRadius="18" Padding="18,14" Margin="0,0,0,12">
+                                            <StackPanel>
+                                                <!-- Top Row: Name Pill + (Pending Badge OR Apple Toggle Switch) -->
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
 
-                                                <!-- Static Pill Badge (Display Mode) -->
-                                                <Border Grid.Column="0" CornerRadius="12" Background="{DynamicResource PillBgBrush}"
-                                                        Padding="14,4" HorizontalAlignment="Left" VerticalAlignment="Center">
-                                                    <Border.Style>
-                                                        <Style TargetType="Border">
-                                                            <Setter Property="Visibility" Value="Visible" />
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsEditingName}" Value="True">
-                                                                    <Setter Property="Visibility" Value="Collapsed" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Border.Style>
-                                                    <TextBlock Text="{Binding DisplayName}" FontSize="13" FontWeight="SemiBold"
-                                                               Foreground="{DynamicResource TextPrimaryBrush}" />
-                                                </Border>
-
-                                                <!-- Inline Edit Form (Edit Mode) -->
-                                                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                                                    <StackPanel.Style>
-                                                        <Style TargetType="StackPanel">
-                                                            <Setter Property="Visibility" Value="Collapsed" />
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsEditingName}" Value="True">
+                                                    <!-- Left: Name Pill or Inline Edit Form -->
+                                                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <!-- Static Pill Badge (Display Mode) -->
+                                                        <Border CornerRadius="12" Background="{DynamicResource PillBgBrush}"
+                                                                Padding="14,4" HorizontalAlignment="Left" VerticalAlignment="Center">
+                                                            <Border.Style>
+                                                                <Style TargetType="Border">
                                                                     <Setter Property="Visibility" Value="Visible" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </StackPanel.Style>
-                                                    <TextBox Text="{Binding EditingName, UpdateSourceTrigger=PropertyChanged}"
-                                                             Style="{StaticResource ModernTextBoxStyle}"
-                                                             FontSize="13" FontWeight="SemiBold"
-                                                             Height="32" Width="180"
-                                                             Padding="10,0"
-                                                             VerticalContentAlignment="Center"
-                                                             KeyDown="EditNameBox_KeyDown"
-                                                             IsVisibleChanged="EditNameBox_IsVisibleChanged"
-                                                             AutomationProperties.Name="Edit identity name input" />
-                                                    <Button Style="{StaticResource CircleIconButtonStyle}"
-                                                            Command="{Binding SaveEditCommand}"
-                                                            ToolTip="Save name (Enter)"
-                                                            Width="28" Height="28" Margin="6,0,0,0"
-                                                            AutomationProperties.Name="Save name">
-                                                        <Path Data="{StaticResource GeoCheck}" Stroke="{DynamicResource SuccessBrush}"
-                                                              StrokeThickness="2" Stretch="Uniform" Width="11" Height="11"
-                                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                                              HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                                    </Button>
-                                                    <Button Style="{StaticResource CircleIconButtonStyle}"
-                                                            Command="{Binding CancelEditCommand}"
-                                                            ToolTip="Cancel (Esc)"
-                                                            Width="28" Height="28" Margin="4,0,0,0"
-                                                            AutomationProperties.Name="Cancel editing">
-                                                        <Path Data="{StaticResource GeoCloseSmall}" Stroke="{DynamicResource TextSecondaryBrush}"
-                                                              StrokeThickness="1.5" Stretch="Uniform" Width="10" Height="10"
-                                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                                              HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                                    </Button>
-                                                </StackPanel>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsEditingName}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Border.Style>
+                                                            <TextBlock Text="{Binding DisplayName}" FontSize="13" FontWeight="SemiBold"
+                                                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                                                        </Border>
 
-                                                <!-- Apple Toggle Switch -->
-                                                <CheckBox Grid.Column="1" Style="{StaticResource AppleToggleSwitchStyle}"
-                                                          IsChecked="{Binding IsEnabled, Mode=TwoWay}"
-                                                          AutomationProperties.Name="Toggle identity enabled state"
-                                                          VerticalAlignment="Center" />
-                                            </Grid>
+                                                        <!-- Inline Edit Form (Edit Mode) -->
+                                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                            <StackPanel.Style>
+                                                                <Style TargetType="StackPanel">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsEditingName}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Visible" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </StackPanel.Style>
+                                                            <TextBox Text="{Binding EditingName, UpdateSourceTrigger=PropertyChanged}"
+                                                                     Style="{StaticResource ModernTextBoxStyle}"
+                                                                     FontSize="13" FontWeight="SemiBold"
+                                                                     Height="32" Width="180"
+                                                                     Padding="10,0"
+                                                                     VerticalContentAlignment="Center"
+                                                                     KeyDown="EditNameBox_KeyDown"
+                                                                     IsVisibleChanged="EditNameBox_IsVisibleChanged"
+                                                                     AutomationProperties.Name="Edit identity name input" />
+                                                            <Button Style="{StaticResource CircleIconButtonStyle}"
+                                                                    Command="{Binding SaveEditCommand}"
+                                                                    ToolTip="Save name (Enter)"
+                                                                    Width="28" Height="28" Margin="6,0,0,0"
+                                                                    AutomationProperties.Name="Save name">
+                                                                <Path Data="{StaticResource GeoCheck}" Stroke="{DynamicResource SuccessBrush}"
+                                                                      StrokeThickness="2" Stretch="Uniform" Width="11" Height="11"
+                                                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                            </Button>
+                                                            <Button Style="{StaticResource CircleIconButtonStyle}"
+                                                                    Command="{Binding CancelEditCommand}"
+                                                                    ToolTip="Cancel (Esc)"
+                                                                    Width="28" Height="28" Margin="4,0,0,0"
+                                                                    AutomationProperties.Name="Cancel editing">
+                                                                <Path Data="{StaticResource GeoCloseSmall}" Stroke="{DynamicResource TextSecondaryBrush}"
+                                                                      StrokeThickness="1.5" Stretch="Uniform" Width="10" Height="10"
+                                                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                            </Button>
+                                                        </StackPanel>
+                                                    </StackPanel>
 
-                                            <!-- Bottom Row: Quality Equalizer + Actions -->
-                                            <Grid Margin="0,14,0,0">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
+                                                    <!-- Right: "Not activated" badge when pending, OR Apple Toggle Switch when authorized -->
+                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <!-- Not Activated Badge -->
+                                                        <Border CornerRadius="10" Background="#2B2412" BorderBrush="#FF9500" BorderThickness="1"
+                                                                Padding="8,2" Margin="0,0,0,0" VerticalAlignment="Center">
+                                                            <Border.Style>
+                                                                <Style TargetType="Border">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsPending}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Visible" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Border.Style>
+                                                            <TextBlock Text="Not activated" FontSize="11" FontWeight="SemiBold" Foreground="#FF9500" />
+                                                        </Border>
 
-                                                <!-- Quality Equalizer (Theme Aware) -->
-                                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding CaptureQualityText}" FontSize="11"
-                                                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,5" />
-                                                    <ItemsControl ItemsSource="{Binding QualityBars}">
-                                                        <ItemsControl.ItemsPanel>
-                                                            <ItemsPanelTemplate>
-                                                                <StackPanel Orientation="Horizontal" />
-                                                            </ItemsPanelTemplate>
-                                                        </ItemsControl.ItemsPanel>
-                                                        <ItemsControl.ItemTemplate>
-                                                            <DataTemplate>
-                                                                <Rectangle Width="3.5" Height="17" RadiusX="1.75" RadiusY="1.75" Margin="0,0,2.5,0">
-                                                                    <Rectangle.Style>
-                                                                        <Style TargetType="Rectangle">
-                                                                            <Setter Property="Fill" Value="{DynamicResource PillBgBrush}" />
-                                                                            <Style.Triggers>
-                                                                                <DataTrigger Binding="{Binding IsActive}" Value="True">
-                                                                                    <Setter Property="Fill" Value="{Binding FillBrush}" />
-                                                                                </DataTrigger>
-                                                                            </Style.Triggers>
-                                                                        </Style>
-                                                                    </Rectangle.Style>
-                                                                </Rectangle>
-                                                            </DataTemplate>
-                                                        </ItemsControl.ItemTemplate>
-                                                    </ItemsControl>
-                                                </StackPanel>
+                                                        <!-- Apple Toggle Switch -->
+                                                        <CheckBox IsChecked="{Binding IsEnabled, Mode=TwoWay}"
+                                                                  AutomationProperties.Name="Toggle identity enabled state"
+                                                                  VerticalAlignment="Center">
+                                                            <CheckBox.Style>
+                                                                <Style TargetType="CheckBox" BasedOn="{StaticResource AppleToggleSwitchStyle}">
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsPending}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </CheckBox.Style>
+                                                        </CheckBox>
+                                                    </StackPanel>
+                                                </Grid>
 
-                                                <!-- Actions: Recapture + Edit Name + Delete (In Black Circled Area) -->
-                                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
-                                                    <Button Style="{StaticResource RecaptureButtonStyle}"
-                                                            Command="{Binding RecaptureCommand}"
-                                                            Content="Recapture"
-                                                            Margin="0,0,8,0"
-                                                            AutomationProperties.Name="Recapture identity face" />
-                                                    <Button Style="{StaticResource CircleIconButtonStyle}"
-                                                            Command="{Binding BeginEditCommand}"
-                                                            ToolTip="Edit identity name"
-                                                            Margin="0,0,8,0"
-                                                            AutomationProperties.Name="Edit identity name">
-                                                        <Path Data="{StaticResource GeoPencil}" Stroke="{DynamicResource TextSecondaryBrush}"
-                                                              StrokeThickness="1.5" Stretch="Uniform" Width="13" Height="13"
-                                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
-                                                              HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                                    </Button>
-                                                    <Button Style="{StaticResource CircleIconButtonStyle}"
-                                                            Command="{Binding DeleteCommand}"
-                                                            ToolTip="Delete identity"
-                                                            AutomationProperties.Name="Delete identity">
-                                                        <Path Data="{StaticResource GeoTrash}" Stroke="{DynamicResource TextSecondaryBrush}"
-                                                              StrokeThickness="1.5" Stretch="Uniform" Width="13" Height="13"
-                                                              HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                                    </Button>
-                                                </StackPanel>
-                                            </Grid>
-                                        </StackPanel>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                                                <!-- Bottom Row: Quality Tick Bar + Actions -->
+                                                <Grid Margin="0,14,0,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
 
-                    </StackPanel>
+                                                    <!-- Quality Tick Bar: one tick per pose -->
+                                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding CaptureQualityText}" FontSize="11"
+                                                                   Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,5" />
+                                                        <ItemsControl ItemsSource="{Binding QualityBars}">
+                                                            <ItemsControl.ItemsPanel>
+                                                                <ItemsPanelTemplate>
+                                                                    <StackPanel Orientation="Horizontal" />
+                                                                </ItemsPanelTemplate>
+                                                            </ItemsControl.ItemsPanel>
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <Rectangle Width="5" Height="16" RadiusX="2" RadiusY="2" Margin="0,0,3,0"
+                                                                               Fill="{Binding FillBrush}" />
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                    </StackPanel>
+
+                                                    <!-- Actions Area -->
+                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
+                                                        <!-- When Pending: Activate Button -->
+                                                        <Button Command="{Binding ActivateCommand}"
+                                                                Content="Activate" Height="30" Padding="14,0" Margin="0,0,8,0" FontSize="12"
+                                                                ToolTip="Authorize this identity with Windows">
+                                                            <Button.Style>
+                                                                <Style TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsPending}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Visible" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Button.Style>
+                                                        </Button>
+
+                                                        <!-- When Authorized: Recapture + Edit Name -->
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <StackPanel.Style>
+                                                                <Style TargetType="StackPanel">
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsPending}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </StackPanel.Style>
+                                                            <Button Style="{StaticResource RecaptureButtonStyle}"
+                                                                    Command="{Binding RecaptureCommand}"
+                                                                    Content="Recapture"
+                                                                    Margin="0,0,8,0"
+                                                                    AutomationProperties.Name="Recapture identity face" />
+                                                            <Button Style="{StaticResource CircleIconButtonStyle}"
+                                                                    Command="{Binding BeginEditCommand}"
+                                                                    ToolTip="Edit identity name"
+                                                                    Margin="0,0,8,0"
+                                                                    AutomationProperties.Name="Edit identity name">
+                                                                <Path Data="{StaticResource GeoPencil}" Stroke="{DynamicResource TextSecondaryBrush}"
+                                                                      StrokeThickness="1.5" Stretch="Uniform" Width="13" Height="13"
+                                                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                            </Button>
+                                                        </StackPanel>
+
+                                                        <!-- Delete Button (always available) -->
+                                                        <Button Style="{StaticResource CircleIconButtonStyle}"
+                                                                Command="{Binding DeleteCommand}"
+                                                                ToolTip="Delete identity"
+                                                                AutomationProperties.Name="Delete identity">
+                                                            <Path Data="{StaticResource GeoTrash}" Stroke="{DynamicResource TextSecondaryBrush}"
+                                                                  StrokeThickness="1.5" Stretch="Uniform" Width="13" Height="13"
+                                                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                        </Button>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+
+                <!-- SCREEN: CONFIRM IDENTITY AUTHORIZATION (STEP 6) -->
+                <Grid Visibility="{Binding IsConfirmAuthorizeStep, Converter={StaticResource BoolToVis}}"
+                      VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1" CornerRadius="24" Padding="32,28" Width="480" MaxWidth="520">
+                        <StackPanel HorizontalAlignment="Center">
+                            <!-- Shield / Lock Icon -->
+                            <Border Width="64" Height="64" CornerRadius="32" Background="{DynamicResource SurfaceDarkBrush}"
+                                    HorizontalAlignment="Center" Margin="0,0,0,16">
+                                <Path Data="{StaticResource GeoLock}" Stroke="{DynamicResource AccentBrush}"
+                                      StrokeThickness="2" Stretch="Uniform" Width="28" Height="28"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+
+                            <TextBlock Text="Confirm it's you" FontSize="22" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,6" />
+
+                            <TextBlock Text="{Binding EnrolledDisplayName, StringFormat='Authorize {0} to unlock this PC with Peek.'}"
+                                       FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,12" />
+
+                            <TextBlock Text="Windows will prompt for administrator permission (UAC) and your Windows password to confirm authorization. This only needs to be done once."
+                                       FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"
+                                       TextAlignment="Center" LineHeight="18" Margin="0,0,0,20" />
+
+                            <!-- Error message if authorization failed -->
+                            <Border Visibility="{Binding HasAuthorizeError, Converter={StaticResource BoolToVis}}"
+                                    Background="#2A1717" BorderBrush="{DynamicResource DangerBrush}" BorderThickness="1"
+                                    CornerRadius="12" Padding="14,10" Margin="0,0,0,18">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding AuthorizeErrorMessage}" FontSize="12" Foreground="{DynamicResource DangerBrush}"
+                                               TextWrapping="Wrap" LineHeight="16" />
+                                    <!-- If Exit Code 6: Show Link Windows Password button -->
+                                    <Button Visibility="{Binding IsAuthorizeNotLinkedYet, Converter={StaticResource BoolToVis}}"
+                                            Style="{StaticResource PrimaryButtonStyle}"
+                                            Command="{Binding UpdatePasswordLinkCommand}"
+                                            Content="Link Windows Password Now"
+                                            Height="32" Padding="16,0" FontSize="12" Margin="0,8,0,0" HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Buttons -->
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,0">
+                                <Button Style="{StaticResource SecondaryButtonStyle}"
+                                        Command="{Binding CancelAuthorizeEnrolledIdentityCommand}"
+                                        Content="Activate Later" Height="40" Padding="20,0" Margin="0,0,12,0"
+                                        FontSize="13" ToolTip="Identity will stay saved as Not activated" />
+                                <Button Style="{StaticResource PrimaryButtonStyle}"
+                                        Command="{Binding AuthorizeEnrolledIdentityCommand}"
+                                        Content="Authorize Identity" Height="40" Padding="26,0"
+                                        FontSize="13" IsEnabled="{Binding IsNotAuthorizingIdentity}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
                 </Grid>
 
                 <!-- STEP 1: WELCOME & NAME -->
@@ -986,6 +1077,135 @@
                         Height="46" FontSize="15"
                         AutomationProperties.Name="Manage enrolled identities" />
             </Grid>
+        </Grid>
+
+        <!-- ============================================================== -->
+        <!-- MODAL OVERLAYS (CONFIRM PASSWORD, DELETE, REVOKE, UNLINK)      -->
+        <!-- ============================================================== -->
+
+        <!-- 1. MODAL: IN-APP CONFIRM IT'S YOU (PASSWORD) -->
+        <Grid Grid.Row="0" Grid.RowSpan="3" Margin="-36,-20,-36,-20"
+              Visibility="{Binding IsConfirmPasswordDialogOpen, Converter={StaticResource BoolToVis}}"
+              Background="#CC000000" Panel.ZIndex="100">
+            <Border Background="{DynamicResource SurfaceDarkBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1.5" CornerRadius="20" Padding="28,24" MaxWidth="440"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <Grid Margin="0,0,0,12">
+                        <TextBlock Text="{Binding ConfirmPasswordDialogTitle}" FontSize="16" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                        <Button Style="{StaticResource MinimalCloseButtonStyle}"
+                                Command="{Binding CancelConfirmPasswordDialogCommand}"
+                                HorizontalAlignment="Right" Width="24" Height="24" ToolTip="Cancel">
+                            <Path Data="M 6,6 L 14,14 M 14,6 L 6,14" Stroke="{DynamicResource TextSecondaryBrush}"
+                                  StrokeThickness="1.6" Stretch="Uniform" Width="10" Height="10" />
+                        </Button>
+                    </Grid>
+
+                    <TextBlock Text="{Binding ConfirmPasswordDialogDescription}"
+                               FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextWrapping="Wrap" LineHeight="18" Margin="0,0,0,16" />
+
+                    <PasswordBox x:Name="ConfirmDialogPasswordBox"
+                                 KeyDown="ConfirmDialogPasswordBox_KeyDown"
+                                 IsVisibleChanged="ConfirmDialogPasswordBox_IsVisibleChanged"
+                                 Style="{StaticResource ModernPasswordBoxStyle}"
+                                 Height="42" FontSize="14" Margin="0,0,0,8" TabIndex="1" />
+
+                    <TextBlock Text="{Binding ConfirmPasswordDialogError}"
+                               Foreground="{DynamicResource DangerBrush}" FontSize="12"
+                               Visibility="{Binding HasConfirmPasswordDialogError, Converter={StaticResource BoolToVis}}"
+                               Margin="0,0,0,12" />
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,4,0,0">
+                        <Button Style="{StaticResource SecondaryButtonStyle}"
+                                Command="{Binding CancelConfirmPasswordDialogCommand}"
+                                Content="Cancel" Height="36" Padding="18,0" Margin="0,0,10,0"
+                                FontSize="13" TabIndex="2" />
+                        <Button x:Name="ConfirmDialogSubmitButton"
+                                Style="{StaticResource PrimaryButtonStyle}"
+                                Click="ConfirmDialogSubmitButton_Click"
+                                Content="Confirm" Height="36" Padding="24,0"
+                                FontSize="13" TabIndex="3" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- 2. MODAL: DELETE CONFIRMATION -->
+        <Grid Grid.Row="0" Grid.RowSpan="3" Margin="-36,-20,-36,-20"
+              Visibility="{Binding IsDeleteConfirmationDialogOpen, Converter={StaticResource BoolToVis}}"
+              Background="#CC000000" Panel.ZIndex="100">
+            <Border Background="{DynamicResource SurfaceDarkBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1.5" CornerRadius="20" Padding="28,24" MaxWidth="440"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <TextBlock Text="Delete Face Identity" FontSize="16" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,8" />
+                    <TextBlock Text="{Binding DeletingProfileName, StringFormat='Are you sure you want to delete \'{0}\'? This will permanently remove the face profile from this device.'}"
+                               FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextWrapping="Wrap" LineHeight="18" Margin="0,0,0,20" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Style="{StaticResource SecondaryButtonStyle}"
+                                Command="{Binding CancelDeleteCommand}"
+                                Content="Cancel" Height="36" Padding="18,0" Margin="0,0,10,0" FontSize="13" />
+                        <Button Style="{StaticResource DangerButtonStyle}"
+                                Command="{Binding ConfirmDeleteCommand}"
+                                Content="Delete" Height="36" Padding="24,0" FontSize="13" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- 3. MODAL: OFFER REVOKE AUTHORIZATION -->
+        <Grid Grid.Row="0" Grid.RowSpan="3" Margin="-36,-20,-36,-20"
+              Visibility="{Binding IsOfferRevokeDialogOpen, Converter={StaticResource BoolToVis}}"
+              Background="#CC000000" Panel.ZIndex="100">
+            <Border Background="{DynamicResource SurfaceDarkBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1.5" CornerRadius="20" Padding="28,24" MaxWidth="440"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <TextBlock Text="Revoke Windows Authorization?" FontSize="16" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,8" />
+                    <TextBlock Text="{Binding RevokingProfileName, StringFormat='\'{0}\' was deleted. Would you like to revoke its Windows unlock authorization now? (Requires administrator permission).'}"
+                               FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextWrapping="Wrap" LineHeight="18" Margin="0,0,0,20" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Style="{StaticResource SecondaryButtonStyle}"
+                                Command="{Binding CloseOfferRevokeCommand}"
+                                Content="Skip" Height="36" Padding="18,0" Margin="0,0,10,0" FontSize="13"
+                                ToolTip="If skipped, authorization will be pruned on next authorization" />
+                        <Button Style="{StaticResource PrimaryButtonStyle}"
+                                Command="{Binding ConfirmRevokeIdentityCommand}"
+                                Content="Revoke Authorization" Height="36" Padding="20,0" FontSize="13" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- 4. MODAL: OFFER UNLINK PASSWORD -->
+        <Grid Grid.Row="0" Grid.RowSpan="3" Margin="-36,-20,-36,-20"
+              Visibility="{Binding IsOfferUnlinkDialogOpen, Converter={StaticResource BoolToVis}}"
+              Background="#CC000000" Panel.ZIndex="100">
+            <Border Background="{DynamicResource SurfaceDarkBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1.5" CornerRadius="20" Padding="28,24" MaxWidth="440"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <TextBlock Text="Remove Saved Password?" FontSize="16" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,0,0,8" />
+                    <TextBlock Text="You deleted the last face identity. Would you like to remove your linked Windows password from Peek as well?"
+                               FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextWrapping="Wrap" LineHeight="18" Margin="0,0,0,20" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Style="{StaticResource SecondaryButtonStyle}"
+                                Command="{Binding CloseOfferUnlinkCommand}"
+                                Content="Keep Password" Height="36" Padding="18,0" Margin="0,0,10,0" FontSize="13" />
+                        <Button Style="{StaticResource DangerButtonStyle}"
+                                Command="{Binding ConfirmUnlinkPasswordCommand}"
+                                Content="Remove Password" Height="36" Padding="20,0" FontSize="13" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
         </Grid>
 
     </Grid>
