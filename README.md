@@ -12,10 +12,11 @@ Peek is engineered with strict security boundaries:
 
 1. **Face match alone can never unlock**: Biometric similarity and liveness detection are independent gates. Both must pass before authentication can proceed.
 2. **No raw frames persist**: Camera frames are processed strictly in-memory and discarded immediately after 512-dimensional embedding extraction.
-3. **Fail open, never fail closed**: If the camera is unavailable or an internal error occurs, Peek gracefully yields to standard Windows authentication (Password / PIN / Windows Hello). A failure will never lock a user out of their machine.
-4. **Encrypted at rest**: All biometric templates and profile metadata are encrypted using Windows DPAPI (`CryptProtectData`). No plaintext embeddings touch disk.
-5. **No secrets or bypasses**: Shipped code contains no hardcoded bypasses, auto-success flags, or plaintext credentials.
-6. **No OS tampering**: Peek operates cleanly alongside existing credential providers as an additional credential tile without modifying or spoofing standard OS authentication packages.
+3. **Single-subject biometric isolation**: Templates are extracted strictly from the 112×112 canonical crop of the verified primary enrolling user. Background bystanders or blurred secondary faces are never embedded or stored.
+4. **Fail open, never fail closed**: If the camera is unavailable or an internal error occurs, Peek gracefully yields to standard Windows authentication (Password / PIN / Windows Hello). A failure will never lock a user out of their machine.
+5. **Encrypted at rest**: All biometric templates and profile metadata are encrypted using Windows DPAPI (`CryptProtectData`). No plaintext embeddings touch disk.
+6. **No secrets or bypasses**: Shipped code contains no hardcoded bypasses, auto-success flags, or plaintext credentials.
+7. **No OS tampering**: Peek operates cleanly alongside existing credential providers as an additional credential tile without modifying or spoofing standard OS authentication packages.
 
 ---
 
@@ -80,6 +81,8 @@ Peek/
 │   │   └── calibrator.py
 │   ├── tracking/                        # Dominant face tracker with IoU, centroids, & hysteresis
 │   │   └── face_tracker.py
+│   ├── segmentation/                    # Real-time portrait background segmentation & bokeh blur
+│   │   └── portrait_blur.py
 │   ├── temporal/                        # M-of-N rolling sliding window & EMA score smoothing
 │   │   └── temporal_verifier.py
 │   ├── liveness/                        # Phase 4 passive RGB multi-cue anti-spoofing engine
@@ -104,7 +107,8 @@ Peek/
 │   ├── test_bezel_detector.py           # Phase 4 hardening: smartphone bezel detection tests
 │   ├── test_motion_parallax.py          # Phase 4 hardening: 3D parallax vs 2D hand tremor tests
 │   ├── test_challenge_response.py       # Phase 4 hardening: active challenge-response tests
-│   └── test_screen_replay_regression.py # Phase 4 hardening: synthetic screen replay regression tests
+│   ├── test_screen_replay_regression.py # Phase 4 hardening: synthetic screen replay regression tests
+│   └── test_portrait_blur.py            # Portrait blur, segmentation & bystander suppression tests
 ├── scripts/                             # Verification & validation scripts
 │   ├── verify_phase1.py                 # Phase 1 offline verification script
 │   ├── verify_phase2.py                 # Phase 2 offline verification script
@@ -137,7 +141,9 @@ python apps/PeekEnrollment/main.py
 - **Guided 9-Direction Setup**: Center, Left, Right, Up, Down, and the 4 Diagonals.
 - **Moving Target Dial**: A circular guide with a moving target dot prompts your gaze direction.
 - **Measured Head Pose**: Pose direction is computed directly from 5 facial landmarks.
-- **Quality Gating**: Automatically rejects blurry, poorly lit, or multiple-face frames.
+- **Primary Enrollee Disambiguation**: Intelligently identifies and locks onto the enrolling user sitting in front of the camera using prominence scoring ($Area \times Centrality$), preventing background bystanders from blocking enrollment.
+- **Portrait Background Blur & Bystander Suppression**: Real-time neural selfie segmentation (~9 ms on CPU) softly blurs the background in the Face ID circular aperture, cleanly dissolving background people into soft bokeh.
+- **Quality Gating**: Automatically rejects blurry, poorly lit, or conflicting multi-face frames.
 - **Rapid Capture**: Locks onto and captures each pose in $\approx 70\text{ ms}$, completing all 9 directions in under **10 seconds**.
 - **DPAPI Encryption**: Final multi-angle profile is encrypted via Windows DPAPI into `%LOCALAPPDATA%\Peek\Profiles`.
 
