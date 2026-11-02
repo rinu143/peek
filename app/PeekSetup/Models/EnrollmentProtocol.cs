@@ -99,7 +99,8 @@ namespace PeekSetup.Models
             string? password = null,
             bool cleanPreview = true,
             bool keepExisting = true,
-            string? profileId = null)
+            string? profileId = null,
+            bool blurBackground = true)
         {
             var msg = new
             {
@@ -108,6 +109,7 @@ namespace PeekSetup.Models
                 display_name = displayName,
                 confirmed = confirmed ? (bool?)true : null,
                 clean_preview = cleanPreview ? (bool?)true : null,
+                blur_background = blurBackground ? (bool?)true : null,
                 keep_existing = keepExisting ? (bool?)true : null,
                 profile_id = profileId,
                 password = password,

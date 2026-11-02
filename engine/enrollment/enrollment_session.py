@@ -23,7 +23,7 @@ from engine.detection.scrfd_detector import SCRFDDetector, FaceDetection
 from engine.alignment.aligner import FaceAligner
 from engine.embedding.arcface_embedder import ArcFaceEmbedder
 from engine.pose.pose_estimator import HeadPose, HeadPoseEstimator, ORDERED_ENROLLMENT_POSES, mirror_pose
-from engine.quality.quality_checker import FaceQualityChecker, QualityCheckResult
+from engine.quality.quality_checker import FaceQualityChecker, QualityCheckResult, resolve_primary_face
 from storage.template_store import SecureProfileStore, PeekProfile, PeekTemplate
 
 logger = logging.getLogger("Peek.EnrollmentSession")
@@ -157,10 +157,11 @@ class EnrollmentSession:
 
         # 1. Detect faces (single detector run per frame reused across runner)
         detections = self.detector.detect(frame) if self.detector else []
-        self.last_detections = detections
-        if detections:
+        primary_det, secondary_dets = resolve_primary_face(detections, frame.shape)
+        self.last_detections = [primary_det] + secondary_dets if primary_det else []
+        if primary_det:
             try:
-                self.last_pose_estimate = self.pose_estimator.estimate(detections[0].landmarks)
+                self.last_pose_estimate = self.pose_estimator.estimate(primary_det.landmarks)
             except Exception:
                 self.last_pose_estimate = None
         else:
@@ -174,10 +175,8 @@ class EnrollmentSession:
                 pose_matched=False
             )
 
-        # 2. Quality gating
-
-        # 2. Quality gating
-        q_result = self.quality_checker.evaluate(frame, detections)
+        # 2. Quality gating with smart bystander tolerance
+        q_result = self.quality_checker.evaluate(frame, detections, allow_background_bystanders=True)
         if not q_result.passed:
             return self._build_progress(
                 guidance=q_result.rejection_reason or "Adjust position",
@@ -185,8 +184,8 @@ class EnrollmentSession:
                 pose_matched=False
             )
 
-        # 3. Pose alignment check
-        det = detections[0]
+        # 3. Pose alignment check on primary enrolling user
+        det = primary_det
         pose_match, pose_score, pose_guidance = self.pose_estimator.evaluate_against_target(
             det.landmarks,
             self.current_pose,

@@ -150,6 +150,7 @@ def make_start_enrollment(
     confirmed: bool = False,
     password: Optional[str] = None,
     clean_preview: bool = True,
+    blur_background: bool = True,
 ) -> Dict[str, Any]:
     msg = {
         "protocol_version": PROTOCOL_VERSION,
@@ -157,6 +158,7 @@ def make_start_enrollment(
         "display_name": str(display_name),
         "confirmed": bool(confirmed),
         "clean_preview": bool(clean_preview),
+        "blur_background": bool(blur_background),
         "timestamp": time.time(),
     }
     if password is not None:

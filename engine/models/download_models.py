@@ -8,6 +8,7 @@ import io
 import zipfile
 import urllib.request
 import logging
+from typing import Optional, Tuple
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("Peek.DownloadModels")
@@ -17,6 +18,33 @@ MODELS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 DETECTOR_NAME = "scrfd_500m_bnkps.onnx"
 EMBEDDER_NAME = "w600k_mbf.onnx"
+SEGMENTATION_NAME = "selfie_segmentation.onnx"
+SEGMENTATION_URL = "https://huggingface.co/webml/models-moved/resolve/feeede7c6038e02f8dd5be2116c9c8e32967b406/selfie-segmentation-general.onnx"
+
+
+def ensure_segmentation_model() -> Optional[str]:
+    """
+    Ensures that the selfie segmentation ONNX model is present in the models directory.
+    Downloads the model if missing. Returns None if download fails (allowing fallback).
+    """
+    seg_path = os.path.join(MODELS_DIR, SEGMENTATION_NAME)
+    if os.path.exists(seg_path) and os.path.getsize(seg_path) > 100000:
+        return seg_path
+
+    try:
+        logger.info(f"Downloading selfie segmentation model from {SEGMENTATION_URL}...")
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Peek/1.0"}
+        req = urllib.request.Request(SEGMENTATION_URL, headers=headers)
+        with urllib.request.urlopen(req, timeout=30) as response:
+            content = response.read()
+            if len(content) > 100000:
+                with open(seg_path, "wb") as f:
+                    f.write(content)
+                logger.info(f"Saved {SEGMENTATION_NAME} ({len(content)} bytes)")
+                return seg_path
+    except Exception as ex:
+        logger.warning("Could not download selfie segmentation model: %s. Fallback will be used.", ex)
+    return seg_path if os.path.exists(seg_path) else None
 
 def ensure_models_exist():
     """

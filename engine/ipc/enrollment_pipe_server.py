@@ -349,6 +349,7 @@ class EnrollmentPipeServer:
         password: Optional[str] = None,
         keep_existing: bool = True,
         profile_id: Optional[str] = None,
+        blur_background: bool = True,
     ) -> EnrollmentRunner:
         with self._runner_lock:
             if self._runner is not None:
@@ -357,6 +358,8 @@ class EnrollmentPipeServer:
                     self._runner.keep_existing = keep_existing
                 if hasattr(self._runner, "target_profile_id"):
                     self._runner.target_profile_id = profile_id
+                if hasattr(self._runner, "blur_background"):
+                    self._runner.blur_background = blur_background
                 self._active_runner = self._runner
                 return self._runner
 
@@ -369,6 +372,7 @@ class EnrollmentPipeServer:
                     password=password,
                     keep_existing=keep_existing,
                     profile_id=profile_id,
+                    blur_background=blur_background,
                 )
             else:
                 self._active_runner.display_name = display_name
@@ -376,6 +380,8 @@ class EnrollmentPipeServer:
                 self._active_runner.confirmation_password = password
                 self._active_runner.keep_existing = keep_existing
                 self._active_runner.target_profile_id = profile_id
+                if hasattr(self._active_runner, "blur_background"):
+                    self._active_runner.blur_background = blur_background
 
             return self._active_runner
 
@@ -642,6 +648,7 @@ class EnrollmentPipeServer:
                             continue
 
                     clean_preview = bool(msg.get("clean_preview", True))
+                    blur_background = bool(msg.get("blur_background", True))
 
                     self._run_enrollment_session(
                         session,
@@ -651,6 +658,7 @@ class EnrollmentPipeServer:
                         clean_preview=clean_preview,
                         keep_existing=keep_existing,
                         profile_id=profile_id,
+                        blur_background=blur_background,
                     )
                 finally:
                     if self.coordinator is not None:
@@ -673,6 +681,7 @@ class EnrollmentPipeServer:
         clean_preview: bool = False,
         keep_existing: bool = False,
         profile_id: Optional[str] = None,
+        blur_background: bool = True,
     ):
         """
         Executes a live guided enrollment session:
@@ -682,7 +691,7 @@ class EnrollmentPipeServer:
         4. Streams PREVIEW_FRAME messages only to verified client.
         5. Emits POSE_COMPLETE and ENROLLMENT_COMPLETE.
         """
-        logger.info(f"Starting enrollment session for display_name='{display_name}' (clean_preview={clean_preview}, keep_existing={keep_existing})")
+        logger.info(f"Starting enrollment session for display_name='{display_name}' (clean_preview={clean_preview}, keep_existing={keep_existing}, blur_background={blur_background})")
 
         # Requirement 6: Verify client process SID matches enrolled user before streaming frames
         client_sid = get_client_process_sid(session.handle)
@@ -701,6 +710,7 @@ class EnrollmentPipeServer:
             password=password,
             keep_existing=keep_existing,
             profile_id=profile_id,
+            blur_background=blur_background,
         )
 
         if hasattr(runner, "start_camera") and not runner.start_camera():

@@ -27,6 +27,7 @@ from engine.enrollment.enrollment_session import (
     EnrollmentState,
     EnrollmentProgress,
 )
+from engine.segmentation.portrait_blur import PortraitBlurProcessor
 from storage.template_store import SecureProfileStore, PeekProfile
 
 logger = logging.getLogger("Peek.EnrollmentRunner")
@@ -256,12 +257,15 @@ class EnrollmentRunner:
         password: Optional[str] = None,
         keep_existing: bool = True,
         profile_id: Optional[str] = None,
+        blur_background: bool = True,
     ):
         self.display_name = display_name
         self.profile_store = profile_store or SecureProfileStore()
         self.candidates_per_pose = candidates_per_pose
         self.keep_best_per_pose = keep_best_per_pose
         self.camera_index = camera_index
+        self.blur_background = blur_background
+        self.portrait_processor = PortraitBlurProcessor() if blur_background else None
 
         self._camera = camera
         self._camera_owned = camera is None
@@ -408,21 +412,6 @@ class EnrollmentRunner:
         # Mirror webcam feed for intuitive gaze direction
         mirrored = cv2.flip(raw_copy, 1)
 
-        # Build clean square preview frame for native rendering (no OpenCV drawing)
-        h, w = mirrored.shape[:2]
-        sq_size = min(h, w)
-        crop_x = (w - sq_size) // 2
-        crop_y = (h - sq_size) // 2
-        cropped_square = mirrored[crop_y:crop_y + sq_size, crop_x:crop_x + sq_size]
-        preview_frame = cv2.resize(cropped_square, (480, 480), interpolation=cv2.INTER_LINEAR)
-
-        # Frame for OpenCV composited HUD
-        frame = mirrored.copy()
-
-        # Create layout canvas: 760 width, 520 height
-        canvas = np.zeros((520, 760, 3), dtype=np.uint8)
-        canvas[:] = COLOR_BG_DARK
-
         prev_idx = self.session.current_pose_idx
         prev_pose = self.session.current_pose
 
@@ -440,8 +429,10 @@ class EnrollmentRunner:
         user_pitch = 0.0
         det = None
         session_dets = getattr(self.session, "last_detections", None)
+        secondary_dets = []
         if session_dets and len(session_dets) > 0:
             det = session_dets[0]
+            secondary_dets = session_dets[1:]
             pose_est = getattr(self.session, "last_pose_estimate", None)
             if pose_est is not None:
                 user_yaw = pose_est.yaw
@@ -454,6 +445,30 @@ class EnrollmentRunner:
                 except Exception:
                     pass
 
+        # Apply portrait background blur and bystander suppression if enabled
+        if self.portrait_processor is not None:
+            display_frame = self.portrait_processor.process(
+                mirrored, primary_face=det, secondary_faces=secondary_dets
+            )
+        else:
+            display_frame = mirrored
+
+        # Build clean square preview frame for native rendering (no OpenCV drawing)
+        h, w = display_frame.shape[:2]
+        sq_size = min(h, w)
+        crop_x = (w - sq_size) // 2
+        crop_y = (h - sq_size) // 2
+        cropped_square = display_frame[crop_y:crop_y + sq_size, crop_x:crop_x + sq_size]
+        preview_frame = cv2.resize(cropped_square, (480, 480), interpolation=cv2.INTER_LINEAR)
+
+        # Frame for OpenCV composited HUD
+        frame = display_frame.copy()
+
+        # Create layout canvas: 760 width, 520 height
+        canvas = np.zeros((520, 760, 3), dtype=np.uint8)
+        canvas[:] = COLOR_BG_DARK
+
+        if det is not None:
             # Draw subtle face tracking brackets on camera preview
             try:
                 x1, y1, x2, y2 = det.bbox.astype(int)
