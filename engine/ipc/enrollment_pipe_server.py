@@ -351,7 +351,7 @@ class EnrollmentPipeServer:
         profile_id: Optional[str] = None,
         blur_background: bool = True,
         user_sid: Optional[str] = None,
-        activate: bool = True,
+        activate: bool = False,
     ) -> EnrollmentRunner:
         with self._runner_lock:
             if self._runner is not None:
@@ -626,7 +626,7 @@ class EnrollmentPipeServer:
                     display_name = msg.get("display_name", "Primary User")
                     keep_existing = bool(msg.get("keep_existing", True))
                     profile_id = msg.get("profile_id")
-                    activate = bool(msg.get("activate", True))
+                    activate = bool(msg.get("activate", False))
 
                     clean_preview = bool(msg.get("clean_preview", True))
                     blur_background = bool(msg.get("blur_background", True))
@@ -670,7 +670,7 @@ class EnrollmentPipeServer:
         keep_existing: bool = True,
         profile_id: Optional[str] = None,
         blur_background: bool = True,
-        activate: bool = True,
+        activate: bool = False,
     ):
         """
         Executes a live guided enrollment session:

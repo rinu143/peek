@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Security.AccessControl;
@@ -14,12 +15,59 @@ namespace PeekSetup.Services
         public const string ValueName = "Authorized";
         public const int MaxAuthorizedIdentities = 5;
 
+        public const RegistryRights ProhibitedWriteRights =
+            RegistryRights.SetValue |
+            RegistryRights.CreateSubKey |
+            RegistryRights.Delete |
+            RegistryRights.ChangePermissions |
+            RegistryRights.TakeOwnership;
+
+        public static bool ContainsProhibitedWriteRights(RegistryRights rights)
+        {
+            if ((rights & ProhibitedWriteRights) != 0)
+            {
+                return true;
+            }
+
+            if ((rights & RegistryRights.WriteKey) == RegistryRights.WriteKey ||
+                (rights & RegistryRights.FullControl) == RegistryRights.FullControl)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private readonly RegistryHive _hive;
+        private readonly string _baseKeyPath;
+
+        public RegistryAuthorizationStore(
+            RegistryHive hive = RegistryHive.LocalMachine,
+            string baseKeyPath = BaseKeyPath)
+        {
+            _hive = hive;
+            _baseKeyPath = baseKeyPath;
+        }
+
         public static string GetKeyPath(string userSid)
         {
             if (string.IsNullOrWhiteSpace(userSid))
                 throw new ArgumentException("User SID cannot be null or empty", nameof(userSid));
 
             return $@"{BaseKeyPath}\{userSid}";
+        }
+
+        public string ResolveKeyPath(string userSid)
+        {
+            if (string.IsNullOrWhiteSpace(userSid))
+                throw new ArgumentException("User SID cannot be null or empty", nameof(userSid));
+
+            return $@"{_baseKeyPath}\{userSid}";
+        }
+
+        private RegistryKey OpenBaseHive()
+        {
+            return RegistryKey.OpenBaseKey(_hive, RegistryView.Registry64);
         }
 
         public string[] GetAuthorizedIdentities(string userSid)
@@ -29,8 +77,8 @@ namespace PeekSetup.Services
 
             try
             {
-                using var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-                using var key = hklm.OpenSubKey(GetKeyPath(userSid), false);
+                using var hklm = OpenBaseHive();
+                using var key = hklm.OpenSubKey(ResolveKeyPath(userSid), false);
                 if (key == null)
                     return Array.Empty<string>();
 
@@ -67,22 +115,48 @@ namespace PeekSetup.Services
                 .Take(MaxAuthorizedIdentities)
                 .ToArray();
 
+            string path = ResolveKeyPath(userSid);
+            RegistryKey? key = null;
             try
             {
-                using var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-                string path = GetKeyPath(userSid);
-                using var key = hklm.CreateSubKey(path, true);
+                using var hklm = OpenBaseHive();
+                key = hklm.CreateSubKey(path, true);
                 if (key == null)
                     return false;
 
-                EnforceSecureDacl(key);
+                try
+                {
+                    EnforceSecureDacl(key);
 
-                key.SetValue(ValueName, filtered, RegistryValueKind.MultiString);
+                    if (HasInsecureWriteRights(key))
+                    {
+                        Trace.TraceError($"Insecure write rights remain on registry key {path}. Deleting key.");
+                        key?.Close();
+                        key = null;
+                        DeleteIdentitiesKey(userSid);
+                        return false;
+                    }
+                }
+                catch (Exception daclEx)
+                {
+                    Trace.TraceError($"EnforceSecureDacl failed for {path}: {daclEx}");
+                    key?.Close();
+                    key = null;
+                    DeleteIdentitiesKey(userSid);
+                    return false;
+                }
+
+                key?.SetValue(ValueName, filtered, RegistryValueKind.MultiString);
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                Trace.TraceError($"SetAuthorizedIdentities failed for {userSid}: {ex}");
                 return false;
+            }
+            finally
+            {
+                key?.Dispose();
             }
         }
 
@@ -130,8 +204,8 @@ namespace PeekSetup.Services
 
             try
             {
-                using var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-                string path = GetKeyPath(userSid);
+                using var hklm = OpenBaseHive();
+                string path = ResolveKeyPath(userSid);
                 hklm.DeleteSubKeyTree(path, false);
                 return true;
             }
@@ -147,68 +221,83 @@ namespace PeekSetup.Services
             return ids != null && ids.Length > 0;
         }
 
-        public static void EnforceSecureDacl(RegistryKey key)
+        public static bool HasInsecureWriteRights(RegistryKey key)
         {
-            try
+            var security = key.GetAccessControl();
+            var usersSid = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+            var worldSid = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
+
+            foreach (RegistryAccessRule rule in security.GetAccessRules(true, true, typeof(SecurityIdentifier)))
             {
-                var security = key.GetAccessControl();
-                bool usersCanWrite = false;
-
-                var usersSid = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
-                var worldSid = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
-
-                foreach (RegistryAccessRule rule in security.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+                if (rule.IdentityReference.Equals(usersSid) || rule.IdentityReference.Equals(worldSid))
                 {
-                    if (rule.IdentityReference.Equals(usersSid) || rule.IdentityReference.Equals(worldSid))
+                    if (rule.AccessControlType == AccessControlType.Allow)
                     {
-                        if (rule.AccessControlType == AccessControlType.Allow)
+                        if (ContainsProhibitedWriteRights(rule.RegistryRights))
                         {
-                            var writeMask = RegistryRights.SetValue | RegistryRights.CreateSubKey | RegistryRights.WriteKey | RegistryRights.FullControl;
-                            if ((rule.RegistryRights & writeMask) != 0)
-                            {
-                                usersCanWrite = true;
-                                break;
-                            }
+                            return true;
                         }
                     }
                 }
+            }
 
-                if (usersCanWrite)
+            return false;
+        }
+
+        public static void EnforceSecureDacl(RegistryKey key)
+        {
+            var security = key.GetAccessControl();
+            bool usersCanWrite = false;
+
+            var usersSid = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+            var worldSid = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
+
+            foreach (RegistryAccessRule rule in security.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+            {
+                if (rule.IdentityReference.Equals(usersSid) || rule.IdentityReference.Equals(worldSid))
                 {
-                    // Restrict explicitly: SYSTEM & Administrators full, Users read only
-                    var secureDacl = new RegistrySecurity();
-                    var systemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
-                    var adminSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
-
-                    secureDacl.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-
-                    secureDacl.AddAccessRule(new RegistryAccessRule(
-                        systemSid,
-                        RegistryRights.FullControl,
-                        InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-                        PropagationFlags.None,
-                        AccessControlType.Allow));
-
-                    secureDacl.AddAccessRule(new RegistryAccessRule(
-                        adminSid,
-                        RegistryRights.FullControl,
-                        InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-                        PropagationFlags.None,
-                        AccessControlType.Allow));
-
-                    secureDacl.AddAccessRule(new RegistryAccessRule(
-                        usersSid,
-                        RegistryRights.ReadKey,
-                        InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-                        PropagationFlags.None,
-                        AccessControlType.Allow));
-
-                    key.SetAccessControl(secureDacl);
+                    if (rule.AccessControlType == AccessControlType.Allow)
+                    {
+                        if (ContainsProhibitedWriteRights(rule.RegistryRights))
+                        {
+                            usersCanWrite = true;
+                            break;
+                        }
+                    }
                 }
             }
-            catch
+
+            if (usersCanWrite)
             {
-                // In non-elevated or simulated environments, ignore access control errors
+                // Restrict explicitly: SYSTEM & Administrators full, Users read only
+                var secureDacl = new RegistrySecurity();
+                var systemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+                var adminSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+
+                secureDacl.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+
+                secureDacl.AddAccessRule(new RegistryAccessRule(
+                    systemSid,
+                    RegistryRights.FullControl,
+                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                    PropagationFlags.None,
+                    AccessControlType.Allow));
+
+                secureDacl.AddAccessRule(new RegistryAccessRule(
+                    adminSid,
+                    RegistryRights.FullControl,
+                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                    PropagationFlags.None,
+                    AccessControlType.Allow));
+
+                secureDacl.AddAccessRule(new RegistryAccessRule(
+                    usersSid,
+                    RegistryRights.ReadKey,
+                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                    PropagationFlags.None,
+                    AccessControlType.Allow));
+
+                key.SetAccessControl(secureDacl);
             }
         }
     }

@@ -60,7 +60,7 @@ namespace PeekSetup.Tests
 
         public bool LastStartedActivate { get; private set; }
 
-        public Task StartEnrollmentAsync(string displayName, bool keepExisting = true, string? profileId = null, bool activate = true, CancellationToken ct = default)
+        public Task StartEnrollmentAsync(string displayName, bool keepExisting = true, string? profileId = null, bool activate = false, CancellationToken ct = default)
         {
             LastStartedDisplayName = displayName;
             LastStartedKeepExisting = keepExisting;
@@ -493,6 +493,62 @@ namespace PeekSetup.Tests
             Assert.True(vm.IsPasswordLinkStep);
             Assert.Equal("prof_123", vm.EnrolledProfileId);
             Assert.Equal("Alice", vm.EnrolledDisplayName);
+        }
+
+        [Fact]
+        public async Task StartEnrollmentFlowAsync_SendsActivateFalse()
+        {
+            var mockPipe = new MockEnrollmentPipeClient();
+            var vm = new MainViewModel(mockPipe, new MockPasswordLinker());
+
+            await vm.StartEnrollmentFlowAsync();
+
+            Assert.False(mockPipe.LastStartedActivate);
+        }
+
+        [Fact]
+        public async Task EnrollmentCompleted_LeavesProfilePending_AndEnablesOnlyAfterPasswordLinkSuccess()
+        {
+            var mockPipe = new MockEnrollmentPipeClient();
+            var mockLinker = new MockPasswordLinker();
+            var mockProfiles = new MockProfileManager
+            {
+                Profiles = new System.Collections.Generic.List<ProfileModel>
+                {
+                    new ProfileModel { ProfileId = "prof_new123", DisplayName = "Alice", Enabled = false }
+                }
+            };
+            var vm = new MainViewModel(mockPipe, mockLinker, null, mockProfiles);
+            vm.EnrollmentCompleteDelayMs = 0;
+
+            await vm.StartEnrollmentFlowAsync();
+            mockPipe.TriggerEnrollmentCompleted("prof_new123", "Alice");
+
+            // Allow UI dispatch to process
+            await Task.Delay(50);
+
+            // Step must be PasswordLink, profile must still be disabled (enabled=false)
+            Assert.Equal(SetupStep.PasswordLink, vm.CurrentStep);
+            Assert.Equal("prof_new123", vm.EnrolledProfileId);
+            Assert.False(mockProfiles.Profiles[0].Enabled);
+            Assert.False(mockProfiles.ToggleCalled);
+
+            // Simulate user cancelling elevation (exit code 1) -> must NOT enable profile
+            vm.HandleLinkExitCode(1);
+            Assert.False(mockProfiles.Profiles[0].Enabled);
+            Assert.False(mockProfiles.ToggleCalled);
+
+            // Simulate exit code 3 (registry write error) -> must NOT enable profile
+            vm.HandleLinkExitCode(3);
+            Assert.False(mockProfiles.Profiles[0].Enabled);
+            Assert.False(mockProfiles.ToggleCalled);
+
+            // Simulate elevation success (exit code 0) -> profile MUST now be enabled
+            vm.HandleLinkExitCode(0);
+            Assert.True(mockProfiles.ToggleCalled);
+            Assert.Equal("prof_new123", mockProfiles.LastToggledProfileId);
+            Assert.True(mockProfiles.LastToggledState);
+            Assert.True(mockProfiles.Profiles[0].Enabled);
         }
     }
 }

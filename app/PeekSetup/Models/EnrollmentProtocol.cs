@@ -101,7 +101,7 @@ namespace PeekSetup.Models
             bool keepExisting = true,
             string? profileId = null,
             bool blurBackground = true,
-            bool activate = true)
+            bool activate = false)
         {
             var msg = new
             {

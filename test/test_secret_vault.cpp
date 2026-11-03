@@ -265,6 +265,19 @@ int main()
             std::wcout << L"  FAIL: Legacy v1 secret accepted mismatched profile ID\n";
             failedTests++;
         }
+
+        // Empty matched profile ID fails with v1 secret and zeroes password
+        std::wstring outPwEmpty;
+        bool readV1Empty = !PeekSecretVault::ReadPasswordSecret(validSid, L"", outPwEmpty, fakeStore.get(), fakeIdStore.get());
+        if (readV1Empty && outPwEmpty.empty())
+        {
+            std::wcout << L"  PASS: Legacy v1 secret rejected empty profile ID\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Legacy v1 secret accepted empty profile ID\n";
+            failedTests++;
+        }
     }
 
     // -------------------------------------------------------------

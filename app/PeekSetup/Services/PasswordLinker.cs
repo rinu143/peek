@@ -72,8 +72,31 @@ namespace PeekSetup.Services
 
                 if (success)
                 {
-                    // 5. Set Authorized = [profile_id] in authorization store
-                    _authStore.SetAuthorizedIdentities(targetSid, new[] { profileId });
+                    // 5. Merge Authorized identities: keep existing ids, add profileId (dedupe, cap 5)
+                    var existing = _authStore.GetAuthorizedIdentities(targetSid);
+                    var merged = new System.Collections.Generic.List<string>();
+                    if (existing != null)
+                    {
+                        foreach (var id in existing)
+                        {
+                            if (!string.IsNullOrWhiteSpace(id) && !merged.Contains(id, StringComparer.OrdinalIgnoreCase))
+                            {
+                                merged.Add(id);
+                            }
+                        }
+                    }
+
+                    if (!merged.Contains(profileId, StringComparer.OrdinalIgnoreCase))
+                    {
+                        merged.Add(profileId);
+                    }
+
+                    var capped = merged.Take(RegistryAuthorizationStore.MaxAuthorizedIdentities).ToArray();
+                    bool authSaved = _authStore.SetAuthorizedIdentities(targetSid, capped);
+                    if (!authSaved)
+                    {
+                        return false;
+                    }
 
                     // Clean up obsolete legacy DPAPI .secret file if present
                     DeleteLegacySecretFile(profileId);
@@ -141,10 +164,21 @@ namespace PeekSetup.Services
                 }
 
                 // 6. Append the id (dedupe, cap 5)
+                var current = _authStore.GetAuthorizedIdentities(targetSid);
+                if (!current.Contains(profileId, StringComparer.OrdinalIgnoreCase) && current.Length >= RegistryAuthorizationStore.MaxAuthorizedIdentities)
+                {
+                    return ExitIdentityLimit;
+                }
+
                 bool added = _authStore.AddAuthorizedIdentity(targetSid, profileId);
                 if (!added)
                 {
-                    return ExitIdentityLimit;
+                    var checkAfter = _authStore.GetAuthorizedIdentities(targetSid);
+                    if (!checkAfter.Contains(profileId, StringComparer.OrdinalIgnoreCase) && checkAfter.Length >= RegistryAuthorizationStore.MaxAuthorizedIdentities)
+                    {
+                        return ExitIdentityLimit;
+                    }
+                    return ExitError; // 3: registry write failure / other error
                 }
 
                 DeleteLegacySecretFile(profileId);

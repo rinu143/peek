@@ -87,7 +87,9 @@ class ControllableFaceEngine:
         if self.frames >= self.succeed_on_frame:
             return EngineFrameResult(
                 has_face=True,
-                is_authorized_to_unlock=True
+                is_authorized_to_unlock=True,
+                matched_profile_id=self.active_profile.profile_id if self.active_profile else "test_profile_id",
+                matched_profile_name=self.active_profile.display_name if self.active_profile else "Test User"
             )
 
         return EngineFrameResult(

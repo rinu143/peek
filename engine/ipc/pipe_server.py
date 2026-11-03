@@ -745,14 +745,24 @@ class PipeServer:
 
                 # 5. Dual-Gate Authorization Check (NON-NEGOTIABLE SECURITY INVARIANT)
                 if result.is_authorized_to_unlock:
-                    matched_name = getattr(result, "matched_profile_name", None)
-                    if not matched_name and getattr(engine, "active_profile", None):
-                        matched_name = engine.active_profile.display_name
-                    display_name = matched_name or "Enrolled User"
-
                     matched_id = getattr(result, "matched_profile_id", None)
-                    if not matched_id and getattr(engine, "active_profile", None):
-                        matched_id = engine.active_profile.profile_id
+                    if not matched_id:
+                        logger.error(
+                            "Authorization invariant violation: is_authorized_to_unlock is True "
+                            "but matched_profile_id is missing."
+                        )
+                        self.lockout_tracker.record_failure(user_id)
+                        session.write_message(
+                            make_auth_failed(
+                                reason_code=REASON_NO_MATCH,
+                                detail="Authentication failed",
+                                nonce=nonce,
+                            )
+                        )
+                        return
+
+                    matched_name = getattr(result, "matched_profile_name", None)
+                    display_name = matched_name or "Enrolled User"
 
                     logger.info(f"Authentication verified for user '{display_name}'. Emitting AUTHENTICATED.")
                     self.lockout_tracker.record_success(user_id)

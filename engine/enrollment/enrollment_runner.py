@@ -257,7 +257,7 @@ class EnrollmentRunner:
         profile_id: Optional[str] = None,
         blur_background: bool = True,
         user_sid: Optional[str] = None,
-        activate: bool = True,
+        activate: bool = False,
     ):
         self.display_name = display_name
         self.profile_store = profile_store or SecureProfileStore()
@@ -326,7 +326,7 @@ class EnrollmentRunner:
         keep_existing: bool = True,
         profile_id: Optional[str] = None,
         user_sid: Optional[str] = None,
-        activate: bool = True,
+        activate: bool = False,
     ):
         """Starts or restarts the enrollment session."""
         if display_name:

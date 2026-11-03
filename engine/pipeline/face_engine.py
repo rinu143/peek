@@ -96,8 +96,8 @@ def get_authorized_identities_from_registry(user_sid: str) -> Optional[List[str]
         # Key does not exist -> legacy v1 install!
         return None
     except Exception as ex:
-        logger.debug(f"Failed to read authorized identities registry key: {ex}")
-        return None
+        logger.error(f"Error accessing authorized identities registry key for SID {user_sid}: {ex}")
+        return []
 
 @dataclass
 class EngineFrameResult:
@@ -540,8 +540,8 @@ class FaceEngine:
                     if prof.profile_id == temporal_res.confirmed_profile_id:
                         confirmed_profile = prof
                         break
-            elif temporal_res.is_temporally_confirmed and self.enabled_profiles:
-                confirmed_profile = self.active_profile or self.enabled_profiles[0]
+            elif temporal_res.is_temporally_confirmed and (self.enabled_profiles or getattr(self, "active_profile", None)):
+                confirmed_profile = (self.enabled_profiles[0] if self.enabled_profiles else None) or getattr(self, "active_profile", None)
 
             is_biometric_pass = bool(temporal_res.is_temporally_confirmed and confirmed_profile is not None)
             is_live_pass = liveness_res.is_live

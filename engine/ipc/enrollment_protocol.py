@@ -153,7 +153,7 @@ def make_start_enrollment(
     blur_background: bool = True,
     keep_existing: bool = True,
     profile_id: Optional[str] = None,
-    activate: bool = True,
+    activate: bool = False,
 ) -> Dict[str, Any]:
     msg = {
         "protocol_version": PROTOCOL_VERSION,

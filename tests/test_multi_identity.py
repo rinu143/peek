@@ -149,6 +149,11 @@ class TestMultiIdentity(unittest.TestCase):
             self.assertNotIn("p_disabled_3", loaded_ids, "Disabled profiles are never loaded")
             self.assertEqual(len(engine.enabled_profiles), 2)
 
+        # Case 3: Registry read error (PermissionError / OSError -> returns [], loads NO profiles)
+        with patch("engine.pipeline.face_engine.get_authorized_identities_from_registry", return_value=[]):
+            engine.reload_active_profile(user_sid="S-1-5-21-test")
+            self.assertEqual(len(engine.enabled_profiles), 0, "Registry read error must load 0 profiles instead of all enabled ones")
+
     def test_two_identities_distinct_auth(self):
         """
         Two authorized identities (Alice & Bob):
@@ -298,6 +303,26 @@ class TestMultiIdentity(unittest.TestCase):
         self.assertIn("User 1", str(ctx.exception))
         self.assertEqual(ctx.exception.duplicate_name, "User 1")
         self.assertEqual(ctx.exception.duplicate_id, "prof_1")
+
+
+    def test_get_authorized_identities_from_registry_error_handling(self):
+        """
+        get_authorized_identities_from_registry:
+        - returns None only when key does not exist (FileNotFoundError)
+        - returns [] and logs on any other error (PermissionError, etc.)
+        """
+        import winreg
+        with patch("winreg.OpenKey", side_effect=FileNotFoundError):
+            result = get_authorized_identities_from_registry("S-1-5-21-test")
+            self.assertIsNone(result)
+
+        with patch("winreg.OpenKey", side_effect=PermissionError("Access denied")):
+            result = get_authorized_identities_from_registry("S-1-5-21-test")
+            self.assertEqual(result, [])
+
+        with patch("winreg.OpenKey", side_effect=OSError("Generic error")):
+            result = get_authorized_identities_from_registry("S-1-5-21-test")
+            self.assertEqual(result, [])
 
 
 if __name__ == "__main__":

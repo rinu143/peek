@@ -284,7 +284,7 @@ class EnrollmentSession:
         profile_id: Optional[str] = None,
         user_sid: Optional[str] = None,
         keep_existing: bool = True,
-        activate: bool = True,
+        activate: bool = False,
         matching_threshold: float = 0.50,
     ) -> PeekProfile:
         """

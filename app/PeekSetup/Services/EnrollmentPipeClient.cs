@@ -134,7 +134,7 @@ namespace PeekSetup.Services
             string displayName,
             bool keepExisting = true,
             string? profileId = null,
-            bool activate = true,
+            bool activate = false,
             CancellationToken ct = default)
         {
             if (!IsConnected || _writer == null)

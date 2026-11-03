@@ -36,6 +36,7 @@ from engine.ipc.protocol import (
     MSG_TIMEOUT,
     MSG_ERROR,
     REASON_CANCELLED,
+    REASON_NO_MATCH,
     REASON_SPOOF_DETECTED,
     REASON_CAMERA_UNAVAILABLE,
     REASON_INVALID_MESSAGE,
@@ -138,6 +139,8 @@ class MockFaceEngine:
             is_authorized_to_unlock=is_auth,
             is_live=is_auth,
             is_temporally_confirmed=True,
+            matched_profile_id=self.active_profile.profile_id if is_auth and self.active_profile else None,
+            matched_profile_name=self.display_name if is_auth else None,
             details=f"Mock Frame {self.frame_counter}"
         )
 
@@ -256,6 +259,45 @@ class TestPipeServer(unittest.TestCase):
         # AUTHENTICATED must NEVER be in message stream
         self.assertNotIn(MSG_AUTHENTICATED, msg_types)
         self.assertIn(MSG_TIMEOUT, msg_types)
+
+    def test_authorized_without_matched_profile_id_emits_auth_failed(self):
+        """
+        SECURITY INVARIANT:
+        If is_authorized_to_unlock is True but matched_profile_id is missing/None,
+        server logs it and emits AUTH_FAILED (not AUTHENTICATED).
+        """
+        class MissingProfileIdEngine:
+            def __init__(self):
+                self.active_profile = PeekProfile(profile_id="mock_p1", display_name="Test", enabled=True)
+            def reload_active_profile(self, user_sid=None):
+                pass
+            def process_frame(self, frame):
+                return EngineFrameResult(
+                    has_face=True,
+                    track_id=1,
+                    state_label="SUCCESS",
+                    is_authorized_to_unlock=True,
+                    is_live=True,
+                    is_temporally_confirmed=True,
+                    matched_profile_id=None,
+                    matched_profile_name="Test User",
+                    details="Authorized but missing ID"
+                )
+
+        mock_engine = MissingProfileIdEngine()
+        self.server = self.create_server(face_engine=mock_engine, camera=MockCamera())
+        self.server.start()
+
+        self.client = PipeClient(pipe_name=self.pipe_name)
+        self.assertTrue(self.client.connect(timeout_seconds=3.0))
+
+        messages = list(self.client.stream_auth(timeout_seconds=1.0))
+        msg_types = [m.get("type") for m in messages]
+
+        self.assertNotIn(MSG_AUTHENTICATED, msg_types, "Must NEVER emit AUTHENTICATED without matched_profile_id")
+        self.assertIn(MSG_AUTH_FAILED, msg_types, "Must emit AUTH_FAILED when matched_profile_id is missing")
+        failed_msg = next(m for m in messages if m.get("type") == MSG_AUTH_FAILED)
+        self.assertEqual(failed_msg.get("reason_code"), REASON_NO_MATCH)
 
     def test_cancel_auth_bounded_latency(self):
         """

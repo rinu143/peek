@@ -1542,7 +1542,7 @@ namespace PeekSetup.ViewModels
                     DisplayName,
                     keepExisting: keepExisting,
                     profileId: profileId,
-                    activate: true);
+                    activate: false);
             }
             catch (EngineUnavailableException ex)
             {
@@ -1673,7 +1673,7 @@ namespace PeekSetup.ViewModels
                 }
 
                 int exitCode = await _linkLauncher.LaunchLinkPasswordAsync(username, sid, profileId);
-                if (exitCode == 0)
+                if (exitCode == 0 && _profileManager != null)
                 {
                     await _profileManager.ToggleProfileAsync(profileId, true).ConfigureAwait(false);
                 }
@@ -1699,7 +1699,7 @@ namespace PeekSetup.ViewModels
                     HasPasswordError = false;
                     PasswordErrorMessage = string.Empty;
                     string linkedId = !string.IsNullOrEmpty(EnrolledProfileId) ? EnrolledProfileId : ExistingProfileId;
-                    if (!string.IsNullOrEmpty(linkedId))
+                    if (!string.IsNullOrEmpty(linkedId) && _profileManager != null)
                     {
                         _ = _profileManager.ToggleProfileAsync(linkedId, true);
                     }
@@ -1829,7 +1829,7 @@ namespace PeekSetup.ViewModels
                 string currentSid = WindowsIdentity.GetCurrent().User?.Value ?? string.Empty;
                 if (!string.IsNullOrEmpty(currentSid))
                 {
-                    IsPasswordLinked = _authStore.HasAuthorizedIdentities(currentSid);
+                    IsPasswordLinked = _authStore.HasAuthorizedIdentities(currentSid) || IsPasswordLinked;
                 }
 
                 var profiles = await _profileManager.GetProfilesAsync().ConfigureAwait(false);
@@ -2660,11 +2660,8 @@ namespace PeekSetup.ViewModels
                 }
                 else
                 {
-                    // First-time enrollment: auto-enable profile and advance to Step 3: Password Linking
-                    if (!string.IsNullOrEmpty(e.ProfileId))
-                    {
-                        await _profileManager.ToggleProfileAsync(e.ProfileId, true).ConfigureAwait(false);
-                    }
+                    // First-time enrollment: advance to Step 3: Password Linking
+                    // Profile remains pending (enabled=false) until elevated password linking succeeds (exit 0)
                     CurrentStep = SetupStep.PasswordLink;
                 }
             });

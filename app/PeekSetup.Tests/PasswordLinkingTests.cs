@@ -3,7 +3,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Threading.Tasks;
+using Microsoft.Win32;
 using PeekSetup.Models;
 using PeekSetup.Services;
 using PeekSetup.ViewModels;
@@ -73,6 +76,8 @@ namespace PeekSetup.Tests
     public class MockAuthorizationStore : IAuthorizationStore
     {
         public Dictionary<string, List<string>> Store { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public bool FailOnSet { get; set; }
+        public bool KeyDeleted { get; set; }
 
         public string[] GetAuthorizedIdentities(string userSid)
         {
@@ -83,6 +88,13 @@ namespace PeekSetup.Tests
 
         public bool SetAuthorizedIdentities(string userSid, string[] profileIds)
         {
+            if (FailOnSet)
+            {
+                KeyDeleted = true;
+                Store.Remove(userSid);
+                return false;
+            }
+
             Store[userSid] = (profileIds ?? Array.Empty<string>())
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Take(RegistryAuthorizationStore.MaxAuthorizedIdentities)
@@ -92,6 +104,13 @@ namespace PeekSetup.Tests
 
         public bool AddAuthorizedIdentity(string userSid, string profileId)
         {
+            if (FailOnSet)
+            {
+                KeyDeleted = true;
+                Store.Remove(userSid);
+                return false;
+            }
+
             if (!Store.TryGetValue(userSid, out var list))
             {
                 list = new List<string>();
@@ -128,6 +147,7 @@ namespace PeekSetup.Tests
 
         public bool DeleteIdentitiesKey(string userSid)
         {
+            KeyDeleted = true;
             return Store.Remove(userSid);
         }
 
@@ -535,6 +555,166 @@ namespace PeekSetup.Tests
             Assert.False(store.AddAuthorizedIdentity(sid, "id6"));
             Assert.Equal(5, store.GetAuthorizedIdentities(sid).Length);
             Assert.DoesNotContain("id6", store.GetAuthorizedIdentities(sid));
+        }
+
+        [Fact]
+        public void LinkPassword_WithExistingListAB_AndProfileA_ListStaysAB()
+        {
+            var mockValidator = new MockPasswordValidator(shouldAccept: true);
+            var mockStore = new MockLsaSecretStore();
+            var mockResolver = new MockAccountSidResolver { ExpectedSid = "S-1-5-21-12345678-1001" };
+            var mockAuth = new MockAuthorizationStore();
+            string testSid = "S-1-5-21-12345678-1001";
+            mockAuth.SetAuthorizedIdentities(testSid, new[] { "profile_A", "profile_B" });
+
+            var linker = new PasswordLinker(mockValidator, mockStore, mockResolver, mockAuth);
+
+            using var password = CreateSecureString("NewValidPassword123!");
+            bool result = linker.LinkPassword("profile_A", password, "DOMAIN\\testuser", testSid);
+
+            Assert.True(result);
+            var authorized = mockAuth.GetAuthorizedIdentities(testSid);
+            Assert.Equal(2, authorized.Length);
+            Assert.Equal(new[] { "profile_A", "profile_B" }, authorized);
+        }
+
+        [Fact]
+        public void LinkPassword_WithExistingListAB_AndProfileC_AppendsC()
+        {
+            var mockValidator = new MockPasswordValidator(shouldAccept: true);
+            var mockStore = new MockLsaSecretStore();
+            var mockResolver = new MockAccountSidResolver { ExpectedSid = "S-1-5-21-12345678-1001" };
+            var mockAuth = new MockAuthorizationStore();
+            string testSid = "S-1-5-21-12345678-1001";
+            mockAuth.SetAuthorizedIdentities(testSid, new[] { "profile_A", "profile_B" });
+
+            var linker = new PasswordLinker(mockValidator, mockStore, mockResolver, mockAuth);
+
+            using var password = CreateSecureString("NewValidPassword123!");
+            bool result = linker.LinkPassword("profile_C", password, "DOMAIN\\testuser", testSid);
+
+            Assert.True(result);
+            var authorized = mockAuth.GetAuthorizedIdentities(testSid);
+            Assert.Equal(3, authorized.Length);
+            Assert.Equal(new[] { "profile_A", "profile_B", "profile_C" }, authorized);
+        }
+
+        [Fact]
+        public void AuthorizeIdentity_WhenStoreWriteFails_ReturnsExitCode3()
+        {
+            var mockValidator = new MockPasswordValidator(shouldAccept: true);
+            var mockStore = new MockLsaSecretStore();
+            var mockResolver = new MockAccountSidResolver();
+            var mockAuth = new MockAuthorizationStore();
+            var linker = new PasswordLinker(mockValidator, mockStore, mockResolver, mockAuth);
+
+            string sid = "S-1-5-21-12345678-1001";
+            mockAuth.Store[sid] = new List<string> { "id1" }; // pre-populate existing identity
+            mockAuth.FailOnSet = true; // subsequent writes fail
+
+            using var password = CreateSecureString("validPass123");
+            int exitCode = linker.AuthorizeIdentity("id2", password, "testuser", sid);
+
+            // Must return 3 (ExitError), not 5 (ExitIdentityLimit)
+            Assert.Equal(PasswordLinker.ExitError, exitCode);
+            Assert.Equal(3, exitCode);
+        }
+
+        [Fact]
+        public void AuthorizeIdentity_WhenAtIdentityLimit_ReturnsExitCode5()
+        {
+            var mockValidator = new MockPasswordValidator(shouldAccept: true);
+            var mockStore = new MockLsaSecretStore();
+            var mockResolver = new MockAccountSidResolver();
+            var mockAuth = new MockAuthorizationStore();
+            var linker = new PasswordLinker(mockValidator, mockStore, mockResolver, mockAuth);
+
+            string sid = "S-1-5-21-12345678-1001";
+            mockAuth.SetAuthorizedIdentities(sid, new[] { "p1", "p2", "p3", "p4", "p5" });
+
+            using var password = CreateSecureString("validPass123");
+            int exitCode = linker.AuthorizeIdentity("p6", password, "testuser", sid);
+
+            // Must return 5 (ExitIdentityLimit)
+            Assert.Equal(PasswordLinker.ExitIdentityLimit, exitCode);
+            Assert.Equal(5, exitCode);
+        }
+
+        [Fact]
+        public void AuthorizeIdentity_WhenDaclVerificationFailsWithFakeStore_ReturnsExitCode3AndDeletesKey()
+        {
+            var mockValidator = new MockPasswordValidator(shouldAccept: true);
+            var mockStore = new MockLsaSecretStore();
+            var mockResolver = new MockAccountSidResolver();
+            var mockAuth = new MockAuthorizationStore();
+            var linker = new PasswordLinker(mockValidator, mockStore, mockResolver, mockAuth);
+
+            string sid = "S-1-5-21-12345678-1001";
+            mockAuth.SetAuthorizedIdentities(sid, new[] { "id1" });
+
+            // Simulate DACL verification failure on subsequent write
+            mockAuth.FailOnSet = true;
+
+            using var password = CreateSecureString("validPass123");
+            int exitCode = linker.AuthorizeIdentity("id2", password, "testuser", sid);
+
+            Assert.Equal(PasswordLinker.ExitError, exitCode);
+            Assert.Equal(3, exitCode);
+            Assert.True(mockAuth.KeyDeleted);
+        }
+
+        [Fact]
+        public void RegistryAuthorizationStore_ProhibitedWriteRights_IncludesAllRequiredFlags()
+        {
+            Assert.True(RegistryAuthorizationStore.ContainsProhibitedWriteRights(RegistryRights.SetValue), "SetValue must be prohibited");
+            Assert.True(RegistryAuthorizationStore.ContainsProhibitedWriteRights(RegistryRights.CreateSubKey), "CreateSubKey must be prohibited");
+            Assert.True(RegistryAuthorizationStore.ContainsProhibitedWriteRights(RegistryRights.WriteKey), "WriteKey must be prohibited");
+            Assert.True(RegistryAuthorizationStore.ContainsProhibitedWriteRights(RegistryRights.FullControl), "FullControl must be prohibited");
+            Assert.True(RegistryAuthorizationStore.ContainsProhibitedWriteRights(RegistryRights.Delete), "Delete must be prohibited");
+            Assert.True(RegistryAuthorizationStore.ContainsProhibitedWriteRights(RegistryRights.ChangePermissions), "ChangePermissions must be prohibited");
+            Assert.True(RegistryAuthorizationStore.ContainsProhibitedWriteRights(RegistryRights.TakeOwnership), "TakeOwnership must be prohibited");
+            Assert.False(RegistryAuthorizationStore.ContainsProhibitedWriteRights(RegistryRights.ReadKey), "ReadKey must NOT be prohibited");
+        }
+
+        [Fact]
+        public void RegistryAuthorizationStore_HasInsecureWriteRights_DetectsInsecureDacl()
+        {
+            string testSubKey = @"Software\PeekTestDaclCheck_" + Guid.NewGuid().ToString("N");
+            RegistryKey? key = null;
+            try
+            {
+                key = Registry.CurrentUser.CreateSubKey(testSubKey, RegistryKeyPermissionCheck.ReadWriteSubTree);
+                Assert.NotNull(key);
+
+                // Add an insecure write right for WorldSid (Everyone)
+                var worldSid = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
+                var sec = key.GetAccessControl();
+                sec.AddAccessRule(new RegistryAccessRule(
+                    worldSid,
+                    RegistryRights.SetValue,
+                    InheritanceFlags.None,
+                    PropagationFlags.None,
+                    AccessControlType.Allow));
+                key.SetAccessControl(sec);
+
+                // Should detect insecure DACL
+                Assert.True(RegistryAuthorizationStore.HasInsecureWriteRights(key));
+
+                // Enforce secure DACL
+                RegistryAuthorizationStore.EnforceSecureDacl(key);
+
+                // Re-check: insecure write right for Everyone should no longer exist
+                Assert.False(RegistryAuthorizationStore.HasInsecureWriteRights(key));
+            }
+            finally
+            {
+                key?.Dispose();
+                try
+                {
+                    Registry.CurrentUser.DeleteSubKeyTree(testSubKey, false);
+                }
+                catch { }
+            }
         }
     }
 }

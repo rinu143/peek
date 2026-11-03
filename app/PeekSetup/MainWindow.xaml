@@ -167,19 +167,20 @@
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Path Data="{StaticResource GeoKey}" Stroke="{DynamicResource TextSecondaryBrush}"
-                                                  StrokeThickness="1.5" Stretch="Uniform" Width="13" Height="13" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                            <Image Source="{DynamicResource PasswordIconSource}"
+                                                   Width="14" Height="14" Margin="0,0,8,0" VerticalAlignment="Center"
+                                                   RenderOptions.BitmapScalingMode="HighQuality" />
                                             <TextBlock Text="Windows password:" FontSize="13" FontWeight="SemiBold"
                                                        Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,6,0" />
                                             <TextBlock Text="{Binding WindowsPasswordStatusText}" FontSize="13" FontWeight="Bold"
                                                        Foreground="{Binding WindowsPasswordStatusColor}" VerticalAlignment="Center" />
                                         </StackPanel>
                                         <TextBlock Text="Required to automatically release Windows credentials."
-                                                   FontSize="11" Foreground="{DynamicResource TextMutedBrush}" Margin="21,3,0,0" />
+                                                   FontSize="11" Foreground="{DynamicResource TextMutedBrush}" Margin="22,3,0,0" />
                                     </StackPanel>
-                                    <Button Grid.Column="1" Style="{StaticResource SecondaryButtonStyle}"
+                                    <Button Grid.Column="1" Style="{StaticResource RecaptureButtonStyle}"
                                             Command="{Binding UpdatePasswordLinkCommand}"
-                                            Content="Update" Height="32" Padding="16,0" FontSize="12"
+                                            Content="Update" MinWidth="84" Padding="18,0"
                                             VerticalAlignment="Center" ToolTip="Update linked Windows password" />
                                 </Grid>
                             </Border>
@@ -911,7 +912,7 @@
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440">
                         <!-- Key Glyph -->
                         <Border Width="60" Height="60" CornerRadius="30" Background="{DynamicResource PillBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,18">
-                            <Path Data="{StaticResource GeoKey}" Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="28" Height="28" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <Image Source="{DynamicResource PasswordIconSource}" Width="28" Height="28" HorizontalAlignment="Center" VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality" />
                         </Border>
 
                         <TextBlock Text="Link Windows Password" FontSize="26" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,8" Foreground="{DynamicResource TextPrimaryBrush}" />
@@ -1118,15 +1119,13 @@
                                Margin="0,0,0,12" />
 
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,4,0,0">
-                        <Button Style="{StaticResource SecondaryButtonStyle}"
+                        <Button Style="{StaticResource DialogSecondaryButtonStyle}"
                                 Command="{Binding CancelConfirmPasswordDialogCommand}"
-                                Content="Cancel" Height="36" Padding="18,0" Margin="0,0,10,0"
-                                FontSize="13" TabIndex="2" />
+                                Content="Cancel" Margin="0,0,10,0" TabIndex="2" />
                         <Button x:Name="ConfirmDialogSubmitButton"
-                                Style="{StaticResource PrimaryButtonStyle}"
+                                Style="{StaticResource DialogPrimaryButtonStyle}"
                                 Click="ConfirmDialogSubmitButton_Click"
-                                Content="Confirm" Height="36" Padding="24,0"
-                                FontSize="13" TabIndex="3" />
+                                Content="Confirm" TabIndex="3" />
                     </StackPanel>
                 </StackPanel>
             </Border>
@@ -1146,12 +1145,12 @@
                                FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}"
                                TextWrapping="Wrap" LineHeight="18" Margin="0,0,0,20" />
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Style="{StaticResource SecondaryButtonStyle}"
+                        <Button Style="{StaticResource DialogSecondaryButtonStyle}"
                                 Command="{Binding CancelDeleteCommand}"
-                                Content="Cancel" Height="36" Padding="18,0" Margin="0,0,10,0" FontSize="13" />
-                        <Button Style="{StaticResource DangerButtonStyle}"
+                                Content="Cancel" Margin="0,0,10,0" />
+                        <Button Style="{StaticResource DialogDangerButtonStyle}"
                                 Command="{Binding ConfirmDeleteCommand}"
-                                Content="Delete" Height="36" Padding="24,0" FontSize="13" />
+                                Content="Delete" />
                     </StackPanel>
                 </StackPanel>
             </Border>
@@ -1197,12 +1196,12 @@
                                FontSize="13" Foreground="{DynamicResource TextSecondaryBrush}"
                                TextWrapping="Wrap" LineHeight="18" Margin="0,0,0,20" />
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Style="{StaticResource SecondaryButtonStyle}"
+                        <Button Style="{StaticResource DialogSecondaryButtonStyle}"
                                 Command="{Binding CloseOfferUnlinkCommand}"
-                                Content="Keep Password" Height="36" Padding="18,0" Margin="0,0,10,0" FontSize="13" />
-                        <Button Style="{StaticResource DangerButtonStyle}"
+                                Content="Keep Password" Margin="0,0,10,0" />
+                        <Button Style="{StaticResource DialogDangerButtonStyle}"
                                 Command="{Binding ConfirmUnlinkPasswordCommand}"
-                                Content="Remove Password" Height="36" Padding="20,0" FontSize="13" />
+                                Content="Remove Password" />
                     </StackPanel>
                 </StackPanel>
             </Border>

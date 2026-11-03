@@ -523,6 +523,16 @@ namespace PeekSecretVault
             return false;
         }
 
+        if (expectedProfileId.empty())
+        {
+            if (!outPassword.empty())
+            {
+                SecureZeroMemory(&outPassword[0], outPassword.size() * sizeof(wchar_t));
+                outPassword.clear();
+            }
+            return false;
+        }
+
         if (version == LEGACY_PAYLOAD_VERSION)
         {
             if (storedProfileId != expectedProfileId)
@@ -669,6 +679,13 @@ namespace PeekSecretVault
             return false;
         }
 
+        if (matchedProfileId.empty())
+        {
+            Logger::LogInfo(L"Authorization failed: Empty matched profile ID");
+            Logger::LogDebug((L"Empty profile ID for SID: " + userSid).c_str());
+            return false;
+        }
+
         std::shared_ptr<ILsaSecretStore> spStore;
         if (!pStore)
         {
@@ -709,10 +726,10 @@ namespace PeekSecretVault
 
         if (version == LEGACY_PAYLOAD_VERSION) // v1
         {
-            // v1 requires equality with the stored id
-            if (!matchedProfileId.empty() && storedProfileId != matchedProfileId)
+            // v1 requires non-empty matchedProfileId and equality with the stored id
+            if (matchedProfileId.empty() || storedProfileId != matchedProfileId)
             {
-                Logger::LogInfo(L"Authorization failed: v1 profile binding mismatch");
+                Logger::LogInfo(L"Authorization failed: v1 profile binding mismatch or empty profile ID");
                 Logger::LogDebug((L"Mismatch for SID: " + userSid).c_str());
                 if (!outPassword.empty())
                 {
