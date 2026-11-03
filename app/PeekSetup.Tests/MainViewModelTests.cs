@@ -127,21 +127,26 @@ namespace PeekSetup.Tests
     public class MockPasswordLinker : IPasswordLinker
     {
         public bool ShouldLinkSucceed { get; set; } = true;
+        public int ReturnExitCode { get; set; } = PasswordLinker.ExitOk;
         public string? LastProfileId { get; private set; }
         public int CallCount { get; private set; }
 
-        public bool LinkPassword(string profileId, SecureString password, string? username = null, string? sid = null)
+        public int LinkPassword(string profileId, SecureString password, string? username = null, string? sid = null)
         {
             CallCount++;
             LastProfileId = profileId;
-            return ShouldLinkSucceed;
+            if (!ShouldLinkSucceed)
+            {
+                return ReturnExitCode != PasswordLinker.ExitOk ? ReturnExitCode : PasswordLinker.ExitWrongPassword;
+            }
+            return PasswordLinker.ExitOk;
         }
 
         public int AuthorizeIdentity(string profileId, SecureString password, string? username = null, string? sid = null)
         {
             CallCount++;
             LastProfileId = profileId;
-            return ShouldLinkSucceed ? 0 : 2;
+            return ShouldLinkSucceed ? PasswordLinker.ExitOk : PasswordLinker.ExitWrongPassword;
         }
 
         public int RevokeIdentity(string profileId, string sid)
@@ -308,6 +313,31 @@ namespace PeekSetup.Tests
             Assert.False(vm.IsPasswordLinked);
             Assert.True(vm.HasPasswordError);
             Assert.Contains("not accepted", vm.PasswordErrorMessage);
+        }
+
+        [Fact]
+        public async Task LinkPassword_WhenIdentityLimitReached_ShowsIdentityLimitError()
+        {
+            var mockLinker = new MockPasswordLinker
+            {
+                ShouldLinkSucceed = false,
+                ReturnExitCode = PasswordLinker.ExitIdentityLimit
+            };
+            var vm = new MainViewModel(new MockEnrollmentPipeClient(), mockLinker);
+            vm.CurrentStep = SetupStep.PasswordLink;
+            vm.EnrolledProfileId = "p_limit";
+
+            using var pass = new SecureString();
+            pass.AppendChar('x');
+            pass.MakeReadOnly();
+
+            await vm.LinkPasswordAsync(pass);
+
+            Assert.Equal(1, mockLinker.CallCount);
+            Assert.Equal(SetupStep.PasswordLink, vm.CurrentStep);
+            Assert.False(vm.IsPasswordLinked);
+            Assert.True(vm.HasPasswordError);
+            Assert.Contains("Identity limit reached", vm.PasswordErrorMessage);
         }
 
         [Fact]

@@ -6,10 +6,10 @@ namespace PeekSetup.Services
     {
         /// <summary>
         /// Validates the provided Windows password, writes the v2 LSA secret,
-        /// and sets Authorized=[profileId] in the authorization store.
-        /// Returns true if successful, false if rejected or invalid.
+        /// and merges Authorized=[profileId] in the authorization store (cap 5).
+        /// Returns exit code: 0 ok, 2 wrong password, 3 error, 5 identity limit.
         /// </summary>
-        bool LinkPassword(string profileId, SecureString password, string? username = null, string? sid = null);
+        int LinkPassword(string profileId, SecureString password, string? username = null, string? sid = null);
 
         /// <summary>
         /// Authorizes an identity for an existing linked account:

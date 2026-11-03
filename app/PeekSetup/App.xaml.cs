@@ -125,6 +125,14 @@ namespace PeekSetup
                     return;
                 }
 
+                var authStore = new RegistryAuthorizationStore();
+                var existing = authStore.GetAuthorizedIdentities(sid);
+                if (existing != null && !existing.Contains(profileId, StringComparer.OrdinalIgnoreCase) && existing.Length >= RegistryAuthorizationStore.MaxAuthorizedIdentities)
+                {
+                    Environment.Exit(PasswordLinker.ExitIdentityLimit); // 5
+                    return;
+                }
+
                 var resolver = new AccountSidResolver();
                 if (string.IsNullOrWhiteSpace(user))
                 {

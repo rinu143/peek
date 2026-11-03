@@ -1621,14 +1621,19 @@ namespace PeekSetup.ViewModels
             try
             {
                 // Verify and link password in background thread
-                bool success = await Task.Run(() =>
+                int exitCode = await Task.Run(() =>
                     _passwordLinker.LinkPassword(EnrolledProfileId, password, Environment.UserName));
 
-                if (success)
+                if (exitCode == PasswordLinker.ExitOk)
                 {
                     IsPasswordLinked = true;
                     await RefreshIdentitiesAsync().ConfigureAwait(false);
                     CurrentStep = SetupStep.Done;
+                }
+                else if (exitCode == PasswordLinker.ExitIdentityLimit)
+                {
+                    HasPasswordError = true;
+                    PasswordErrorMessage = "Identity limit reached. A maximum of 5 identities can be authorized to unlock this account.";
                 }
                 else
                 {

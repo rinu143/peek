@@ -217,9 +217,9 @@ namespace PeekSetup.Tests
             var linker = new PasswordLinker(mockValidator, mockStore, mockResolver, mockAuth);
 
             using var password = CreateSecureString("invalid_password");
-            bool result = linker.LinkPassword("profile_rejected", password, "DOMAIN\\testuser", "S-1-5-21-12345678-1001");
+            int result = linker.LinkPassword("profile_rejected", password, "DOMAIN\\testuser", "S-1-5-21-12345678-1001");
 
-            Assert.False(result);
+            Assert.Equal(PasswordLinker.ExitWrongPassword, result);
             Assert.Equal(1, mockValidator.ValidateCallCount);
             Assert.Empty(mockStore.StoredSecrets);
             Assert.Empty(mockAuth.Store);
@@ -239,9 +239,9 @@ namespace PeekSetup.Tests
             string testSid = "S-1-5-21-12345678-1001";
 
             using var password = CreateSecureString(testSecretPassword);
-            bool result = linker.LinkPassword(testProfileId, password, "DOMAIN\\testuser", testSid);
+            int result = linker.LinkPassword(testProfileId, password, "DOMAIN\\testuser", testSid);
 
-            Assert.True(result);
+            Assert.Equal(PasswordLinker.ExitOk, result);
             Assert.Equal(1, mockValidator.ValidateCallCount);
 
             // Exactly one secret stored with key name L$PeekCred_<SID>
@@ -273,9 +273,9 @@ namespace PeekSetup.Tests
             var linker = new PasswordLinker(mockValidator, mockStore, mockResolver, mockAuth);
 
             using var password = CreateSecureString("password");
-            bool result = linker.LinkPassword("prof", password, "testuser", "S-1-5-21-MISMATCH");
+            int result = linker.LinkPassword("prof", password, "testuser", "S-1-5-21-MISMATCH");
 
-            Assert.False(result);
+            Assert.Equal(PasswordLinker.ExitError, result);
             Assert.Equal(0, mockValidator.ValidateCallCount);
             Assert.Empty(mockStore.StoredSecrets);
             Assert.Empty(mockAuth.Store);
@@ -570,9 +570,9 @@ namespace PeekSetup.Tests
             var linker = new PasswordLinker(mockValidator, mockStore, mockResolver, mockAuth);
 
             using var password = CreateSecureString("NewValidPassword123!");
-            bool result = linker.LinkPassword("profile_A", password, "DOMAIN\\testuser", testSid);
+            int result = linker.LinkPassword("profile_A", password, "DOMAIN\\testuser", testSid);
 
-            Assert.True(result);
+            Assert.Equal(PasswordLinker.ExitOk, result);
             var authorized = mockAuth.GetAuthorizedIdentities(testSid);
             Assert.Equal(2, authorized.Length);
             Assert.Equal(new[] { "profile_A", "profile_B" }, authorized);
@@ -591,12 +591,59 @@ namespace PeekSetup.Tests
             var linker = new PasswordLinker(mockValidator, mockStore, mockResolver, mockAuth);
 
             using var password = CreateSecureString("NewValidPassword123!");
-            bool result = linker.LinkPassword("profile_C", password, "DOMAIN\\testuser", testSid);
+            int result = linker.LinkPassword("profile_C", password, "DOMAIN\\testuser", testSid);
 
-            Assert.True(result);
+            Assert.Equal(PasswordLinker.ExitOk, result);
             var authorized = mockAuth.GetAuthorizedIdentities(testSid);
             Assert.Equal(3, authorized.Length);
             Assert.Equal(new[] { "profile_A", "profile_B", "profile_C" }, authorized);
+        }
+
+        [Fact]
+        public void LinkPassword_WhenMergedListExceeds5_ReturnsExitIdentityLimit()
+        {
+            var mockValidator = new MockPasswordValidator(shouldAccept: true);
+            var mockStore = new MockLsaSecretStore();
+            var mockResolver = new MockAccountSidResolver { ExpectedSid = "S-1-5-21-12345678-1001" };
+            var mockAuth = new MockAuthorizationStore();
+            string testSid = "S-1-5-21-12345678-1001";
+            mockAuth.SetAuthorizedIdentities(testSid, new[] { "p1", "p2", "p3", "p4", "p5" });
+
+            var linker = new PasswordLinker(mockValidator, mockStore, mockResolver, mockAuth);
+
+            using var password = CreateSecureString("NewValidPassword123!");
+            int result = linker.LinkPassword("p6", password, "DOMAIN\\testuser", testSid);
+
+            Assert.Equal(PasswordLinker.ExitIdentityLimit, result); // 5
+            Assert.Equal(5, result);
+            Assert.Equal(0, mockValidator.ValidateCallCount); // Password validation should not run
+            Assert.Empty(mockStore.StoredSecrets); // Secret must NOT be written
+            var authorized = mockAuth.GetAuthorizedIdentities(testSid);
+            Assert.Equal(5, authorized.Length);
+            Assert.Equal(new[] { "p1", "p2", "p3", "p4", "p5" }, authorized); // Unchanged
+        }
+
+        [Fact]
+        public void LinkPassword_WhenAlreadyAt5_AndProfileAlreadyInList_UpdatesPasswordAndReturnsExitOk()
+        {
+            var mockValidator = new MockPasswordValidator(shouldAccept: true);
+            var mockStore = new MockLsaSecretStore();
+            var mockResolver = new MockAccountSidResolver { ExpectedSid = "S-1-5-21-12345678-1001" };
+            var mockAuth = new MockAuthorizationStore();
+            string testSid = "S-1-5-21-12345678-1001";
+            mockAuth.SetAuthorizedIdentities(testSid, new[] { "p1", "p2", "p3", "p4", "p5" });
+
+            var linker = new PasswordLinker(mockValidator, mockStore, mockResolver, mockAuth);
+
+            using var password = CreateSecureString("UpdatedPassword123!");
+            int result = linker.LinkPassword("p3", password, "DOMAIN\\testuser", testSid);
+
+            Assert.Equal(PasswordLinker.ExitOk, result);
+            Assert.Equal(1, mockValidator.ValidateCallCount);
+            Assert.Single(mockStore.StoredSecrets);
+            var authorized = mockAuth.GetAuthorizedIdentities(testSid);
+            Assert.Equal(5, authorized.Length);
+            Assert.Equal(new[] { "p1", "p2", "p3", "p4", "p5" }, authorized);
         }
 
         [Fact]

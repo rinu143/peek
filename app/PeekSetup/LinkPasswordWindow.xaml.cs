@@ -97,8 +97,8 @@ namespace PeekSetup
                 }
                 else
                 {
-                    bool success = _linker.LinkPassword(_profileId, securePassword, _targetUser, _targetSid);
-                    if (success)
+                    int res = _linker.LinkPassword(_profileId, securePassword, _targetUser, _targetSid);
+                    if (res == PasswordLinker.ExitOk)
                     {
                         ExitCode = PasswordLinker.ExitOk; // 0 linked
                         DialogResult = true;
@@ -106,21 +106,30 @@ namespace PeekSetup
                         return;
                     }
 
-                    // Password was rejected
-                    _attempts++;
-                    PasswordInput.Clear();
+                    if (res == PasswordLinker.ExitWrongPassword)
+                    {
+                        // Password was rejected
+                        _attempts++;
+                        PasswordInput.Clear();
 
-                    if (_attempts >= MaxAttempts)
-                    {
-                        ExitCode = PasswordLinker.ExitWrongPassword; // 2 wrong password
-                        DialogResult = false;
-                        Close();
+                        if (_attempts >= MaxAttempts)
+                        {
+                            ExitCode = PasswordLinker.ExitWrongPassword; // 2 wrong password
+                            DialogResult = false;
+                            Close();
+                        }
+                        else
+                        {
+                            int remaining = MaxAttempts - _attempts;
+                            ShowError($"Incorrect Windows password. {remaining} attempt(s) remaining.");
+                        }
+                        return;
                     }
-                    else
-                    {
-                        int remaining = MaxAttempts - _attempts;
-                        ShowError($"Incorrect Windows password. {remaining} attempt(s) remaining.");
-                    }
+
+                    ExitCode = res;
+                    DialogResult = false;
+                    Close();
+                    return;
                 }
             }
             catch (Exception ex)

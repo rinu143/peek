@@ -34,11 +34,11 @@ namespace PeekSetup.Services
             _authStore = authStore ?? new RegistryAuthorizationStore();
         }
 
-        public bool LinkPassword(string profileId, SecureString password, string? username = null, string? sid = null)
+        public int LinkPassword(string profileId, SecureString password, string? username = null, string? sid = null)
         {
             if (string.IsNullOrWhiteSpace(profileId) || password == null || password.Length == 0)
             {
-                return false;
+                return ExitError;
             }
 
             string user = string.IsNullOrWhiteSpace(username) ? Environment.UserName : username;
@@ -46,63 +46,70 @@ namespace PeekSetup.Services
 
             if (string.IsNullOrEmpty(targetSid))
             {
-                return false;
+                return ExitError;
             }
 
             // 1. Resolve and validate that username maps to targetSid
             if (!_sidResolver.ValidateUserSid(user, targetSid))
             {
-                return false;
+                return ExitError;
             }
 
-            // 2. Verify password for TARGET user with LogonUserW before accepting
+            // 2. Check identity limit: keep existing ids, add profileId (dedupe)
+            var existing = _authStore.GetAuthorizedIdentities(targetSid);
+            var merged = new System.Collections.Generic.List<string>();
+            if (existing != null)
+            {
+                foreach (var id in existing)
+                {
+                    if (!string.IsNullOrWhiteSpace(id) && !merged.Contains(id, StringComparer.OrdinalIgnoreCase))
+                    {
+                        merged.Add(id);
+                    }
+                }
+            }
+
+            if (!merged.Contains(profileId, StringComparer.OrdinalIgnoreCase))
+            {
+                merged.Add(profileId);
+            }
+
+            if (merged.Count > RegistryAuthorizationStore.MaxAuthorizedIdentities)
+            {
+                return ExitIdentityLimit; // 5: identity limit reached instead of truncating
+            }
+
+            // 3. Verify password for TARGET user with LogonUserW before accepting
             if (!_validator.Validate(user, password))
             {
-                return false;
+                return ExitWrongPassword; // 2
             }
 
-            // 3. Build binary v2 payload: [DWORD version=2][DWORD passwordBytes][UTF-16LE password]
+            // 4. Build binary v2 payload: [DWORD version=2][DWORD passwordBytes][UTF-16LE password]
             byte[] payload = SecretPayloadBuilder.BuildPayload(password);
 
             try
             {
-                // 4. Store in Windows LSA under L$PeekCred_<targetSid>
+                // 5. Store in Windows LSA under L$PeekCred_<targetSid>
                 string keyName = SecretPayloadBuilder.GetSecretKeyName(targetSid);
                 bool success = _secretStore.StoreSecret(keyName, payload);
 
-                if (success)
+                if (!success)
                 {
-                    // 5. Merge Authorized identities: keep existing ids, add profileId (dedupe, cap 5)
-                    var existing = _authStore.GetAuthorizedIdentities(targetSid);
-                    var merged = new System.Collections.Generic.List<string>();
-                    if (existing != null)
-                    {
-                        foreach (var id in existing)
-                        {
-                            if (!string.IsNullOrWhiteSpace(id) && !merged.Contains(id, StringComparer.OrdinalIgnoreCase))
-                            {
-                                merged.Add(id);
-                            }
-                        }
-                    }
-
-                    if (!merged.Contains(profileId, StringComparer.OrdinalIgnoreCase))
-                    {
-                        merged.Add(profileId);
-                    }
-
-                    var capped = merged.Take(RegistryAuthorizationStore.MaxAuthorizedIdentities).ToArray();
-                    bool authSaved = _authStore.SetAuthorizedIdentities(targetSid, capped);
-                    if (!authSaved)
-                    {
-                        return false;
-                    }
-
-                    // Clean up obsolete legacy DPAPI .secret file if present
-                    DeleteLegacySecretFile(profileId);
+                    return ExitError; // 3
                 }
 
-                return success;
+                // 6. Save merged authorized identities
+                bool authSaved = _authStore.SetAuthorizedIdentities(targetSid, merged.ToArray());
+                if (!authSaved)
+                {
+                    return ExitError; // 3
+                }
+
+                // Clean up obsolete legacy DPAPI .secret file if present
+                DeleteLegacySecretFile(profileId);
+
+                return ExitOk; // 0
             }
             finally
             {
