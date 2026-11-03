@@ -600,38 +600,19 @@
                                 </Border>
                             </Grid>
 
-                            <!-- 2C. Failed State (Friendly Message + Expandable Technical Details) -->
-                            <Grid Visibility="{Binding IsEnrollmentFailed, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440" MinHeight="360">
+                            <!-- 2C. Failed State (Friendly Message) -->
+                            <Grid Visibility="{Binding IsEnrollmentFailed, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="420">
                                 <Border Background="#1C1C1E" BorderBrush="#2C2C2E"
-                                        BorderThickness="1" CornerRadius="20" Padding="28">
+                                        BorderThickness="1" CornerRadius="20" Padding="32,28">
                                     <StackPanel>
                                         <Border Width="48" Height="48" CornerRadius="24" Background="{DynamicResource DangerBgBrush}" HorizontalAlignment="Center" Margin="0,0,0,16">
                                             <Path Data="{StaticResource GeoError}" Stroke="{DynamicResource DangerBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="20" Height="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
 
-                                        <TextBlock Text="Enrollment Incomplete" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,6" Foreground="#FFFFFF" />
+                                        <TextBlock Text="Enrollment Incomplete" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,8" Foreground="#FFFFFF" />
                                         <TextBlock Text="{Binding EngineErrorMessage}"
                                                    AutomationProperties.LiveSetting="Polite"
-                                                   FontSize="13" Foreground="#A1A1A6" TextWrapping="Wrap" TextAlignment="Center" Margin="0,0,0,14" />
-
-                                        <!-- Expandable Details Toggle -->
-                                        <Button Style="{StaticResource SecondaryButtonStyle}"
-                                                Command="{Binding ToggleDetailsCommand}"
-                                                Content="{Binding DetailsToggleText}"
-                                                Visibility="{Binding HasTechnicalDetails, Converter={StaticResource BoolToVis}}"
-                                                HorizontalAlignment="Center"
-                                                Height="28" Padding="12,4" FontSize="11" Margin="0,0,0,10"
-                                                AutomationProperties.Name="Toggle technical details" />
-
-                                        <!-- Capped Inner ScrollViewer with Selectable/Copyable TextBox -->
-                                        <Border Background="#2C2C2E" CornerRadius="8" Padding="8" MaxHeight="120"
-                                                Visibility="{Binding IsDetailsExpanded, Converter={StaticResource BoolToVis}}">
-                                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
-                                                <TextBox Text="{Binding RawTechnicalDetails, Mode=OneWay}"
-                                                         IsReadOnly="True" TextWrapping="Wrap" Background="Transparent" BorderThickness="0"
-                                                         Foreground="#E5E5EA" FontFamily="Consolas, Cascadia Code, monospace" FontSize="11" />
-                                            </ScrollViewer>
-                                        </Border>
+                                                   FontSize="13" Foreground="#A1A1A6" TextWrapping="Wrap" TextAlignment="Center" LineHeight="18" />
                                     </StackPanel>
                                 </Border>
                             </Grid>

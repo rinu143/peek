@@ -113,14 +113,14 @@ namespace PeekSetup.Tests
             EnrollmentCompleted?.Invoke(this, new EnrollmentCompletedEventArgs(profileId, displayName, "Profile saved"));
         }
 
-        public void TriggerEnrollmentFailed(string reasonCode, string detail)
+        public void TriggerEnrollmentFailed(string reasonCode, string detail, string duplicateName = "")
         {
-            EnrollmentFailed?.Invoke(this, new EnrollmentFailedEventArgs(reasonCode, detail));
+            EnrollmentFailed?.Invoke(this, new EnrollmentFailedEventArgs(reasonCode, detail, duplicateName));
         }
 
-        public void TriggerError(string reasonCode, string detail)
+        public void TriggerError(string reasonCode, string detail, string duplicateName = "")
         {
-            ErrorOccurred?.Invoke(this, new EnrollmentErrorEventArgs(reasonCode, detail));
+            ErrorOccurred?.Invoke(this, new EnrollmentErrorEventArgs(reasonCode, detail, duplicateName));
         }
     }
 

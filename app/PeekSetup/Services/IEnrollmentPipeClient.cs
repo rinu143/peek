@@ -84,11 +84,13 @@ namespace PeekSetup.Services
     {
         public string ReasonCode { get; }
         public string Detail { get; }
+        public string DuplicateName { get; }
 
-        public EnrollmentFailedEventArgs(string reasonCode, string detail)
+        public EnrollmentFailedEventArgs(string reasonCode, string detail, string duplicateName = "")
         {
             ReasonCode = reasonCode;
             Detail = detail;
+            DuplicateName = duplicateName;
         }
     }
 
@@ -96,11 +98,13 @@ namespace PeekSetup.Services
     {
         public string ReasonCode { get; }
         public string Detail { get; }
+        public string DuplicateName { get; }
 
-        public EnrollmentErrorEventArgs(string reasonCode, string detail)
+        public EnrollmentErrorEventArgs(string reasonCode, string detail, string duplicateName = "")
         {
             ReasonCode = reasonCode;
             Detail = detail;
+            DuplicateName = duplicateName;
         }
     }
 

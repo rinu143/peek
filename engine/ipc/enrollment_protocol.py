@@ -271,24 +271,30 @@ def make_enrollment_complete(
     }
 
 
-def make_enrollment_failed(reason_code: str, detail: str = "Enrollment failed") -> Dict[str, Any]:
-    return {
+def make_enrollment_failed(reason_code: str, detail: str = "Enrollment failed", duplicate_name: str = "") -> Dict[str, Any]:
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_ENROLLMENT_FAILED,
         "reason_code": str(reason_code),
         "detail": str(detail),
         "timestamp": time.time(),
     }
+    if duplicate_name:
+        msg["duplicate_name"] = str(duplicate_name)
+    return msg
 
 
-def make_error(reason_code: str, detail: str = "Internal engine error") -> Dict[str, Any]:
-    return {
+def make_error(reason_code: str, detail: str = "Internal engine error", duplicate_name: str = "") -> Dict[str, Any]:
+    msg = {
         "protocol_version": PROTOCOL_VERSION,
         "type": MSG_ERROR,
         "reason_code": str(reason_code),
         "detail": str(detail),
         "timestamp": time.time(),
     }
+    if duplicate_name:
+        msg["duplicate_name"] = str(duplicate_name)
+    return msg
 
 
 def make_pong() -> Dict[str, Any]:

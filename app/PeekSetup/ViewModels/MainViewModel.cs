@@ -2672,6 +2672,35 @@ namespace PeekSetup.ViewModels
             });
         }
 
+        private static string GetDuplicateProfileMessage(string detail, string? duplicateName)
+        {
+            string name = string.Empty;
+            if (!string.IsNullOrWhiteSpace(duplicateName))
+            {
+                name = duplicateName.Trim().Trim('\'', '"');
+            }
+            else if (!string.IsNullOrWhiteSpace(detail))
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(detail, @"matching\s+['""](?<name>[^'""]+)['""]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (match.Success)
+                {
+                    name = match.Groups["name"].Value.Trim().Trim('\'', '"');
+                }
+                else
+                {
+                    var quoteMatch = System.Text.RegularExpressions.Regex.Match(detail, @"['""](?<name>[^'""]+)['""]");
+                    if (quoteMatch.Success)
+                    {
+                        name = quoteMatch.Groups["name"].Value.Trim().Trim('\'', '"');
+                    }
+                }
+            }
+
+            return !string.IsNullOrWhiteSpace(name)
+                ? $"Profile \"{name}\" already exists."
+                : "Profile already exists.";
+        }
+
         private void OnEnrollmentFailed(object? sender, EnrollmentFailedEventArgs e)
         {
             RunOnUi(() =>
@@ -2683,7 +2712,7 @@ namespace PeekSetup.ViewModels
                 }
                 else if (e.ReasonCode == EnrollmentProtocol.ReasonDuplicateIdentity)
                 {
-                    EngineErrorMessage = "This face is already enrolled under another identity. Each face can only be enrolled once.";
+                    EngineErrorMessage = GetDuplicateProfileMessage(e.Detail, e.DuplicateName);
                 }
                 else
                 {
@@ -2715,7 +2744,7 @@ namespace PeekSetup.ViewModels
                 else if (e.ReasonCode == EnrollmentProtocol.ReasonDuplicateIdentity)
                 {
                     EnrollmentMode = EnrollmentViewMode.Failed;
-                    EngineErrorMessage = "This face is already enrolled under another identity. Each face can only be enrolled once.";
+                    EngineErrorMessage = GetDuplicateProfileMessage(e.Detail, e.DuplicateName);
                 }
                 else if (e.ReasonCode == EnrollmentProtocol.ReasonCameraUnavailable ||
                     e.ReasonCode == EnrollmentProtocol.ReasonCameraError)

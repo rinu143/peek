@@ -498,7 +498,7 @@ namespace PeekSetup.Tests
 
         [Theory]
         [InlineData("IDENTITY_LIMIT", "Maximum identity limit reached (5 identities)")]
-        [InlineData("DUPLICATE_IDENTITY", "already enrolled under another identity")]
+        [InlineData("DUPLICATE_IDENTITY", "already exists")]
         public void EngineReasons_ShowFriendlyMessages(string reason, string expectedSnippet)
         {
             var mockPipe = new MockEnrollmentPipeClient();
@@ -508,6 +508,30 @@ namespace PeekSetup.Tests
             mockPipe.TriggerEnrollmentFailed(reason, $"Technical reason: {reason}");
 
             Assert.Contains(expectedSnippet, vm.EngineErrorMessage);
+        }
+
+        [Fact]
+        public void DuplicateIdentity_WithDetectedNameInDetail_ShowsProfileNameAlreadyExists()
+        {
+            var mockPipe = new MockEnrollmentPipeClient();
+            var vm = new MainViewModel(mockPipe);
+            vm.CurrentStep = SetupStep.Enrollment;
+
+            mockPipe.TriggerEnrollmentFailed("DUPLICATE_IDENTITY", "Duplicate identity detected matching 'Rinu'");
+
+            Assert.Equal("Profile \"Rinu\" already exists.", vm.EngineErrorMessage);
+        }
+
+        [Fact]
+        public void DuplicateIdentity_WithDuplicateNameProperty_ShowsProfileNameAlreadyExists()
+        {
+            var mockPipe = new MockEnrollmentPipeClient();
+            var vm = new MainViewModel(mockPipe);
+            vm.CurrentStep = SetupStep.Enrollment;
+
+            mockPipe.TriggerEnrollmentFailed("DUPLICATE_IDENTITY", "Duplicate identity detected", "Rinu");
+
+            Assert.Equal("Profile \"Rinu\" already exists.", vm.EngineErrorMessage);
         }
 
         [Fact]

@@ -357,16 +357,18 @@ namespace PeekSetup.Services
         {
             string reasonCode = root.TryGetProperty("reason_code", out var p) ? p.GetString() ?? "" : "";
             string detail = root.TryGetProperty("detail", out p) ? p.GetString() ?? "" : "";
+            string duplicateName = root.TryGetProperty("duplicate_name", out p) ? p.GetString() ?? "" : "";
 
-            EnrollmentFailed?.Invoke(this, new EnrollmentFailedEventArgs(reasonCode, detail));
+            EnrollmentFailed?.Invoke(this, new EnrollmentFailedEventArgs(reasonCode, detail, duplicateName));
         }
 
         private void HandleError(JsonElement root)
         {
             string reasonCode = root.TryGetProperty("reason_code", out var p) ? p.GetString() ?? "" : "";
             string detail = root.TryGetProperty("detail", out p) ? p.GetString() ?? "" : "";
+            string duplicateName = root.TryGetProperty("duplicate_name", out p) ? p.GetString() ?? "" : "";
 
-            ErrorOccurred?.Invoke(this, new EnrollmentErrorEventArgs(reasonCode, detail));
+            ErrorOccurred?.Invoke(this, new EnrollmentErrorEventArgs(reasonCode, detail, duplicateName));
         }
 
         private void HandleStatusResponse(JsonElement root)

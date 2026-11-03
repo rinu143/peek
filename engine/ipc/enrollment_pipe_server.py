@@ -836,7 +836,11 @@ class EnrollmentPipeServer:
                         if isinstance(runner_err, DuplicateIdentityError):
                             logger.warning(f"Enrollment rejected due to duplicate identity: {runner_err}")
                             session.write_message(
-                                make_enrollment_failed(REASON_DUPLICATE_IDENTITY, str(runner_err))
+                                make_enrollment_failed(
+                                    REASON_DUPLICATE_IDENTITY,
+                                    str(runner_err),
+                                    duplicate_name=getattr(runner_err, "duplicate_name", ""),
+                                )
                             )
                         elif isinstance(runner_err, IdentityLimitError):
                             logger.warning(f"Enrollment rejected due to identity limit: {runner_err}")
