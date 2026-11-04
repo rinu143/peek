@@ -8,9 +8,6 @@
         <BitmapImage x:Key="AppLogoWhite" UriSource="assets/frame_search_1.png" />
         <BitmapImage x:Key="AppLogoDark" UriSource="assets/frame_search_1_dark.png" />
         <BitmapImage x:Key="AppLogoSource" UriSource="assets/frame_search_1_dark.png" />
-        <BitmapImage x:Key="PasswordIconWhite" UriSource="assets/password.png" />
-        <BitmapImage x:Key="PasswordIconDark" UriSource="assets/password_dark.png" />
-        <BitmapImage x:Key="PasswordIconSource" UriSource="assets/password_dark.png" />
         <!-- ============================================================== -->
         <!-- APPLE-GRADE SYSTEM THEMED DESIGN TOKENS (LIGHT & DARK DYNAMIC) -->
         <!-- ============================================================== -->

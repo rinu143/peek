@@ -223,36 +223,6 @@ namespace PeekSetup.Services
                 }
             }
 
-            // Dynamic PasswordIconSource switching (white padlock for dark mode, dark padlock for light mode)
-            string passIconKey = isDark ? "PasswordIconWhite" : "PasswordIconDark";
-            if (Application.Current?.Resources != null && Application.Current.Resources.Contains(passIconKey))
-            {
-                res["PasswordIconSource"] = Application.Current.Resources[passIconKey];
-            }
-            else if (res.Contains(passIconKey))
-            {
-                res["PasswordIconSource"] = res[passIconKey];
-            }
-            else
-            {
-                try
-                {
-                    string packUri = isDark
-                        ? "pack://application:,,,/assets/password.png"
-                        : "pack://application:,,,/assets/password_dark.png";
-                    var bmp = new System.Windows.Media.Imaging.BitmapImage();
-                    bmp.BeginInit();
-                    bmp.UriSource = new Uri(packUri, UriKind.RelativeOrAbsolute);
-                    bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                    bmp.EndInit();
-                    bmp.Freeze();
-                    res["PasswordIconSource"] = bmp;
-                }
-                catch
-                {
-                    // Fallback for headless testing
-                }
-            }
         }
 
         private static void SetColor(ResourceDictionary res, string key, Color color)

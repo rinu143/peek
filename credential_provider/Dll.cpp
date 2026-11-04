@@ -1,6 +1,7 @@
 // Peek Face Engine - COM In-Process DLL Scaffolding & Registration
 #include "common.h"
 #include "PeekProvider.h"
+#include "PeekCredential.h"
 #include "guid.h"
 #include <unknwn.h>
 
@@ -95,6 +96,10 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID /*lpvReserved*/)
     {
         g_hinst = hinstDLL;
         DisableThreadLibraryCalls(hinstDLL);
+    }
+    else if (fdwReason == DLL_PROCESS_DETACH)
+    {
+        PeekCredential::CleanupStaticLogo();
     }
     return TRUE;
 }

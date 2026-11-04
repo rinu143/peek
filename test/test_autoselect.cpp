@@ -255,6 +255,7 @@ static void DeleteTempTestDirectory(const std::wstring& dir)
 
 int main()
 {
+    g_hinst = GetModuleHandleW(NULL);
     std::wcout << L"==========================================================\n";
     std::wcout << L"Running Peek Lock-Screen & User-Array Verification Tests\n";
     std::wcout << L"==========================================================\n";
@@ -1681,7 +1682,7 @@ int main()
         cred.GetStringValue(PFI_STATUS_TEXT, &pszFound);
         std::wstring foundStr = pszFound ? pszFound : L"";
         if (pszFound) CoTaskMemFree(pszFound);
-        bool foundOk = (foundStr == PeekStatusStrings::kFaceFound);
+        bool foundOk = (foundStr == PeekStatusStrings::kRecognizing);
 
         // 4. VERIFYING state -> stays visible, text is "Verifying..."
         PeekAuthResult resVerifying = {};
@@ -1693,7 +1694,7 @@ int main()
         cred.GetStringValue(PFI_STATUS_TEXT, &pszVerify);
         std::wstring verifyStr = pszVerify ? pszVerify : L"";
         if (pszVerify) CoTaskMemFree(pszVerify);
-        bool verifyOk = (verifyStr == PeekStatusStrings::kVerifying);
+        bool verifyOk = (verifyStr == PeekStatusStrings::kRecognizing);
 
         // 5. LIVENESS state -> stays visible, text is "Verifying..."
         PeekAuthResult resLiveness = {};
@@ -1705,7 +1706,7 @@ int main()
         cred.GetStringValue(PFI_STATUS_TEXT, &pszLive);
         std::wstring liveStr = pszLive ? pszLive : L"";
         if (pszLive) CoTaskMemFree(pszLive);
-        bool liveOk = (liveStr == PeekStatusStrings::kLiveness);
+        bool liveOk = (liveStr == PeekStatusStrings::kRecognizing);
 
         // 6. SUCCESS state -> stays visible with greeting "Hello, Alice!"
         PeekAuthResult resSuccess = {};
@@ -1848,9 +1849,9 @@ int main()
     }
 
     // -------------------------------------------------------------
-    // Test 28: Testing GetBitmapValue returns a 32bpp bitmap with preserved alpha from probe frame
+    // Test 28: Testing GetBitmapValue returns a distinct 32bpp bitmap and decode-failure fallback
     // -------------------------------------------------------------
-    std::wcout << L"[Test 28] Testing GetBitmapValue returns a 32bpp bitmap with preserved alpha from probe frame...\n";
+    std::wcout << L"[Test 28] Testing GetBitmapValue returns a distinct 32bpp bitmap and decode-failure fallback...\n";
     {
         PeekCredential cred;
         CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR rgcpfd[PFI_COUNT] = {
@@ -1861,71 +1862,66 @@ int main()
         };
         cred.Initialize(CPUS_UNLOCK_WORKSTATION, rgcpfd, PFI_COUNT, L"TestUser", L"TestDomain", L"S-1-5-21-123", true);
 
-        // Create a 96x96 32bpp top-down probe DIB section with known alpha channel
-        BITMAPINFO bmi = {};
-        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        bmi.bmiHeader.biWidth = 96;
-        bmi.bmiHeader.biHeight = -96; // top-down
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB;
+        // Subtest 28.1: Normal GetBitmapValue returns a 32bpp DIB and distinct handles per call
+        HBITMAP hRetrieved1 = nullptr;
+        HBITMAP hRetrieved2 = nullptr;
+        HRESULT hr1 = cred.GetBitmapValue(PFI_LOGO, &hRetrieved1);
+        HRESULT hr2 = cred.GetBitmapValue(PFI_LOGO, &hRetrieved2);
 
-        void* pBits = nullptr;
-        HDC hdc = GetDC(NULL);
-        HBITMAP hProbeDIB = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
-        ReleaseDC(NULL, hdc);
+        bool hrOk = (hr1 == S_OK && hRetrieved1 != nullptr && hr2 == S_OK && hRetrieved2 != nullptr);
+        bool distinctHandles = (hRetrieved1 != hRetrieved2); // Each call must return a fresh copy
 
-        assert(hProbeDIB && pBits);
+        DIBSECTION ds1 = {};
+        bool getObjOk = (GetObjectW(hRetrieved1, sizeof(ds1), &ds1) == sizeof(ds1));
+        bool widthOk = (ds1.dsBm.bmWidth > 0);
+        bool heightOk = (abs(ds1.dsBm.bmHeight) > 0);
+        bool bppOk = (ds1.dsBm.bmBitsPixel == 32);
 
-        // Fill probe bitmap: pixel (0,0) has alpha=0 (fully transparent), center pixel (48,48) has alpha=220
-        BYTE* pPixelBytes = reinterpret_cast<BYTE*>(pBits);
-        memset(pPixelBytes, 0, 96 * 96 * 4); // All zeros, alpha(0,0)=0
-        size_t centerOffset = (48 * 96 + 48) * 4;
-        pPixelBytes[centerOffset + 0] = 100; // Blue
-        pPixelBytes[centerOffset + 1] = 150; // Green
-        pPixelBytes[centerOffset + 2] = 200; // Red
-        pPixelBytes[centerOffset + 3] = 220; // Alpha
+        if (hRetrieved1) DeleteObject(hRetrieved1);
+        if (hRetrieved2) DeleteObject(hRetrieved2);
 
-        // Inject probe frame into animator
-        cred.TestGetAnimator().TestSetCurrentFrame(hProbeDIB);
+        // Subtest 28.2: Decode-failure fallback returns 96x96 transparent bitmap
+        cred.TestSetSimulateLogoDecodeFailure(true);
+        HBITMAP hFallback1 = nullptr;
+        HBITMAP hFallback2 = nullptr;
+        HRESULT hrFb1 = cred.GetBitmapValue(PFI_LOGO, &hFallback1);
+        HRESULT hrFb2 = cred.GetBitmapValue(PFI_LOGO, &hFallback2);
 
-        // Call GetBitmapValue
-        HBITMAP hRetrieved = nullptr;
-        HRESULT hr = cred.GetBitmapValue(PFI_LOGO, &hRetrieved);
+        bool fbHrOk = (hrFb1 == S_OK && hFallback1 != nullptr && hrFb2 == S_OK && hFallback2 != nullptr);
+        bool fbDistinct = (hFallback1 != hFallback2);
 
-        bool hrOk = (hr == S_OK && hRetrieved != nullptr);
-        bool distinctHandle = (hRetrieved != hProbeDIB); // Must be a fresh copy, not the same handle
-
-        DIBSECTION ds = {};
-        bool getObjOk = (GetObjectW(hRetrieved, sizeof(ds), &ds) == sizeof(ds));
-        bool widthOk = (ds.dsBm.bmWidth == 96);
-        bool heightOk = (abs(ds.dsBm.bmHeight) == 96);
-        bool bppOk = (ds.dsBm.bmBitsPixel == 32);
-
-        BYTE retrievedAlpha00 = 255;
-        BYTE retrievedAlphaCenter = 0;
-        if (ds.dsBm.bmBits)
+        DIBSECTION dsFb = {};
+        bool fbGetObj = (GetObjectW(hFallback1, sizeof(dsFb), &dsFb) == sizeof(dsFb));
+        bool fbWidth = (dsFb.dsBm.bmWidth == 96);
+        bool fbHeight = (abs(dsFb.dsBm.bmHeight) == 96);
+        bool fbBpp = (dsFb.dsBm.bmBitsPixel == 32);
+        bool fbTransparent = true;
+        if (dsFb.dsBm.bmBits)
         {
-            const BYTE* pRetBytes = reinterpret_cast<const BYTE*>(ds.dsBm.bmBits);
-            retrievedAlpha00 = pRetBytes[3];
-            retrievedAlphaCenter = pRetBytes[centerOffset + 3];
+            const BYTE* pBits = reinterpret_cast<const BYTE*>(dsFb.dsBm.bmBits);
+            for (size_t i = 0; i < 96 * 96 * 4; ++i)
+            {
+                if (pBits[i] != 0) { fbTransparent = false; break; }
+            }
         }
 
-        bool alpha00Preserved = (retrievedAlpha00 == 0);
-        bool alphaCenterPreserved = (retrievedAlphaCenter == 220);
+        if (hFallback1) DeleteObject(hFallback1);
+        if (hFallback2) DeleteObject(hFallback2);
 
-        if (hRetrieved) DeleteObject(hRetrieved);
-        DeleteObject(hProbeDIB);
+        // Restore normal decode simulation
+        cred.TestSetSimulateLogoDecodeFailure(false);
 
-        if (hrOk && distinctHandle && getObjOk && widthOk && heightOk && bppOk && alpha00Preserved && alphaCenterPreserved)
+        if (hrOk && distinctHandles && getObjOk && widthOk && heightOk && bppOk &&
+            fbHrOk && fbDistinct && fbGetObj && fbWidth && fbHeight && fbBpp && fbTransparent)
         {
-            std::wcout << L"  PASS: GetBitmapValue returns fresh 32bpp DIB with preserved alpha (alpha(0,0)=0, center=220)\n";
+            std::wcout << L"  PASS: GetBitmapValue returns distinct 32bpp DIB per call and 96x96 transparent fallback on decode failure\n";
         }
         else
         {
-            std::wcout << L"  FAIL: Bitmap check failed: hrOk=" << hrOk << L", distinct=" << distinctHandle 
-                       << L", 32bpp=" << bppOk << L", a(0,0)=" << retrievedAlpha00 
-                       << L", aCenter=" << retrievedAlphaCenter << L"\n";
+            std::wcout << L"  FAIL: Bitmap check failed: hrOk=" << hrOk << L", distinct=" << distinctHandles
+                       << L", 32bpp=" << bppOk << L", fbHrOk=" << fbHrOk << L", fbDistinct=" << fbDistinct
+                       << L", fbWidth=" << fbWidth << L", fbHeight=" << fbHeight << L", fbBpp=" << fbBpp
+                       << L", fbTrans=" << fbTransparent << L"\n";
             failed++;
         }
     }
@@ -1937,30 +1933,36 @@ int main()
     {
         bool allPassed = true;
 
-        // Subtest 29.1: Constant table string mapping
+        // Subtest 29.1: Constant table string mapping and GetTextForState
         {
             bool tableOk = (wcscmp(PeekStatusStrings::kSearching, L"Looking for face...") == 0 &&
-                            wcscmp(PeekStatusStrings::kFaceFound, L"Found match") == 0 &&
-                            wcscmp(PeekStatusStrings::kVerifying, L"Verifying...") == 0 &&
-                            wcscmp(PeekStatusStrings::kLiveness, L"Verifying...") == 0 &&
+                            wcscmp(PeekStatusStrings::kRecognizing, L"Recognizing...") == 0 &&
                             wcscmp(PeekStatusStrings::kRetry, L"Retrying...") == 0 &&
                             wcscmp(PeekStatusStrings::kFailure, L"Face not recognized") == 0 &&
                             wcscmp(PeekStatusStrings::kFallback, L"Sign in with your PIN or password") == 0 &&
                             wcscmp(PeekStatusStrings::kWelcomeBack, L"Welcome back") == 0 &&
                             wcscmp(PeekStatusStrings::kIdle, L"") == 0);
 
-            if (tableOk)
+            bool stateMappingOk = (wcscmp(PeekStatusStrings::GetTextForState(PeekUiState::SEARCHING), L"Looking for face...") == 0 &&
+                                   wcscmp(PeekStatusStrings::GetTextForState(PeekUiState::FACE_FOUND), L"Recognizing...") == 0 &&
+                                   wcscmp(PeekStatusStrings::GetTextForState(PeekUiState::VERIFYING), L"Recognizing...") == 0 &&
+                                   wcscmp(PeekStatusStrings::GetTextForState(PeekUiState::LIVENESS), L"Recognizing...") == 0 &&
+                                   wcscmp(PeekStatusStrings::GetTextForState(PeekUiState::RETRY), L"Retrying...") == 0 &&
+                                   wcscmp(PeekStatusStrings::GetTextForState(PeekUiState::FAILURE), L"Face not recognized") == 0 &&
+                                   wcscmp(PeekStatusStrings::GetTextForState(PeekUiState::IDLE), L"") == 0);
+
+            if (tableOk && stateMappingOk)
             {
-                std::wcout << L"  PASS: Constant strings table strictly matches required plain text specification\n";
+                std::wcout << L"  PASS: Constant strings table and state mapping strictly match required plain text specification\n";
             }
             else
             {
-                std::wcout << L"  FAIL: Constant strings table content mismatch\n";
+                std::wcout << L"  FAIL: Constant strings table content mismatch (tableOk=" << tableOk << L", mappingOk=" << stateMappingOk << L")\n";
                 allPassed = false;
             }
         }
 
-        // Subtest 29.2: Redundant SetFieldString skipping (LIVENESS after VERIFYING)
+        // Subtest 29.2: Redundant SetFieldString skipping (FACE_FOUND -> VERIFYING -> LIVENESS all 'Recognizing...')
         {
             PeekCredential cred;
             cred.TestSetDisablePipe(true);
@@ -1977,36 +1979,48 @@ int main()
 
             BOOL autoLogon = FALSE;
             cred.SetSelected(&autoLogon); // sets "Looking for face..."
+            int countAfterSelected = events.GetStringCallCount();
+            std::wstring stringAfterSelected = events.GetLastString();
 
-            // Update to VERIFYING ("Verifying...")
+            // 1. Update to FACE_FOUND ("Recognizing...")
+            PeekAuthResult resFound = {};
+            resFound.state = PeekIPCState::FACE_FOUND;
+            cred.TestOnEngineStateUpdate(resFound);
+            int countAfterFound = events.GetStringCallCount();
+            std::wstring stringAfterFound = events.GetLastString();
+
+            // 2. Update to VERIFYING ("Recognizing...") -> unchanged, skipped!
             PeekAuthResult resVerify = {};
             resVerify.state = PeekIPCState::VERIFYING;
             cred.TestOnEngineStateUpdate(resVerify);
-
-            int callCountAfterVerify = events.GetStringCallCount();
+            int countAfterVerify = events.GetStringCallCount();
             std::wstring stringAfterVerify = events.GetLastString();
 
-            // Update to LIVENESS_CHECK ("Verifying...") -> unchanged!
+            // 3. Update to LIVENESS_CHECK ("Recognizing...") -> unchanged, skipped!
             PeekAuthResult resLive = {};
             resLive.state = PeekIPCState::LIVENESS_CHECK;
             cred.TestOnEngineStateUpdate(resLive);
-
-            int callCountAfterLive = events.GetStringCallCount();
+            int countAfterLive = events.GetStringCallCount();
             std::wstring stringAfterLive = events.GetLastString();
 
-            bool stringMatched = (stringAfterVerify == L"Verifying..." && stringAfterLive == L"Verifying...");
-            bool skippedRedundant = (callCountAfterVerify == callCountAfterLive);
+            bool searchingMatched = (stringAfterSelected == L"Looking for face...");
+            bool recognizingMatched = (stringAfterFound == L"Recognizing..." &&
+                                       stringAfterVerify == L"Recognizing..." &&
+                                       stringAfterLive == L"Recognizing...");
+            bool foundIncremented = (countAfterFound == countAfterSelected + 1);
+            bool verifySkipped = (countAfterVerify == countAfterFound);
+            bool liveSkipped = (countAfterLive == countAfterFound);
 
             cred.UnAdvise();
 
-            if (stringMatched && skippedRedundant)
+            if (searchingMatched && recognizingMatched && foundIncremented && verifySkipped && liveSkipped)
             {
-                std::wcout << L"  PASS: Redundant SetFieldString calls skipped when status text is unchanged (LIVENESS after VERIFYING)\n";
+                std::wcout << L"  PASS: FACE_FOUND, VERIFYING, and LIVENESS all show 'Recognizing...' and redundant calls are skipped\n";
             }
             else
             {
-                std::wcout << L"  FAIL: Redundant call skipping failed: matched=" << stringMatched 
-                           << L", count1=" << callCountAfterVerify << L", count2=" << callCountAfterLive << L"\n";
+                std::wcout << L"  FAIL: Redundant call skipping failed: matched=" << recognizingMatched
+                           << L", inc=" << foundIncremented << L", vSkip=" << verifySkipped << L", lSkip=" << liveSkipped << L"\n";
                 allPassed = false;
             }
         }
@@ -2029,12 +2043,12 @@ int main()
             BOOL autoLogon = FALSE;
             cred.SetSelected(&autoLogon);
 
-            // 1. FACE_FOUND shows "Found match" but does NOT authorize unlock
+            // 1. FACE_FOUND shows "Recognizing..." but does NOT authorize unlock
             PeekAuthResult resFound = {};
             resFound.state = PeekIPCState::FACE_FOUND;
             cred.TestOnEngineStateUpdate(resFound);
             bool authAfterFound = cred.IsAuthenticated();
-            bool textAfterFound = (events.GetLastString() == L"Found match");
+            bool textAfterFound = (events.GetLastString() == L"Recognizing...");
 
             // 2. AUTHENTICATED with isAuthorizedToUnlock == false does NOT show greeting or authorize
             PeekAuthResult resUnauth = {};
@@ -2043,7 +2057,7 @@ int main()
             resUnauth.displayName = L"Bob";
             cred.TestOnEngineStateUpdate(resUnauth);
             bool authAfterUnauth = cred.IsAuthenticated();
-            bool textAfterUnauth = (events.GetLastString() == L"Found match"); // Greeting NOT sent
+            bool textAfterUnauth = (events.GetLastString() == L"Recognizing..."); // Greeting NOT sent
 
             // 3. Genuine AUTHENTICATED with isAuthorizedToUnlock == true shows greeting and authorizes
             PeekAuthResult resAuth = {};
@@ -2069,7 +2083,6 @@ int main()
                 allPassed = false;
             }
         }
-
         // Subtest 29.4: Fallback message on TIMEOUT, retry limit reached, engine offline, and error states
         {
             PeekCredential cred;

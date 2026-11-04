@@ -88,7 +88,7 @@
 1. Lock your workstation: Press **`Win + L`**.
 2. On the Windows lock screen, select the **Peek** tile (or it will be selected automatically).
 3. Look directly into your webcam.
-4. Peek detects your face, verifies liveness, animates the lock tile, and automatically unlocks your desktop!
+4. Peek detects your face, verifies liveness, and automatically unlocks your desktop!
 
 ### Fail-Open Verification:
 - Unplug or cover your webcam and lock the screen.

@@ -35,6 +35,21 @@ Write-Host ""
 
 if (-not $SkipBuild) {
     # -------------------------------------------------------------------------
+    # 0. Generate build\peek.ico (Pillow)
+    # -------------------------------------------------------------------------
+    Write-Host "[0/3] Generating application icon build\peek.ico..." -ForegroundColor Cyan
+    $makeIconScript = Join-Path $RepoRoot "scripts\make_icon.py"
+    $icoPath = Join-Path $RepoRoot "build\peek.ico"
+    try {
+        $iconProc = Start-Process -FilePath "python" -ArgumentList @($makeIconScript) -WorkingDirectory $RepoRoot -Wait -PassThru -NoNewWindow
+        if ($iconProc.ExitCode -ne 0) {
+            Write-Warning "scripts/make_icon.py exited with code $($iconProc.ExitCode). Continuing without custom icon."
+        }
+    } catch {
+        Write-Warning "Could not run scripts/make_icon.py ($($_.Exception.Message)). Continuing without custom icon."
+    }
+
+    # -------------------------------------------------------------------------
     # 1. Build PeekEngine.exe (PyInstaller standalone)
     # -------------------------------------------------------------------------
     Write-Host "[1/3] Building PeekEngine.exe (Python PyInstaller standalone)..." -ForegroundColor Cyan
@@ -45,8 +60,12 @@ if (-not $SkipBuild) {
         "--paths", ".",
         "--add-data", "engine\models\*.onnx;engine\models",
         "--collect-all", "onnxruntime",
-        "--collect-all", "cv2",
-        "--icon", "assets\peek.ico",
+        "--collect-all", "cv2"
+    )
+    if (Test-Path $icoPath) {
+        $pyinstallerArgs += @("--icon", $icoPath)
+    }
+    $pyinstallerArgs += @(
         "--noconfirm",
         "scripts\run_engine_service.py"
     )
@@ -127,12 +146,7 @@ Copy-Item -Path (Join-Path $packagingSrcDir "uninstall.bat") -Destination $Stagi
 Copy-Item -Path (Join-Path $packagingSrcDir "README.txt") -Destination $StagingDir -Force
 Copy-Item -Path (Join-Path $packagingSrcDir "README.md") -Destination $StagingDir -Force
 
-$assetsSrcDir = Join-Path $RepoRoot "assets"
-if (Test-Path $assetsSrcDir) {
-    $assetsDstDir = Join-Path $StagingDir "assets"
-    if (-not (Test-Path $assetsDstDir)) { New-Item -ItemType Directory -Path $assetsDstDir -Force | Out-Null }
-    Copy-Item -Path (Join-Path $assetsSrcDir "*") -Destination $assetsDstDir -Recurse -Force
-}
+
 
 Write-Host "      [OK] All components staged successfully." -ForegroundColor Green
 

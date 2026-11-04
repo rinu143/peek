@@ -16,7 +16,6 @@ set(SOURCES
     PeekPipeClient.cpp
     Serialization.cpp
     SecretVault.cpp
-    TileAnimator.cpp
     resources.rc
     credential_provider.def
 )
@@ -30,7 +29,6 @@ set(HEADERS
     PeekPipeClient.h
     Serialization.h
     SecretVault.h
-    TileAnimator.h
 )
 
 add_library(PeekCredentialProvider SHARED
@@ -66,7 +64,6 @@ add_executable(test_autoselect
     PeekPipeClient.cpp
     Serialization.cpp
     SecretVault.cpp
-    TileAnimator.cpp
     resources.rc
 )
 

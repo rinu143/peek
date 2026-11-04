@@ -4,20 +4,30 @@
 
 #include "common.h"
 #include "PeekPipeClient.h"
-#include "TileAnimator.h"
 #include <set>
 #include <string>
 
 // Forward declaration of provider class
 class PeekProvider;
 
-// Constant table for all plain text status messages (Requirement 1)
+// UI Presentation States
+enum class PeekUiState
+{
+    IDLE = 0,
+    SEARCHING,
+    FACE_FOUND,
+    VERIFYING,
+    LIVENESS,
+    SUCCESS,
+    FAILURE,
+    RETRY
+};
+
+// Constant table for all plain text status messages
 struct PeekStatusStrings
 {
     static constexpr const wchar_t* kSearching    = L"Looking for face...";
-    static constexpr const wchar_t* kFaceFound    = L"Found match";
-    static constexpr const wchar_t* kVerifying    = L"Verifying...";
-    static constexpr const wchar_t* kLiveness    = L"Verifying...";
+    static constexpr const wchar_t* kRecognizing  = L"Recognizing...";
     static constexpr const wchar_t* kRetry        = L"Retrying...";
     static constexpr const wchar_t* kFailure      = L"Face not recognized";
     static constexpr const wchar_t* kFallback     = L"Sign in with your PIN or password";
@@ -29,9 +39,9 @@ struct PeekStatusStrings
         switch (state)
         {
         case PeekUiState::SEARCHING:  return kSearching;
-        case PeekUiState::FACE_FOUND: return kFaceFound;
-        case PeekUiState::VERIFYING:  return kVerifying;
-        case PeekUiState::LIVENESS:   return kLiveness;
+        case PeekUiState::FACE_FOUND: return kRecognizing;
+        case PeekUiState::VERIFYING:  return kRecognizing;
+        case PeekUiState::LIVENESS:   return kRecognizing;
         case PeekUiState::RETRY:      return kRetry;
         case PeekUiState::FAILURE:    return kFailure;
         case PeekUiState::IDLE:
@@ -68,6 +78,10 @@ public:
     void SetLockedSession(bool bLockedSession);
     bool IsLockedSession() const;
 
+    static HBITMAP GetOrLoadCachedLogo();
+    static HBITMAP CreateTransparentBitmap(int width = 96, int height = 96);
+    static void CleanupStaticLogo();
+
 #ifdef PEEK_TEST_BUILD
     void TestSetAuthenticated(bool isAuth, const std::wstring& profileId)
     {
@@ -87,9 +101,9 @@ public:
         LeaveCriticalSection(&const_cast<CRITICAL_SECTION&>(m_cs));
         return attempts;
     }
-    TileAnimator& TestGetAnimator() { return m_animator; }
     void TestCancelPipe() { m_pipeClient.Cancel(); }
     void TestSetDisablePipe(bool disable) { m_testDisablePipe = disable; }
+    static void TestSetSimulateLogoDecodeFailure(bool sim);
 #endif
 
     // Provider linkage for logon notifications
@@ -158,7 +172,6 @@ private:
     bool m_isAuthenticated;
     bool m_isSelected;
     PeekPipeClient m_pipeClient;
-    TileAnimator m_animator;
     HANDLE m_hRetryCancelEvent;
     CRITICAL_SECTION m_cs;
 #ifdef PEEK_TEST_BUILD

@@ -7,16 +7,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon>assets\peek.ico</ApplicationIcon>
+    <ApplicationIcon Condition="Exists('..\..\build\peek.ico')">..\..\build\peek.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
-    <Resource Include="assets\peek.ico" />
-    <Resource Include="assets\peek-logo.svg" />
-    <Resource Include="assets\frame_search_1.png" />
-    <Resource Include="assets\frame_search_1_dark.png" />
-    <Resource Include="assets\password.png" />
-    <Resource Include="assets\password_dark.png" />
+    <Resource Include="..\..\credential_provider\res\frame_search_1.png" Link="assets\frame_search_1.png" />
+    <Resource Include="..\..\credential_provider\res\frame_search_1_dark.png" Link="assets\frame_search_1_dark.png" />
   </ItemGroup>
 
   <ItemGroup>
