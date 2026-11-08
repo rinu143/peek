@@ -94,9 +94,23 @@ from engine.ipc.protocol import (
     make_pong,
 )
 from engine.camera.camera_capture import CameraCapture
+from engine.camera.power_watcher import get_power_watcher, PowerStateWatcher
 from engine.pipeline.face_engine import FaceEngine, EngineFrameResult
 
 logger = logging.getLogger("Peek.PipeServer")
+
+
+def log_latency(session_id: str, stage: str, timestamp_ms: Optional[int] = None, **kwargs) -> None:
+    """
+    Structured latency event logger for authentication sessions.
+    Emits millisecond timestamps and stage metrics without ever logging secrets.
+    """
+    if timestamp_ms is None:
+        timestamp_ms = int(time.time() * 1000)
+    extra_parts = [f"{k}={v}" for k, v in kwargs.items()]
+    extra_str = f" {' '.join(extra_parts)}" if extra_parts else ""
+    line = f"[LATENCY] session_id={session_id} stage={stage} timestamp_ms={timestamp_ms}{extra_str}"
+    logger.info(line)
 
 def build_auth_sddl() -> str:
     """
@@ -317,6 +331,7 @@ class PipeServer:
         sddl: Optional[str] = None,
         coordinator: Optional[Any] = None,
         lockout_tracker: Optional[UserLockoutTracker] = None,
+        power_watcher: Optional[PowerStateWatcher] = None,
     ):
         self.pipe_name = pipe_name
         self.face_engine = face_engine
@@ -325,6 +340,7 @@ class PipeServer:
         self.sddl = sddl if sddl is not None else DEFAULT_SDDL
         self.coordinator = coordinator
         self.lockout_tracker = lockout_tracker if lockout_tracker is not None else UserLockoutTracker()
+        self._power_watcher = power_watcher if power_watcher is not None else get_power_watcher()
 
         self._stop_event = threading.Event()
         self._is_running = False
@@ -385,6 +401,10 @@ class PipeServer:
             logger.info("Initializing default FaceEngine instance for IPC server...")
             self.face_engine = FaceEngine(match_threshold=0.48, require_active_challenge=False)
         return self.face_engine
+
+    def is_running(self) -> bool:
+        """Returns True if the server thread is running."""
+        return self._is_running and (self._server_thread is not None and self._server_thread.is_alive())
 
     def start(self):
         """
@@ -546,85 +566,113 @@ class PipeServer:
         session.write_message(make_engine_ready("Peek Face Engine ready for authentication"))
 
         # 2. Main command processing loop for this connection
-        while not self._stop_event.is_set():
-            is_connected, line = session.read_blocking_line(timeout_seconds=0.25)
-            if not is_connected:
-                logger.info("Client disconnected from Named Pipe.")
-                break
+        try:
+            while not self._stop_event.is_set():
+                is_connected, line = session.read_blocking_line(timeout_seconds=0.25)
+                if not is_connected:
+                    logger.info("Client disconnected from Named Pipe.")
+                    break
 
-            if line is None:
-                continue
-
-            try:
-                msg = parse_message(line)
-            except ProtocolError as ex:
-                logger.warning(f"Malformed protocol message received: {ex}")
-                session.write_message(make_error(REASON_INVALID_MESSAGE, "Invalid message format"))
-                continue
-            except Exception as ex:
-                logger.error(f"Error parsing client message: {ex}")
-                session.write_message(make_error(REASON_INVALID_MESSAGE, "Invalid message format"))
-                continue
-
-            msg_type = msg.get("type")
-
-            if msg_type == MSG_PING:
-                session.write_message(make_pong())
-
-            elif msg_type == MSG_START_AUTH:
-                logger.info("START_AUTH message received from client")
-                nonce = msg.get("nonce")
-                if not nonce or not isinstance(nonce, str) or len(nonce) < 16:
-                    logger.warning("Rejecting START_AUTH: missing or invalid challenge nonce.")
-                    session.write_message(make_error(REASON_INVALID_MESSAGE, "Invalid challenge nonce", nonce=nonce))
-                    continue
-
-                user_id = self._resolve_auth_user_id(msg)
-                is_locked, remaining = self.lockout_tracker.is_locked_out(user_id)
-                if is_locked:
-                    logger.warning(
-                        f"Rejecting START_AUTH: user is locked out ({remaining:.1f}s remaining). "
-                        "Instructing client to sign in with PIN or password."
-                    )
-                    session.write_message(
-                        make_locked_out(
-                            detail="Sign in with your PIN or password",
-                            retry_after=remaining,
-                            nonce=nonce,
-                        )
-                    )
-                    continue
-
-                if self.coordinator is not None and not self.coordinator.acquire_auth():
-                    logger.warning("Rejecting START_AUTH: enrollment session currently active.")
-                    session.write_message(
-                        make_error(
-                            REASON_CAMERA_UNAVAILABLE,
-                            "Cannot start authentication: enrollment session is currently active",
-                            nonce=nonce,
-                        )
-                    )
+                if line is None:
                     continue
 
                 try:
-                    timeout_sec = float(msg.get("timeout_seconds", self.default_auth_timeout))
-                    user_sid = msg.get("user_sid")
-                    self._run_auth_session(session, timeout_seconds=timeout_sec, nonce=nonce, user_id=user_id, user_sid=user_sid)
-                finally:
-                    if self.coordinator is not None:
-                        self.coordinator.release_auth()
+                    msg = parse_message(line)
+                except ProtocolError as ex:
+                    logger.warning(f"Malformed protocol message received: {ex}")
+                    session.write_message(make_error(REASON_INVALID_MESSAGE, "Invalid message format"))
+                    continue
+                except Exception as ex:
+                    logger.error(f"Error parsing client message: {ex}")
+                    session.write_message(make_error(REASON_INVALID_MESSAGE, "Invalid message format"))
+                    continue
 
-            elif msg_type == MSG_CANCEL_AUTH:
-                logger.debug("CANCEL_AUTH received while idle; acknowledged.")
-                session.write_message(make_engine_ready("Idle; ready for authentication"))
+                msg_type = msg.get("type")
 
-            else:
-                logger.warning(f"Unknown message type '{msg_type}' received from client.")
-                session.write_message(make_error(REASON_INVALID_MESSAGE, "Unknown message type"))
+                if msg_type == MSG_PING:
+                    session.write_message(make_pong())
+
+                elif msg_type == MSG_START_AUTH:
+                    logger.info("START_AUTH message received from client")
+                    nonce = msg.get("nonce")
+                    if not nonce or not isinstance(nonce, str) or len(nonce) < 16:
+                        logger.warning("Rejecting START_AUTH: missing or invalid challenge nonce.")
+                        session.write_message(make_error(REASON_INVALID_MESSAGE, "Invalid challenge nonce", nonce=nonce))
+                        continue
+
+                    user_id = self._resolve_auth_user_id(msg)
+                    is_locked, remaining = self.lockout_tracker.is_locked_out(user_id)
+                    if is_locked:
+                        logger.warning(
+                            f"Rejecting START_AUTH: user is locked out ({remaining:.1f}s remaining). "
+                            "Instructing client to sign in with PIN or password."
+                        )
+                        session.write_message(
+                            make_locked_out(
+                                detail="Sign in with your PIN or password",
+                                retry_after=remaining,
+                                nonce=nonce,
+                            )
+                        )
+                        continue
+
+                    if self.coordinator is not None and not self.coordinator.acquire_auth():
+                        logger.warning("Rejecting START_AUTH: enrollment session currently active.")
+                        session.write_message(
+                            make_error(
+                                REASON_CAMERA_UNAVAILABLE,
+                                "Cannot start authentication: enrollment session is currently active",
+                                nonce=nonce,
+                            )
+                        )
+                        continue
+
+                    try:
+                        timeout_sec = float(msg.get("timeout_seconds", self.default_auth_timeout))
+                        user_sid = msg.get("user_sid")
+                        sess_id = msg.get("session_id") or nonce
+                        self._run_auth_session(
+                            session,
+                            timeout_seconds=timeout_sec,
+                            nonce=nonce,
+                            user_id=user_id,
+                            user_sid=user_sid,
+                            session_id=sess_id,
+                        )
+                    except Exception as ex:
+                        logger.error(f"Per-session exception in START_AUTH handling: {ex}", exc_info=True)
+                        try:
+                            session.write_message(make_error(REASON_ENGINE_ERROR, "Recognition processing failed", nonce=nonce))
+                        except Exception:
+                            pass
+                    finally:
+                        if self.coordinator is not None:
+                            self.coordinator.release_auth()
+
+                elif msg_type == MSG_CANCEL_AUTH:
+                    logger.debug("CANCEL_AUTH received while idle; acknowledged.")
+                    session.write_message(make_engine_ready("Idle; ready for authentication"))
+
+                else:
+                    logger.warning(f"Unknown message type '{msg_type}' received from client.")
+                    session.write_message(make_error(REASON_INVALID_MESSAGE, "Unknown message type"))
+        except Exception as ex:
+            logger.error(f"Per-session exception in _handle_client: {ex}", exc_info=True)
 
     def _acquire_camera(self) -> Tuple[bool, Optional[Any], str]:
         """Acquires the camera device safely with error reporting."""
         with self._camera_lock:
+            # Check for system resume from sleep
+            if self._power_watcher.check_and_clear_resume():
+                logger.warning("System resumed from sleep detected. Re-creating camera instance for session.")
+                if self._active_camera is not None:
+                    try:
+                        if hasattr(self._active_camera, "stop"):
+                            self._active_camera.stop()
+                    except Exception:
+                        pass
+                    self._active_camera = None
+
             if self._injected_camera is not None:
                 self._active_camera = self._injected_camera
                 if hasattr(self._active_camera, "start"):
@@ -634,7 +682,8 @@ class PipeServer:
                 return True, self._active_camera, ""
 
             try:
-                cam = CameraCapture(camera_index=0, width=640, height=480)
+                # None camera_index triggers auto-probing 0..3 (rejecting IR, picking color) or engine.json override
+                cam = CameraCapture(camera_index=None, width=640, height=480)
                 if not cam.start():
                     err = cam.error_message or "Camera unavailable or in use by another application"
                     return False, None, err
@@ -663,6 +712,7 @@ class PipeServer:
         nonce: str,
         user_id: str = "default_user",
         user_sid: Optional[str] = None,
+        session_id: Optional[str] = None,
     ):
         """
         Executes a live authentication session:
@@ -675,13 +725,18 @@ class PipeServer:
         7. Releases camera upon completion
         Emits only generic details over the wire; keeps specifics in local logs only.
         """
+        sess_id = session_id or nonce
+        log_latency(sess_id, "session start")
+
         session.write_message(make_camera_starting("Acquiring camera...", nonce=nonce))
 
         cam_ok, camera, err_detail = self._acquire_camera()
         if not cam_ok or camera is None:
             logger.error(f"Cannot perform authentication: {err_detail}")
-            session.write_message(make_error(REASON_CAMERA_UNAVAILABLE, "Camera device unavailable", nonce=nonce))
+            session.write_message(make_error(REASON_CAMERA_UNAVAILABLE, err_detail or "Camera device unavailable", nonce=nonce))
             return
+
+        log_latency(sess_id, "camera open")
 
         engine = self._ensure_face_engine()
         try:
@@ -701,6 +756,13 @@ class PipeServer:
         start_time = time.time()
         last_state_label = None
         face_previously_found = False
+        first_frame_logged = False
+        first_face_logged = False
+        temporal_confirmed_logged = False
+        liveness_passed_logged = False
+        consecutive_read_failures = 0
+        max_consecutive_failures = 3
+        frame_idx = 0
 
         try:
             while not self._stop_event.is_set():
@@ -731,9 +793,46 @@ class PipeServer:
                 # 3. Read camera frame
                 ret, frame = camera.read_frame()
                 if not ret or frame is None:
-                    logger.error("Camera failed to deliver frame.")
-                    session.write_message(make_error(REASON_CAMERA_ERROR, "Camera feed lost", nonce=nonce))
-                    return
+                    consecutive_read_failures += 1
+                    logger.warning(f"Camera frame read failure ({consecutive_read_failures}/{max_consecutive_failures}).")
+                    if consecutive_read_failures >= max_consecutive_failures:
+                        logger.warning(
+                            f"Exceeded {max_consecutive_failures} consecutive frame read failures. "
+                            "Attempting camera recovery (release and reopen with backoff up to 3 tries)..."
+                        )
+                        recovered = False
+                        if hasattr(camera, "reopen"):
+                            recovered = camera.reopen(tries=3)
+                        elif hasattr(camera, "start"):
+                            if hasattr(camera, "stop"):
+                                try:
+                                    camera.stop()
+                                except Exception:
+                                    pass
+                            for attempt in range(1, 4):
+                                time.sleep(0.2 * (2 ** (attempt - 1)))
+                                try:
+                                    if camera.start():
+                                        recovered = True
+                                        break
+                                except Exception:
+                                    pass
+
+                        if recovered:
+                            logger.info("Camera recovery succeeded; resuming session.")
+                            consecutive_read_failures = 0
+                            continue
+                        else:
+                            logger.error("Camera recovery failed after 3 tries; ending session with error.")
+                            session.write_message(make_error(REASON_CAMERA_ERROR, "Camera feed lost", nonce=nonce))
+                            return
+                    continue
+
+                consecutive_read_failures = 0
+                frame_idx += 1
+                if not first_frame_logged:
+                    first_frame_logged = True
+                    log_latency(sess_id, "first frame")
 
                 # 4. Process frame through FaceEngine
                 try:
@@ -742,6 +841,36 @@ class PipeServer:
                     logger.error(f"FaceEngine.process_frame raised exception: {ex}", exc_info=True)
                     session.write_message(make_error(REASON_ENGINE_ERROR, "Recognition processing failed", nonce=nonce))
                     return
+
+                # Log per-stage inference times
+                face_count = len(result.all_tracks) if result.all_tracks else (1 if result.has_face else 0)
+                timings = getattr(result, "stage_timings", {}) or {}
+                log_latency(
+                    sess_id,
+                    "per-stage inference time",
+                    frame_idx=frame_idx,
+                    faces=face_count,
+                    detect_ms=timings.get("detect_ms", 0.0),
+                    track_ms=timings.get("track_pose_ms", 0.0),
+                    align_ms=timings.get("align_ms", 0.0),
+                    embed_ms=timings.get("embed_ms", 0.0),
+                    match_ms=timings.get("match_ms", 0.0),
+                    temporal_ms=timings.get("temporal_ms", 0.0),
+                    liveness_ms=timings.get("liveness_ms", 0.0),
+                    total_ms=timings.get("total_inference_ms", 0.0),
+                )
+
+                if result.has_face and not first_face_logged:
+                    first_face_logged = True
+                    log_latency(sess_id, "first face")
+
+                if result.is_temporally_confirmed and not temporal_confirmed_logged:
+                    temporal_confirmed_logged = True
+                    log_latency(sess_id, "temporal confirmed")
+
+                if result.is_live and not liveness_passed_logged:
+                    liveness_passed_logged = True
+                    log_latency(sess_id, "liveness passed")
 
                 # 5. Dual-Gate Authorization Check (NON-NEGOTIABLE SECURITY INVARIANT)
                 if result.is_authorized_to_unlock:
@@ -766,6 +895,7 @@ class PipeServer:
 
                     logger.info(f"Authentication verified for user '{display_name}'. Emitting AUTHENTICATED.")
                     self.lockout_tracker.record_success(user_id)
+                    log_latency(sess_id, "AUTHENTICATED")
                     session.write_message(
                         make_authenticated(
                             display_name=display_name,
@@ -828,5 +958,11 @@ class PipeServer:
                 # Brief loop throttle to emulate ~30 FPS camera cycle
                 time.sleep(0.015)
 
+        except Exception as ex:
+            logger.error(f"Per-session exception in _run_auth_session: {ex}", exc_info=True)
+            try:
+                session.write_message(make_error(REASON_ENGINE_ERROR, "Authentication session error", nonce=nonce))
+            except Exception:
+                pass
         finally:
             self._release_camera()

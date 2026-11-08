@@ -9,7 +9,7 @@
       2. Terminates any running PeekEngine or PeekSetup processes.
       3. Copies PeekEngine.exe, PeekSetup.exe, and PeekCredentialProvider.dll to "$env:ProgramFiles\Peek".
       4. Registers PeekCredentialProvider.dll with Windows LogonUI via regsvr32.
-      5. Configures a test-grade Scheduled Task to launch PeekEngine.exe at logon with highest privileges.
+      5. Configures a test-grade Scheduled Task to launch PeekEngine.exe at logon with normal (limited) privileges.
          (NOTE: In a production release, a native Windows Service would be used instead).
       6. Creates Start Menu shortcuts for convenient access.
       7. Launches PeekEngine.exe so testing can begin immediately without re-logging.
@@ -146,24 +146,16 @@ try {
     Set-Acl -Path $LogDir -AclObject $dirAcl
 
     # 2. File ACL: apply the same explicit ACL to the log file(s) if already existing
-    $logFilePath = Join-Path $LogDir "credential_provider.log"
-    if (Test-Path $logFilePath) {
-        $fileAcl = New-Object System.Security.AccessControl.FileSecurity
-        $fileAcl.SetAccessRuleProtection($true, $false)
-        $fileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "Allow")))
-        $fileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "Allow")))
-        $fileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "Allow")))
-        Set-Acl -Path $logFilePath -AclObject $fileAcl
-    }
-
-    $oldLogFilePath = Join-Path $LogDir "credential_provider.log.old"
-    if (Test-Path $oldLogFilePath) {
-        $oldFileAcl = New-Object System.Security.AccessControl.FileSecurity
-        $oldFileAcl.SetAccessRuleProtection($true, $false)
-        $oldFileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "Allow")))
-        $oldFileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "Allow")))
-        $oldFileAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "Allow")))
-        Set-Acl -Path $oldLogFilePath -AclObject $oldFileAcl
+    foreach ($ext in @("", ".old", ".1", ".2")) {
+        $p = Join-Path $LogDir ("credential_provider.log" + $ext)
+        if (Test-Path $p) {
+            $fAcl = New-Object System.Security.AccessControl.FileSecurity
+            $fAcl.SetAccessRuleProtection($true, $false)
+            $fAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "Allow")))
+            $fAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "Allow")))
+            $fAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "Allow")))
+            Set-Acl -Path $p -AclObject $fAcl
+        }
     }
 } catch {
     Write-Warning "Failed to set explicit ACL on log directory: $_"
@@ -218,14 +210,14 @@ try {
     $logonType = if ($currentUser -eq "SYSTEM") { "ServiceAccount" } else { "Interactive" }
     $action = New-ScheduledTaskAction -Execute $engineExe -WorkingDirectory $InstallDir
     $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType $logonType -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
+    $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType $logonType -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -StartWhenAvailable
     $null = Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop
     Write-Host "      [OK] Scheduled Task '$taskName' created (starts at logon)." -ForegroundColor Green
     $taskCreated = $true
 } catch {
     $trEscaped = '"' + $engineExe + '"'
-    $cmdArg = "/c schtasks.exe /Create /TN `"$taskName`" /TR `"$trEscaped`" /SC ONLOGON /RL HIGHEST /F"
+    $cmdArg = "/c schtasks.exe /Create /TN `"$taskName`" /TR `"$trEscaped`" /SC ONLOGON /RL LIMITED /F"
     $schtasksProc = Start-Process -FilePath "cmd.exe" -ArgumentList $cmdArg -Wait -NoNewWindow -PassThru
     if ($schtasksProc.ExitCode -eq 0) {
         Write-Host "      [OK] Scheduled Task '$taskName' created (starts at logon)." -ForegroundColor Green

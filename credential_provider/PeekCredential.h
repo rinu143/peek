@@ -171,6 +171,7 @@ private:
     int m_consecutiveFailedAttempts;
     bool m_isAuthenticated;
     bool m_isSelected;
+    std::string m_sessionId;
     PeekPipeClient m_pipeClient;
     HANDLE m_hRetryCancelEvent;
     CRITICAL_SECTION m_cs;

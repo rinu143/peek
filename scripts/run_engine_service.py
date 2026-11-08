@@ -41,6 +41,23 @@ from engine.ipc.session_coordinator import SessionCoordinator
 logger = logging.getLogger("Peek.EngineService")
 
 
+def unhandled_exception_handler(exc_type, exc_value, exc_traceback):
+    """Catches any uncaught fatal exception, logs traceback, flushes logs, and exits non-zero."""
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    logger.critical("FATAL: Unhandled fatal exception in engine process:", exc_info=(exc_type, exc_value, exc_traceback))
+    for handler in logging.root.handlers:
+        try:
+            handler.flush()
+        except Exception:
+            pass
+    sys.exit(1)
+
+
+sys.excepthook = unhandled_exception_handler
+
+
 def setup_logging(debug: bool = False):
     """Configures structured service logging to stdout/stderr and file if log directory exists."""
     log_level = logging.DEBUG if debug else logging.INFO
@@ -161,7 +178,12 @@ def main():
         auth_server.start()
         enrollment_server.start()
     except Exception as ex:
-        logger.critical(f"FATAL: Engine failed to start IPC servers: {ex}")
+        logger.critical(f"FATAL: Engine failed to start IPC servers: {ex}", exc_info=True)
+        for handler in logging.root.handlers:
+            try:
+                handler.flush()
+            except Exception:
+                pass
         sys.exit(1)
 
     try:
@@ -169,10 +191,29 @@ def main():
             time.sleep(1.0)
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received; stopping engine services...")
+    except Exception as ex:
+        logger.critical(f"FATAL: Engine service fatal failure: {ex}", exc_info=True)
+        for handler in logging.root.handlers:
+            try:
+                handler.flush()
+            except Exception:
+                pass
+        sys.exit(1)
     finally:
         auth_server.stop()
         enrollment_server.stop()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as ex:
+        logger.critical(f"FATAL: Unhandled exception in main: {ex}", exc_info=True)
+        for handler in logging.root.handlers:
+            try:
+                handler.flush()
+            except Exception:
+                pass
+        sys.exit(1)

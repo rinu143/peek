@@ -482,9 +482,11 @@ HRESULT PeekCredential::SetSelected(BOOL* pbAutoLogon)
 
     // Launch background asynchronous pipe authentication
     Logger::LogInfo("PeekCredential::SetSelected: starting background authentication via StartAuthAsync");
+    m_sessionId = PeekPipeClient::GenerateChallengeNonce();
+    LogLatency(m_sessionId, "SetSelected");
     m_pipeClient.StartAuthAsync([this](const PeekAuthResult& result) {
         this->OnEngineStateUpdate(result);
-    }, m_sid, 12.0f);
+    }, m_sid, 12.0f, m_sessionId);
 
     Logger::LogInfo("PeekCredential::SetSelected -> S_OK");
     return S_OK;
@@ -751,6 +753,7 @@ HRESULT PeekCredential::GetSerialization(
             {
                 Logger::LogInfo(L"Successfully packaged Kerberos logon serialization");
                 *pcpgsr = CPGSR_RETURN_CREDENTIAL_FINISHED;
+                LogLatency(m_sessionId, "GetSerialization done");
                 return S_OK;
             }
         }
@@ -779,6 +782,7 @@ HRESULT PeekCredential::GetSerialization(
         Logger::LogInfo(L"No valid LSA secret found or profile binding mismatch - failing open to standard authentication");
     }
 
+    LogLatency(m_sessionId, "GetSerialization done", "status=no_credential");
     *pcpgsr = CPGSR_NO_CREDENTIAL_FINISHED;
     return S_OK;
 }
@@ -993,6 +997,7 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
 
             Sleep(750);
 
+            LogLatency(m_sessionId, "AUTHENTICATED");
             Logger::LogInfo("AUTHENTICATED received - signaling CredentialsChanged");
             NotifyCredentialsReady();
         }
@@ -1103,7 +1108,9 @@ void PeekCredential::RunRetrySequence()
 
     SetStatusText(PeekStatusStrings::kSearching);
 
+    m_sessionId = PeekPipeClient::GenerateChallengeNonce();
+    LogLatency(m_sessionId, "SetSelected", "retry=true");
     m_pipeClient.StartAuthAsync([this](const PeekAuthResult& res) {
         this->OnEngineStateUpdate(res);
-    }, m_sid, 12.0f);
+    }, m_sid, 12.0f, m_sessionId);
 }

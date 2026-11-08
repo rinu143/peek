@@ -265,7 +265,7 @@ bool PeekPipeClient::StartAuthAsync(PeekStateCallback callback, float timeoutSec
     return StartAuthAsync(callback, m_expectedSid, timeoutSeconds);
 }
 
-bool PeekPipeClient::StartAuthAsync(PeekStateCallback callback, const std::wstring& expectedSid, float timeoutSeconds)
+bool PeekPipeClient::StartAuthAsync(PeekStateCallback callback, const std::wstring& expectedSid, float timeoutSeconds, const std::string& sessionId)
 {
     Logger::LogInfo("PeekPipeClient::StartAuthAsync called");
 
@@ -278,6 +278,7 @@ bool PeekPipeClient::StartAuthAsync(PeekStateCallback callback, const std::wstri
     m_callback = callback;
     m_expectedSid = expectedSid;
     m_timeoutSeconds = timeoutSeconds;
+    m_sessionId = sessionId.empty() ? GenerateChallengeNonce() : sessionId;
     m_isServerVerified = false;
     ResetEvent(m_hCancelEvent);
     m_isRunning = true;
@@ -608,13 +609,15 @@ void PeekPipeClient::RunWorker()
     }
 
     Logger::LogInfo("Successfully connected to and verified Peek engine pipe");
+    LogLatency(m_sessionId, "pipe connected");
 
     // 3. Generate random 128-bit challenge nonce and send START_AUTH
     m_expectedNonce = GenerateChallengeNonce();
 
     std::ostringstream ss;
     ss << "{\"protocol_version\":\"2.0\",\"type\":\"START_AUTH\",\"nonce\":\""
-       << m_expectedNonce << "\",\"timeout_seconds\":"
+       << m_expectedNonce << "\",\"session_id\":\""
+       << m_sessionId << "\",\"timeout_seconds\":"
        << m_timeoutSeconds;
     if (!m_expectedSid.empty())
     {
@@ -637,6 +640,7 @@ void PeekPipeClient::RunWorker()
     // 4. Stream responses until completion or cancel
     std::string line;
     bool receivedTerminalState = false;
+    bool firstStateLogged = false;
     while (m_isRunning.load() && WaitForSingleObject(m_hCancelEvent, 0) != WAIT_OBJECT_0)
     {
         if (!ReadNextMessage(line))
@@ -646,6 +650,12 @@ void PeekPipeClient::RunWorker()
         }
 
         ParseAndDispatchMessage(line, result);
+
+        if (!firstStateLogged)
+        {
+            firstStateLogged = true;
+            LogLatency(m_sessionId, "first state");
+        }
 
         // Terminal state reached
         if (result.state == PeekIPCState::AUTHENTICATED ||

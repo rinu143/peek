@@ -641,15 +641,22 @@ class EnrollmentPipeServer:
                         )
                         continue
 
-                    self._run_enrollment_session(
-                        session,
-                        display_name=display_name,
-                        clean_preview=clean_preview,
-                        keep_existing=keep_existing,
-                        profile_id=profile_id,
-                        blur_background=blur_background,
-                        activate=activate,
-                    )
+                    try:
+                        self._run_enrollment_session(
+                            session,
+                            display_name=display_name,
+                            clean_preview=clean_preview,
+                            keep_existing=keep_existing,
+                            profile_id=profile_id,
+                            blur_background=blur_background,
+                            activate=activate,
+                        )
+                    except Exception as ex:
+                        logger.error(f"Per-session exception in _run_enrollment_session: {ex}", exc_info=True)
+                        try:
+                            session.write_message(make_error(REASON_INTERNAL_ERROR, "Enrollment session failed"))
+                        except Exception:
+                            pass
                 finally:
                     if self.coordinator is not None:
                         self.coordinator.release_enrollment()

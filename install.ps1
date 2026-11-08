@@ -9,7 +9,7 @@
       2. Terminates any running PeekEngine or PeekSetup processes.
       3. Copies PeekEngine.exe, PeekSetup.exe, and PeekCredentialProvider.dll to "$env:ProgramFiles\Peek".
       4. Registers PeekCredentialProvider.dll with Windows LogonUI via regsvr32.
-      5. Configures a test-grade Scheduled Task to launch PeekEngine.exe at logon with highest privileges.
+      5. Configures a test-grade Scheduled Task to launch PeekEngine.exe at logon with normal (limited) privileges.
          (NOTE: In a production release, a native Windows Service would be used instead).
       6. Creates Start Menu shortcuts for convenient access.
       7. Launches PeekEngine.exe so testing can begin immediately without re-logging.
@@ -152,6 +152,27 @@ Set-ItemProperty -Path $peekRegKey -Name "InstallPath" -Value $engineExePath -Ty
 Set-ItemProperty -Path $peekRegKey -Name "LogLevel" -Value 1 -Type DWord -Force # 1 = ERROR, 0 = OFF, 2 = INFO, 3 = DEBUG
 Write-Host "      [OK] Configured HKLM:\SOFTWARE\Peek (InstallPath, LogLevel)." -ForegroundColor Green
 
+# Configure secure log directory ACL (SYSTEM/Administrators FullControl, Users ReadAndExecute)
+$LogDir = Join-Path $env:ProgramData "Peek\logs"
+if (-not (Test-Path $LogDir)) {
+    New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+}
+try {
+    $systemSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
+    $adminSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+    $usersSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinUsersSid, $null)
+
+    $dirAcl = New-Object System.Security.AccessControl.DirectorySecurity
+    $dirAcl.SetAccessRuleProtection($true, $false)
+    $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    Set-Acl -Path $LogDir -AclObject $dirAcl
+    Write-Host "      [OK] Secured log directory ACL at $LogDir (SYSTEM/Admin Full, Users Read)." -ForegroundColor Green
+} catch {
+    Write-Warning "Could not configure log directory ACL: $_"
+}
+
 # 6. Configure test-grade logon auto-start
 Write-Host "[4/5] Configuring test-grade logon startup task..." -ForegroundColor Cyan
 # -----------------------------------------------------------------------------
@@ -177,14 +198,14 @@ try {
     $logonType = if ($currentUser -eq "SYSTEM") { "ServiceAccount" } else { "Interactive" }
     $action = New-ScheduledTaskAction -Execute $engineExe -WorkingDirectory $InstallDir
     $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType $logonType -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
+    $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType $logonType -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -StartWhenAvailable
     $null = Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop
     Write-Host "      [OK] Scheduled Task '$taskName' created (starts at logon)." -ForegroundColor Green
     $taskCreated = $true
 } catch {
     $trEscaped = '"' + $engineExe + '"'
-    $cmdArg = "/c schtasks.exe /Create /TN `"$taskName`" /TR `"$trEscaped`" /SC ONLOGON /RL HIGHEST /F"
+    $cmdArg = "/c schtasks.exe /Create /TN `"$taskName`" /TR `"$trEscaped`" /SC ONLOGON /RL LIMITED /F"
     $schtasksProc = Start-Process -FilePath "cmd.exe" -ArgumentList $cmdArg -Wait -NoNewWindow -PassThru
     if ($schtasksProc.ExitCode -eq 0) {
         Write-Host "      [OK] Scheduled Task '$taskName' created (starts at logon)." -ForegroundColor Green

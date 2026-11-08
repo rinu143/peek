@@ -103,3 +103,6 @@ $RECYCLE.BIN/
 
 # Architecture / Spec Documents
 *Glance_Windows_Implementation_Plan_README.md
+
+# Spoof Evaluation Datasets (Never commit evaluation videos)
+eval_data/

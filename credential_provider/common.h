@@ -18,6 +18,7 @@
 #include <memory>
 #include <wtsapi32.h>
 #include <sddl.h>
+#include <aclapi.h>
 
 #include "guid.h"
 
@@ -35,6 +36,32 @@ inline std::wstring GuidToString(REFGUID guid)
 
 namespace PeekLoggerInternal
 {
+    inline void SecureLogDirectory(const std::wstring& dirPath)
+    {
+        // Enforces protected DACL: SYSTEM (Full), Administrators (Full), Users (ReadAndExecute)
+        // SDDL: D:P(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)(A;OICI;GRGX;;;BU)
+        PSECURITY_DESCRIPTOR pSD = NULL;
+        if (ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                L"D:P(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)(A;OICI;GRGX;;;BU)",
+                SDDL_REVISION_1,
+                &pSD,
+                NULL))
+        {
+            PACL pDacl = NULL;
+            BOOL bDaclPresent = FALSE;
+            BOOL bDaclDefaulted = FALSE;
+            if (GetSecurityDescriptorDacl(pSD, &bDaclPresent, &pDacl, &bDaclDefaulted) && bDaclPresent)
+            {
+                SetNamedSecurityInfoW(
+                    const_cast<wchar_t*>(dirPath.c_str()),
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                    NULL, NULL, pDacl, NULL);
+            }
+            LocalFree(pSD);
+        }
+    }
+
     inline CRITICAL_SECTION* GetLock()
     {
         static CRITICAL_SECTION s_cs;
@@ -162,15 +189,20 @@ namespace PeekLoggerInternal
 
             std::wstring logFilePath = GetLogFilePath();
 
-            // Cap file size: rotate to .old at ~1 MB (1024 * 1024)
+            // Cap file size: rotate at ~1 MB (1024 * 1024), keep 2 files
             WIN32_FILE_ATTRIBUTE_DATA fad = {};
             if (GetFileAttributesExW(logFilePath.c_str(), GetFileExInfoStandard, &fad))
             {
                 if (fad.nFileSizeHigh > 0 || fad.nFileSizeLow >= (1024 * 1024))
                 {
+                    std::wstring file2 = logFilePath + L".2";
+                    std::wstring file1 = logFilePath + L".1";
                     std::wstring oldPath = logFilePath + L".old";
+                    DeleteFileW(file2.c_str());
+                    MoveFileW(file1.c_str(), file2.c_str());
                     DeleteFileW(oldPath.c_str());
-                    MoveFileW(logFilePath.c_str(), oldPath.c_str());
+                    MoveFileW(logFilePath.c_str(), file1.c_str());
+                    CopyFileW(file1.c_str(), oldPath.c_str(), FALSE); // backwards compatibility with .old
                 }
             }
 
@@ -195,6 +227,7 @@ namespace PeekLoggerInternal
                     {
                         std::wstring dir = logFilePath.substr(0, lastSlash);
                         SHCreateDirectoryExW(NULL, dir.c_str(), NULL);
+                        SecureLogDirectory(dir);
                     }
 
                     hFile = CreateFileW(
@@ -378,6 +411,31 @@ public:
         LogDebug(msg.c_str());
     }
 };
+
+inline uint64_t GetCurrentEpochMs()
+{
+    FILETIME ft;
+    GetSystemTimePreciseAsFileTime(&ft);
+    ULARGE_INTEGER uli;
+    uli.LowPart = ft.dwLowDateTime;
+    uli.HighPart = ft.dwHighDateTime;
+    return (uli.QuadPart - 116444736000000000ULL) / 10000ULL;
+}
+
+inline void LogLatency(const std::string& sessionId, const char* pszStage, const char* pszExtra = nullptr)
+{
+    uint64_t ms = GetCurrentEpochMs();
+    char buf[512];
+    if (pszExtra && *pszExtra)
+    {
+        sprintf_s(buf, "[LATENCY] session_id=%s stage=%s timestamp_ms=%llu %s", sessionId.c_str(), pszStage, ms, pszExtra);
+    }
+    else
+    {
+        sprintf_s(buf, "[LATENCY] session_id=%s stage=%s timestamp_ms=%llu", sessionId.c_str(), pszStage, ms);
+    }
+    Logger::LogInfo(buf);
+}
 
 #ifdef PEEK_DIAG
 namespace PeekDiagnostics

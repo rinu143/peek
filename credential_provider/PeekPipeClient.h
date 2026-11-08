@@ -51,7 +51,7 @@ public:
 
     // Starts background authentication thread
     bool StartAuthAsync(PeekStateCallback callback, float timeoutSeconds = 12.0f);
-    bool StartAuthAsync(PeekStateCallback callback, const std::wstring& expectedSid, float timeoutSeconds = 12.0f);
+    bool StartAuthAsync(PeekStateCallback callback, const std::wstring& expectedSid, float timeoutSeconds = 12.0f, const std::string& sessionId = "");
 
     void SetExpectedSid(const std::wstring& expectedSid);
 
@@ -89,6 +89,7 @@ private:
     std::wstring m_pipeName;
     std::wstring m_expectedSid;
     std::string m_expectedNonce;
+    std::string m_sessionId;
     bool m_isServerVerified;
     HANDLE m_hPipe;
     HANDLE m_hThread;

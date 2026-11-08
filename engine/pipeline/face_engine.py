@@ -119,6 +119,7 @@ class EngineFrameResult:
     matched_profile_id: Optional[str] = None
     matched_profile_name: Optional[str] = None
     details: str = ""
+    stage_timings: Dict[str, float] = field(default_factory=dict)
 
 
 class FaceEngine:
@@ -250,6 +251,17 @@ class FaceEngine:
         self._last_full_verification_track_id = None
         self._last_liveness_result = None
 
+    def reset_session_state(self):
+        """Resets tracker, temporal verifier, liveness detector and challenge state for a new session."""
+        self.tracker = FaceTracker(min_hits_to_confirm=2, max_missing_frames=2)
+        self.temporal_verifier.reset()
+        self.liveness_detector.reset()
+        self.challenge_manager.reset()
+        self._challenge_passed_track_id = None
+        self._last_full_verification_time = None
+        self._last_full_verification_track_id = None
+        self._last_liveness_result = None
+
     def set_active_profile(self, profile: PeekProfile):
         """Sets active profile in memory."""
         self.active_profile = profile
@@ -324,11 +336,17 @@ class FaceEngine:
         Aligned crops are processed in memory and discarded. No raw camera frames persist.
         Match alone NEVER sets is_authorized_to_unlock to True. Liveness must pass independently.
         """
+        t_start = time.perf_counter()
+
         # Step 1: Detect all faces in frame
+        t0 = time.perf_counter()
         detections = self.detector.detect(frame)
+        t_detect = (time.perf_counter() - t0) * 1000.0
 
         # Step 2: Track faces and resolve dominant target face
+        t0 = time.perf_counter()
         dominant_target, all_tracks = self.tracker.update(detections)
+        t_track = (time.perf_counter() - t0) * 1000.0
         
         if dominant_target is None:
             temporal_res = self.temporal_verifier.update(None, False, 0.0)
@@ -338,6 +356,17 @@ class FaceEngine:
             self._last_full_verification_time = None
             self._last_full_verification_track_id = None
             self._last_liveness_result = None
+            total_ms = (time.perf_counter() - t_start) * 1000.0
+            timings = {
+                "detect_ms": round(t_detect, 2),
+                "track_pose_ms": round(t_track, 2),
+                "align_ms": 0.0,
+                "embed_ms": 0.0,
+                "match_ms": 0.0,
+                "temporal_ms": 0.0,
+                "liveness_ms": 0.0,
+                "total_inference_ms": round(total_ms, 2),
+            }
             return EngineFrameResult(
                 has_face=False,
                 all_tracks=all_tracks,
@@ -346,7 +375,8 @@ class FaceEngine:
                 is_live=False,
                 state_label="SEARCHING",
                 is_authorized_to_unlock=False,
-                details="Looking for you..."
+                details="Looking for you...",
+                stage_timings=timings
             )
 
         # Re-pack dominant target as FaceDetection for downstream consumers
@@ -372,6 +402,17 @@ class FaceEngine:
             self._last_full_verification_time = None
             self._last_full_verification_track_id = None
             self._last_liveness_result = None
+            total_ms = (time.perf_counter() - t_start) * 1000.0
+            timings = {
+                "detect_ms": round(t_detect, 2),
+                "track_pose_ms": round(t_track, 2),
+                "align_ms": 0.0,
+                "embed_ms": 0.0,
+                "match_ms": 0.0,
+                "temporal_ms": 0.0,
+                "liveness_ms": 0.0,
+                "total_inference_ms": round(total_ms, 2),
+            }
             return EngineFrameResult(
                 has_face=True,
                 detection=dominant_detection,
@@ -382,25 +423,35 @@ class FaceEngine:
                 is_live=False,
                 state_label="FACE_TOO_SMALL",
                 is_authorized_to_unlock=False,
-                details="Move closer to camera"
+                details="Move closer to camera",
+                stage_timings=timings
             )
 
         # Step 3: Estimate head pose
+        t0 = time.perf_counter()
         pose_est = self.pose_estimator.estimate(dominant_target.landmarks)
         pose_label = pose_est.pose.value
+        t_track_pose = t_track + (time.perf_counter() - t0) * 1000.0
 
         # Step 4: 5-point alignment to 112x112 canonical ArcFace geometry
+        t0 = time.perf_counter()
         aligned_face = self.aligner.align(frame, dominant_target.landmarks)
+        t_align = (time.perf_counter() - t0) * 1000.0
 
         # Step 5: Extract 512-D L2-normalized ArcFace embedding
+        t0 = time.perf_counter()
         embedding = self.embedder.extract_embedding(aligned_face)
+        t_embed = (time.perf_counter() - t0) * 1000.0
 
         # SECURITY CONSTRAINT #2: Aligned frame buffer is immediately deleted from memory
         del aligned_face
 
         # Step 6: Biometric template matching (if active profile exists)
         if not self.cached_template_embeddings:
+            t0 = time.perf_counter()
             temporal_res = self.temporal_verifier.update(dominant_target.track_id, False, 0.0)
+            t_temporal = (time.perf_counter() - t0) * 1000.0
+            t0 = time.perf_counter()
             quality_res = self.quality_checker.evaluate(frame, [dominant_detection])
             if not quality_res.passed:
                 liveness_res = self._last_liveness_result or LivenessResult(
@@ -412,6 +463,18 @@ class FaceEngine:
                     eye_score=0.0,
                     details=f"Waiting for a clearer frame: {quality_res.rejection_reason}"
                 )
+                t_liveness = (time.perf_counter() - t0) * 1000.0
+                total_ms = (time.perf_counter() - t_start) * 1000.0
+                timings = {
+                    "detect_ms": round(t_detect, 2),
+                    "track_pose_ms": round(t_track_pose, 2),
+                    "align_ms": round(t_align, 2),
+                    "embed_ms": round(t_embed, 2),
+                    "match_ms": 0.0,
+                    "temporal_ms": round(t_temporal, 2),
+                    "liveness_ms": round(t_liveness, 2),
+                    "total_inference_ms": round(total_ms, 2),
+                }
                 return EngineFrameResult(
                     has_face=True,
                     detection=dominant_detection,
@@ -424,7 +487,8 @@ class FaceEngine:
                     estimated_pose=pose_label,
                     state_label="WAITING_FOR_CLEAR_FRAME",
                     is_authorized_to_unlock=False,
-                    details=f"Waiting for a clearer frame: {quality_res.rejection_reason}"
+                    details=f"Waiting for a clearer frame: {quality_res.rejection_reason}",
+                    stage_timings=timings
                 )
             liveness_res = self.liveness_detector.update(
                 frame=frame,
@@ -433,6 +497,18 @@ class FaceEngine:
                 track_id=dominant_target.track_id
             )
             self._last_liveness_result = liveness_res
+            t_liveness = (time.perf_counter() - t0) * 1000.0
+            total_ms = (time.perf_counter() - t_start) * 1000.0
+            timings = {
+                "detect_ms": round(t_detect, 2),
+                "track_pose_ms": round(t_track_pose, 2),
+                "align_ms": round(t_align, 2),
+                "embed_ms": round(t_embed, 2),
+                "match_ms": 0.0,
+                "temporal_ms": round(t_temporal, 2),
+                "liveness_ms": round(t_liveness, 2),
+                "total_inference_ms": round(total_ms, 2),
+            }
             return EngineFrameResult(
                 has_face=True,
                 detection=dominant_detection,
@@ -445,9 +521,11 @@ class FaceEngine:
                 estimated_pose=pose_label,
                 state_label="FACE_FOUND",
                 is_authorized_to_unlock=False,
-                details="Face detected (No enrolled profile)"
+                details="Face detected (No enrolled profile)",
+                stage_timings=timings
             )
 
+        t0 = time.perf_counter()
         match_result = self.matcher.match(
             live_embedding=embedding,
             enrolled_templates=self.cached_template_embeddings,
@@ -455,20 +533,24 @@ class FaceEngine:
             estimated_pose=pose_label,
             threshold=self.active_profile.matching_threshold if self.active_profile else None
         )
+        t_match = (time.perf_counter() - t0) * 1000.0
         matched_profile = None
         if match_result.is_match and match_result.best_template_idx is not None:
             if hasattr(self, '_template_profile_map') and match_result.best_template_idx < len(self._template_profile_map):
                 matched_profile = self._template_profile_map[match_result.best_template_idx]
 
         # Step 7: Rolling temporal verification confirmation (M-of-N sliding window per-identity)
+        t0 = time.perf_counter()
         temporal_res = self.temporal_verifier.update(
             track_id=dominant_target.track_id,
             is_frame_match=match_result.is_match,
             frame_confidence=match_result.confidence,
             profile_id=matched_profile.profile_id if matched_profile else None
         )
+        t_temporal = (time.perf_counter() - t0) * 1000.0
 
         # Step 8: Quality Gate & Independent Liveness Detection
+        t0 = time.perf_counter()
         confirmed_profile = None
         quality_res = self.quality_checker.evaluate(frame, [dominant_detection])
         if not quality_res.passed:
@@ -588,6 +670,19 @@ class FaceEngine:
                 state_label = "NO_MATCH"
                 details = match_result.details
 
+        t_liveness = (time.perf_counter() - t0) * 1000.0
+        total_ms = (time.perf_counter() - t_start) * 1000.0
+        timings = {
+            "detect_ms": round(t_detect, 2),
+            "track_pose_ms": round(t_track_pose, 2),
+            "align_ms": round(t_align, 2),
+            "embed_ms": round(t_embed, 2),
+            "match_ms": round(t_match, 2),
+            "temporal_ms": round(t_temporal, 2),
+            "liveness_ms": round(t_liveness, 2),
+            "total_inference_ms": round(total_ms, 2),
+        }
+
         # If multiple faces present in frame, append bystander notice
         if len(all_tracks) > 1:
             details += f" ({len(all_tracks)} faces tracked)"
@@ -612,7 +707,8 @@ class FaceEngine:
             is_authorized_to_unlock=is_authorized,
             matched_profile_id=matched_prof_id,
             matched_profile_name=matched_prof_name,
-            details=details
+            details=details,
+            stage_timings=timings
         )
 
     def enroll_from_frame(
