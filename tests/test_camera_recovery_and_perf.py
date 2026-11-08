@@ -27,6 +27,10 @@ from engine.camera.camera_capture import (
     probe_camera_index,
     find_best_camera_index,
     get_config_override_index,
+    clear_camera_cache,
+    get_cached_camera_index,
+    update_camera_cache,
+    is_file_writable_by_non_admins,
 )
 from engine.camera.power_watcher import PowerStateWatcher
 from engine.ipc.pipe_server import PipeServer
@@ -146,18 +150,199 @@ class TestCameraAutoSelection(unittest.TestCase):
         self.assertEqual(best_idx, 2)
         self.assertEqual(len(probe_results), 4)
 
+    def test_is_color_frame_dark_color_returns_unknown(self):
+        # Frame with color difference between channels, but mean luminance < 40.0
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        frame[:, :, 0] = 5   # B
+        frame[:, :, 1] = 15  # G
+        frame[:, :, 2] = 30  # R
+        res = is_color_frame(frame, min_luminance=40.0)
+        self.assertEqual(res.verdict, "unknown")
+        self.assertLess(res.mean_lum, 40.0)
+        # Unpacking into 3 values works for backward compatibility
+        verdict, mean_diff, mean_sat = res
+        self.assertEqual(verdict, "unknown")
+
+    def test_is_color_frame_covered_lens_returns_unknown(self):
+        # Completely black frame / covered camera lens
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        res = is_color_frame(frame, min_luminance=40.0)
+        self.assertEqual(res.verdict, "unknown")
+        self.assertEqual(res.mean_lum, 0.0)
+
+    @patch("cv2.VideoCapture")
+    def test_probe_camera_index_dark_unknown_does_not_reject(self, mock_vc_cls):
+        # Camera opens, but room is dark or lens is covered
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        dark_frame = np.full((100, 100, 3), 10, dtype=np.uint8)
+        mock_cap.read.return_value = (True, dark_frame)
+        mock_vc_cls.return_value = mock_cap
+
+        res = probe_camera_index(0, min_luminance=40.0)
+        # Device must return unknown, NOT rejected_ir
+        self.assertEqual(res["status"], "unknown")
+        self.assertEqual(res["is_color"], "unknown")
+        self.assertIn("Low-light", res["reason"])
+
+    @patch("engine.camera.camera_capture.probe_camera_index")
+    def test_find_best_camera_index_covered_lens_fallback(self, mock_probe):
+        # Device 0 is covered lens/dark (unknown), other devices unavailable
+        clear_camera_cache()
+        def probe_side_effect(idx, **kwargs):
+            if idx == 0:
+                return {
+                    "index": 0,
+                    "status": "unknown",
+                    "reason": "Low-light/covered lens",
+                    "is_color": "unknown",
+                }
+            return {
+                "index": idx,
+                "status": "unavailable",
+                "reason": f"Index {idx} unavailable",
+                "is_color": False,
+            }
+
+        mock_probe.side_effect = probe_side_effect
+        best_idx, reason, probe_results = find_best_camera_index(max_indices=4, force_refresh=True)
+        # Must fall back to first opened device (0), NEVER failing with "No color camera found"
+        self.assertEqual(best_idx, 0)
+        self.assertIn("falling back to first opened camera index 0", reason)
+        self.assertNotIn("No color camera found", reason)
+
+    @patch("engine.camera.camera_capture.probe_camera_index")
+    def test_find_best_camera_index_all_ir_fallback(self, mock_probe):
+        # All devices are IR streams
+        clear_camera_cache()
+        def probe_side_effect(idx, **kwargs):
+            return {
+                "index": idx,
+                "status": "rejected_ir",
+                "reason": f"Index {idx} is IR",
+                "is_color": False,
+            }
+
+        mock_probe.side_effect = probe_side_effect
+        best_idx, reason, probe_results = find_best_camera_index(max_indices=4, force_refresh=True)
+        # Must fall back to first opened device (0) with logged reason
+        self.assertEqual(best_idx, 0)
+        self.assertIn("falling back to first opened camera index 0", reason)
+
     def test_config_override_reading(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg_path = os.path.join(tmpdir, "engine.json")
             with open(cfg_path, "w", encoding="utf-8") as f:
                 json.dump({"camera_index": 3}, f)
 
-            override = get_config_override_index(cfg_path)
+            # When check_dacl=False, reads override
+            override = get_config_override_index(cfg_path, check_dacl=False)
             self.assertEqual(override, 3)
 
-            best, reason, probes = find_best_camera_index(config_path=cfg_path)
+            best, reason, probes = find_best_camera_index(config_path=cfg_path, check_dacl=False)
             self.assertEqual(best, 3)
             self.assertIn("Override from engine.json", reason)
+
+    def test_config_override_insecure_dacl_ignored(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = os.path.join(tmpdir, "engine.json")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump({"camera_index": 3}, f)
+
+            with patch("engine.camera.camera_capture.is_file_writable_by_non_admins", return_value=True):
+                # When file is writable by non-admin users, override must be ignored
+                override = get_config_override_index(cfg_path, check_dacl=True)
+                self.assertIsNone(override)
+
+    def test_config_override_secure_dacl_accepted(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = os.path.join(tmpdir, "engine.json")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump({"camera_index": 2}, f)
+
+            with patch("engine.camera.camera_capture.is_file_writable_by_non_admins", return_value=False):
+                # When file DACL is secure (admin-only), override is accepted
+                override = get_config_override_index(cfg_path, check_dacl=True)
+                self.assertEqual(override, 2)
+
+
+class TestCameraCaching(unittest.TestCase):
+    """Validates module-level camera caching, cache hit latency reduction, and re-probe recovery."""
+
+    def setUp(self):
+        clear_camera_cache()
+
+    def tearDown(self):
+        clear_camera_cache()
+
+    @patch("engine.camera.camera_capture.find_best_camera_index")
+    @patch("cv2.VideoCapture")
+    def test_cache_hit_on_subsequent_unlock(self, mock_vc_cls, mock_find):
+        # Configure VideoCapture mock
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (True, np.full((100, 100, 3), 150, dtype=np.uint8))
+        mock_vc_cls.return_value = mock_cap
+
+        # First session: find_best_camera_index finds camera 1
+        mock_find.return_value = (1, "Selected color camera", [
+            {"index": 1, "status": "color", "is_color": True}
+        ])
+
+        cam1 = CameraCapture(camera_index=None)
+        res1 = cam1.start()
+        self.assertTrue(res1)
+        self.assertEqual(cam1.camera_index, 1)
+        self.assertEqual(get_cached_camera_index(), 1)
+        self.assertEqual(mock_find.call_count, 1)
+        cam1.stop()
+
+        # Second session: start CameraCapture with camera_index=None
+        # Must hit cache and NOT call find_best_camera_index again!
+        mock_find.reset_mock()
+        with self.assertLogs("Peek.Camera", level="INFO") as log_ctx:
+            cam2 = CameraCapture(camera_index=None)
+            res2 = cam2.start()
+            self.assertTrue(res2)
+            self.assertEqual(cam2.camera_index, 1)
+            # find_best_camera_index should NOT be called on cache hit
+            self.assertEqual(mock_find.call_count, 0)
+            # Log must confirm cache hit
+            log_text = "\n".join(log_ctx.output)
+            self.assertIn("cache hit", log_text.lower())
+        cam2.stop()
+
+    @patch("engine.camera.camera_capture.find_best_camera_index")
+    @patch("cv2.VideoCapture")
+    def test_cache_refresh_on_open_failure(self, mock_vc_cls, mock_find):
+        # Pre-seed cache with index 0
+        update_camera_cache(0, [{"index": 0, "status": "color", "is_color": True}])
+        self.assertEqual(get_cached_camera_index(), 0)
+
+        # Mock VideoCapture: index 0 fails to open; index 1 succeeds
+        def vc_side_effect(index, *args, **kwargs):
+            mock_cap = MagicMock()
+            if index == 0:
+                mock_cap.isOpened.return_value = False
+            else:
+                mock_cap.isOpened.return_value = True
+                mock_cap.read.return_value = (True, np.full((100, 100, 3), 150, dtype=np.uint8))
+            return mock_cap
+
+        mock_vc_cls.side_effect = vc_side_effect
+        mock_find.return_value = (1, "Found new camera 1", [
+            {"index": 0, "status": "unavailable", "is_color": False},
+            {"index": 1, "status": "color", "is_color": True}
+        ])
+
+        cam = CameraCapture(camera_index=None)
+        res = cam.start()
+        self.assertTrue(res)
+        # Should have switched to index 1 and refreshed cache
+        self.assertEqual(cam.camera_index, 1)
+        self.assertEqual(get_cached_camera_index(), 1)
+        self.assertEqual(mock_find.call_count, 1)
+        cam.stop()
 
 
 class TestCameraReopenAndBackoff(unittest.TestCase):

@@ -152,8 +152,12 @@ Set-ItemProperty -Path $peekRegKey -Name "InstallPath" -Value $engineExePath -Ty
 Set-ItemProperty -Path $peekRegKey -Name "LogLevel" -Value 1 -Type DWord -Force # 1 = ERROR, 0 = OFF, 2 = INFO, 3 = DEBUG
 Write-Host "      [OK] Configured HKLM:\SOFTWARE\Peek (InstallPath, LogLevel)." -ForegroundColor Green
 
-# Configure secure log directory ACL (SYSTEM/Administrators FullControl, Users ReadAndExecute)
-$LogDir = Join-Path $env:ProgramData "Peek\logs"
+# Configure secure Peek ProgramData and log directory ACL (SYSTEM/Administrators FullControl, Users ReadAndExecute)
+$PeekDataDir = Join-Path $env:ProgramData "Peek"
+if (-not (Test-Path $PeekDataDir)) {
+    New-Item -ItemType Directory -Path $PeekDataDir -Force | Out-Null
+}
+$LogDir = Join-Path $PeekDataDir "logs"
 if (-not (Test-Path $LogDir)) {
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 }
@@ -162,6 +166,28 @@ try {
     $adminSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
     $usersSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinUsersSid, $null)
 
+    # 1. Peek ProgramData folder ACL: inheritance removed, explicit ACEs (SYSTEM FullControl, Admins FullControl, Users ReadAndExecute)
+    $peekDirAcl = New-Object System.Security.AccessControl.DirectorySecurity
+    $peekDirAcl.SetAccessRuleProtection($true, $false)
+    $peekDirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $peekDirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $peekDirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    Set-Acl -Path $PeekDataDir -AclObject $peekDirAcl
+    Write-Host "      [OK] Secured Peek ProgramData directory ACL at $PeekDataDir (SYSTEM/Admin Full, Users Read)." -ForegroundColor Green
+
+    # 2. If engine.json exists, apply the same explicit protected ACL
+    $engineJsonPath = Join-Path $PeekDataDir "engine.json"
+    if (Test-Path $engineJsonPath) {
+        $jsonAcl = New-Object System.Security.AccessControl.FileSecurity
+        $jsonAcl.SetAccessRuleProtection($true, $false)
+        $jsonAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "Allow")))
+        $jsonAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "Allow")))
+        $jsonAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "Allow")))
+        Set-Acl -Path $engineJsonPath -AclObject $jsonAcl
+        Write-Host "      [OK] Secured engine.json ACL at $engineJsonPath (SYSTEM/Admin Full, Users Read)." -ForegroundColor Green
+    }
+
+    # 3. Log directory ACL
     $dirAcl = New-Object System.Security.AccessControl.DirectorySecurity
     $dirAcl.SetAccessRuleProtection($true, $false)
     $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
@@ -169,8 +195,21 @@ try {
     $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")))
     Set-Acl -Path $LogDir -AclObject $dirAcl
     Write-Host "      [OK] Secured log directory ACL at $LogDir (SYSTEM/Admin Full, Users Read)." -ForegroundColor Green
+
+    # 4. File ACL for any existing log files
+    foreach ($ext in @("", ".old", ".1", ".2")) {
+        $p = Join-Path $LogDir ("credential_provider.log" + $ext)
+        if (Test-Path $p) {
+            $fAcl = New-Object System.Security.AccessControl.FileSecurity
+            $fAcl.SetAccessRuleProtection($true, $false)
+            $fAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "Allow")))
+            $fAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "Allow")))
+            $fAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "Allow")))
+            Set-Acl -Path $p -AclObject $fAcl
+        }
+    }
 } catch {
-    Write-Warning "Could not configure log directory ACL: $_"
+    Write-Warning "Could not configure Peek directory or log ACL: $_"
 }
 
 # 6. Configure test-grade logon auto-start

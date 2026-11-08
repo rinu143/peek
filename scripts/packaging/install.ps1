@@ -128,7 +128,11 @@ if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
 
-$LogDir = Join-Path $env:ProgramData "Peek\logs"
+$PeekDataDir = Join-Path $env:ProgramData "Peek"
+if (-not (Test-Path $PeekDataDir)) {
+    New-Item -ItemType Directory -Path $PeekDataDir -Force | Out-Null
+}
+$LogDir = Join-Path $PeekDataDir "logs"
 if (-not (Test-Path $LogDir)) {
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 }
@@ -137,7 +141,28 @@ try {
     $adminSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
     $usersSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinUsersSid, $null)
 
-    # 1. Folder ACL: inheritance removed, explicit ACEs (SYSTEM FullControl, Admins FullControl, Users ReadAndExecute)
+    # 1. Peek ProgramData folder ACL: inheritance removed, explicit ACEs (SYSTEM FullControl, Admins FullControl, Users ReadAndExecute)
+    $peekDirAcl = New-Object System.Security.AccessControl.DirectorySecurity
+    $peekDirAcl.SetAccessRuleProtection($true, $false)
+    $peekDirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $peekDirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $peekDirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    Set-Acl -Path $PeekDataDir -AclObject $peekDirAcl
+    Write-Host "      [OK] Secured Peek ProgramData directory ACL at $PeekDataDir (SYSTEM/Admin Full, Users Read)." -ForegroundColor Green
+
+    # 2. If engine.json exists, apply the same explicit protected ACL
+    $engineJsonPath = Join-Path $PeekDataDir "engine.json"
+    if (Test-Path $engineJsonPath) {
+        $jsonAcl = New-Object System.Security.AccessControl.FileSecurity
+        $jsonAcl.SetAccessRuleProtection($true, $false)
+        $jsonAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "Allow")))
+        $jsonAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "Allow")))
+        $jsonAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "Allow")))
+        Set-Acl -Path $engineJsonPath -AclObject $jsonAcl
+        Write-Host "      [OK] Secured engine.json ACL at $engineJsonPath (SYSTEM/Admin Full, Users Read)." -ForegroundColor Green
+    }
+
+    # 3. Log folder ACL: inheritance removed, explicit ACEs (SYSTEM FullControl, Admins FullControl, Users ReadAndExecute)
     $dirAcl = New-Object System.Security.AccessControl.DirectorySecurity
     $dirAcl.SetAccessRuleProtection($true, $false)
     $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
@@ -145,7 +170,7 @@ try {
     $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")))
     Set-Acl -Path $LogDir -AclObject $dirAcl
 
-    # 2. File ACL: apply the same explicit ACL to the log file(s) if already existing
+    # 4. File ACL: apply the same explicit ACL to the log file(s) if already existing
     foreach ($ext in @("", ".old", ".1", ".2")) {
         $p = Join-Path $LogDir ("credential_provider.log" + $ext)
         if (Test-Path $p) {
@@ -158,7 +183,7 @@ try {
         }
     }
 } catch {
-    Write-Warning "Failed to set explicit ACL on log directory: $_"
+    Write-Warning "Failed to set explicit ACL on Peek ProgramData or log directory: $_"
 }
 Write-Host "      [OK] Log directory secured (SYSTEM/Admin FullControl, Users ReadAndExecute): $LogDir" -ForegroundColor Green
 
