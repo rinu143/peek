@@ -1,0 +1,216 @@
+"""
+Peek Face Engine - Liveness & Anti-Spoofing Evaluator
+Orchestrates multi-cue RGB liveness verification:
+- Motion Parallax & Micro-Movement
+- Visual Texture & Screen Moiré Analysis
+- Eye Dynamics & Blink Signatures
+
+NON-NEGOTIABLE SECURITY CONSTRAINTS:
+Biometric match alone can NEVER unlock. is_live is an independent, mandatory gate.
+Only when is_live is True and face match is verified will an unlock be authorized.
+"""
+
+import numpy as np
+from collections import deque
+from dataclasses import dataclass
+from typing import Optional, Tuple, Deque
+
+from engine.liveness.motion_detector import MotionParallaxDetector, MotionLivenessResult
+from engine.liveness.texture_checker import TextureChecker, TextureLivenessResult
+from engine.liveness.eye_dynamics import EyeDynamicsDetector, EyeDynamicsResult
+from engine.liveness.bezel_detector import BezelDetector, BezelDetectionResult
+
+
+@dataclass
+class LivenessResult:
+    is_live: bool
+    state: str                          # "CHECKING", "LIVE", "SPOOF_DETECTED"
+    fused_score: float                  # 0.0 to 1.0
+    motion_score: float
+    texture_score: float
+    eye_score: float
+    bezel_confidence: float = 0.0
+    blink_detected: bool = False
+    blink_count: int = 0
+    spoof_reason: Optional[str] = None  # "STATIC_PHOTO", "RIGID_PLANAR_MOTION", "LACKS_PARALLAX", "BEZEL_DETECTED", etc.
+    details: str = ""
+
+
+class LivenessDetector:
+    """
+    Unified Liveness and Anti-Spoofing Detector with Veto-Based Fusion.
+    Evaluates multi-frame passive RGB signals across rolling frames to ensure
+    the target is a physical, living human in 3D space:
+    - 3D landmark perspective parallax (nose-tip relative foreshortening)
+    - Macro device bezel and screen-edge rectilinear detection
+    - Visual skin texture and screen moiré frequency spectra
+    - Eye openness gradient dynamics and natural blinks
+    """
+
+    def __init__(
+        self,
+        min_frames_to_confirm: int = 8,
+        liveness_threshold: float = 0.58,
+        w_motion: float = 0.40,
+        w_texture: float = 0.35,
+        w_eye: float = 0.25
+    ):
+        self.min_frames_to_confirm = min_frames_to_confirm
+        self.liveness_threshold = liveness_threshold
+        self.w_motion = w_motion
+        self.w_texture = w_texture
+        self.w_eye = w_eye
+
+        self.motion_detector = MotionParallaxDetector(window_size=12, min_frames_required=6, frozen_std_threshold=0.12)
+        self.texture_checker = TextureChecker(moire_peak_threshold=100.0, specular_ratio_threshold=0.20)
+        self.eye_dynamics = EyeDynamicsDetector(history_size=20)
+        self.bezel_detector = BezelDetector(expansion_margin=2.2)
+
+        self._frame_count: int = 0
+        self._current_track_id: Optional[int] = None
+        self._recent_scores: Deque[float] = deque(maxlen=10)
+        self._consecutive_spoof_frames: int = 0
+        self._active_spoof_reason: Optional[str] = None
+
+    def reset(self):
+        """Resets all internal sub-detector states on track loss or target switch."""
+        self.motion_detector.reset()
+        self.eye_dynamics.reset()
+        self._frame_count = 0
+        self._current_track_id = None
+        self._recent_scores.clear()
+        self._consecutive_spoof_frames = 0
+        self._active_spoof_reason = None
+
+    def update(
+        self,
+        frame: np.ndarray,
+        bbox: Tuple[float, float, float, float],
+        landmarks: np.ndarray,
+        track_id: Optional[int] = None
+    ) -> LivenessResult:
+        """
+        Processes one camera frame for the tracked face and updates liveness decision.
+        """
+        # If target changed, reset state immediately
+        if track_id is not None and track_id != self._current_track_id:
+            self.reset()
+            self._current_track_id = track_id
+
+        self._frame_count += 1
+
+        # 1. Evaluate Motion Parallax & 3D Relative Foreshortening
+        motion_res = self.motion_detector.update(landmarks, bbox, track_id)
+
+        # 2. Evaluate Texture & Screen Moiré
+        texture_res = self.texture_checker.evaluate(frame, bbox)
+
+        # 3. Evaluate Eye Dynamics & Blinks
+        eye_res = self.eye_dynamics.update(frame, landmarks, track_id)
+
+        # 4. Evaluate Physical Screen Bezel / Framing Boundaries
+        bezel_res = self.bezel_detector.evaluate(frame, bbox)
+
+        # Identify hard-spoof triggers
+        spoof_reason = None
+
+        if bezel_res.bezel_detected:
+            spoof_reason = "BEZEL_DETECTED"
+        elif motion_res.lacks_parallax:
+            spoof_reason = motion_res.spoof_reason or "LACKS_PARALLAX"
+        elif motion_res.is_frozen:
+            spoof_reason = motion_res.spoof_reason or "STATIC_PHOTO"
+        elif motion_res.is_rigid_planar:
+            spoof_reason = motion_res.spoof_reason or "RIGID_PLANAR_MOTION"
+        elif texture_res.moire_detected:
+            spoof_reason = texture_res.spoof_reason or "SCREEN_MOIRE"
+        elif texture_res.specular_glare_detected:
+            spoof_reason = texture_res.spoof_reason or "SPECULAR_GLARE"
+
+        # Baseline weighted score for legitimate face smoothing
+        weighted_score = (
+            self.w_motion * motion_res.score +
+            self.w_texture * texture_res.score +
+            self.w_eye * eye_res.dynamics_score
+        )
+
+        # VETO-BASED FUSION:
+        # If any hard spoof indicator fires, cap this frame's score well below
+        # threshold (< 0.15) regardless of other channels' scores.
+        if spoof_reason is not None:
+            frame_score = min(0.12, weighted_score * 0.15)
+            self._consecutive_spoof_frames += 1
+            self._active_spoof_reason = spoof_reason
+        else:
+            frame_score = weighted_score
+            self._consecutive_spoof_frames = max(0, self._consecutive_spoof_frames - 1)
+
+        frame_score = float(np.clip(frame_score, 0.0, 1.0))
+        self._recent_scores.append(frame_score)
+        smoothed_score = float(np.mean(self._recent_scores))
+
+        # Escalation logic:
+        # SECURITY THRESHOLD: all hard-spoof indicators, including high-confidence
+        # bezel detections, require 2 consecutive frames before SPOOF_DETECTED.
+        # The previous 1-frame instant veto (is_high_confidence_bezel and
+        # bezel_res.confidence >= 0.85) was removed. A genuine device bezel is
+        # persistent across frames; a single-frame short-circuit amplified
+        # false positives from periodic background textures without improving
+        # true-positive screen-replay rejection.
+        is_spoof_confirmed = self._consecutive_spoof_frames >= 2
+
+        if is_spoof_confirmed:
+            return LivenessResult(
+                is_live=False,
+                state="SPOOF_DETECTED",
+                fused_score=0.08,
+                motion_score=motion_res.score,
+                texture_score=texture_res.score,
+                eye_score=eye_res.dynamics_score,
+                bezel_confidence=bezel_res.confidence,
+                blink_detected=eye_res.blink_detected,
+                blink_count=eye_res.blink_count,
+                spoof_reason=self._active_spoof_reason,
+                details=f"Spoof detected: {self._active_spoof_reason} (bezel={bezel_res.confidence:.2f}, mot={motion_res.score:.2f})"
+            )
+
+        # Observation ramp-up phase
+        if self._frame_count < self.min_frames_to_confirm:
+            pct = int((self._frame_count / float(self.min_frames_to_confirm)) * 100)
+            return LivenessResult(
+                is_live=False,
+                state="CHECKING",
+                fused_score=smoothed_score,
+                motion_score=motion_res.score,
+                texture_score=texture_res.score,
+                eye_score=eye_res.dynamics_score,
+                bezel_confidence=bezel_res.confidence,
+                blink_detected=eye_res.blink_detected,
+                blink_count=eye_res.blink_count,
+                details=f"Evaluating liveness ({pct}%)..."
+            )
+
+        # After ramp-up: verify smoothed score against threshold
+        is_live = smoothed_score >= self.liveness_threshold
+        state = "LIVE" if is_live else "CHECKING"
+
+        # If after 18+ frames score remains persistently low (< 0.35), flag spoof
+        if self._frame_count >= 18 and smoothed_score < 0.35:
+            state = "SPOOF_DETECTED"
+            is_live = False
+            spoof_reason = "UNNATURAL_PASSIVE_CUES"
+
+        details = f"Liveness: {state} (score={smoothed_score:.2f}, mot={motion_res.score:.2f}, tex={texture_res.score:.2f}, eye={eye_res.dynamics_score:.2f})"
+
+        return LivenessResult(
+            is_live=is_live,
+            state=state,
+            fused_score=smoothed_score,
+            motion_score=motion_res.score,
+            texture_score=texture_res.score,
+            eye_score=eye_res.dynamics_score,
+            blink_detected=eye_res.blink_detected,
+            blink_count=eye_res.blink_count,
+            spoof_reason=spoof_reason,
+            details=details
+        )

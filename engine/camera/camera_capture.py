@@ -28,6 +28,9 @@ class CameraCapture:
         Attempts to start the camera using MSMF, falling back to default backend.
         Returns True if successful, False if unavailable.
         """
+        if self.is_opened and self.cap is not None and self.cap.isOpened():
+            return True
+
         logger.info(f"Opening camera index {self.camera_index} via Media Foundation (MSMF)...")
         try:
             # Prefer Windows Media Foundation backend
