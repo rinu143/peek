@@ -9,7 +9,7 @@ This document specifies the architecture, verification procedures, and manual te
 The Peek engine service previously registered its logon task with elevated `RunLevel Highest`. Under the least-privilege model:
 
 ### Task Configuration
-In both [install.ps1](file:///E:/Downloads/Peek/install.ps1) and [scripts/packaging/install.ps1](file:///E:/Downloads/Peek/scripts/packaging/install.ps1):
+In both [install.ps1](../install.ps1) and [scripts/packaging/install.ps1](../scripts/packaging/install.ps1):
 - **Principal RunLevel**: Configured to `-RunLevel Limited` (and `/RL LIMITED /F` in the `schtasks.exe` fallback).
 - **Task Settings Set**:
   - `ExecutionTimeLimit = [TimeSpan]::Zero` (no 72-hour execution time limit killing the background service).
@@ -55,8 +55,13 @@ In both [install.ps1](file:///E:/Downloads/Peek/install.ps1) and [scripts/packag
   - If recovery succeeds, session resumes seamlessly.
   - If recovery fails after 3 tries, emits `MSG_ERROR` with `REASON_CAMERA_ERROR` ("Camera feed lost"). The Credential Provider immediately converts this to the PIN/password fallback.
 
+### Camera Selection Caching & Refresh Policy
+- **Latency Optimization**: Caches the proven color camera index in-memory so subsequent unlock attempts start immediately without repeating device probing.
+- **Cache Refresh / Invalidation**: The camera cache is refreshed on engine restart or on repeated read failure (when 3 consecutive frame read failures occur or backoff reopen fails, the cache is invalidated and devices are re-probed).
+- **Handling Unknown / Low-Light Devices**: `find_best_camera_index` never caches a device whose status is only "unknown" (e.g. dark environment or covered lens) as a proven colour camera; a camera is cached only after a successful open and frame read confirms a valid colour stream.
+
 ### Sleep / Wake (Resume from Suspend)
-- [PowerStateWatcher](file:///E:/Downloads/Peek/engine/camera/power_watcher.py) monitors system tick progression. A wall-clock jump exceeding `3.5s` during a `1.0s` sleep indicates system sleep/resume.
+- [PowerStateWatcher](../engine/camera/power_watcher.py) monitors system tick progression. A wall-clock jump exceeding `3.5s` during a `1.0s` sleep indicates system sleep/resume.
 - Flags resume event thread-safely; on the next authentication session, any stale camera handle is closed and re-created fresh.
 
 ### Per-Session Fault Isolation

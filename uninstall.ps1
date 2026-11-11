@@ -19,6 +19,7 @@
 
 [CmdletBinding()]
 param(
+    [switch]$RemoveData,
     [switch]$RemoveUserData,
     [switch]$Force
 )
@@ -166,30 +167,37 @@ Write-Host "[5/5] Enrolled biometric profiles and secrets cleanup..." -Foregroun
 $userLocalPeek = Join-Path $env:LOCALAPPDATA "Peek"
 $programDataPeek = Join-Path $env:ProgramData "Peek"
 
-$cleanData = $RemoveUserData
-if (-not $cleanData -and -not $Force) {
+$cleanUser = $RemoveUserData -or $RemoveData
+if (-not $cleanUser -and -not $Force) {
     try {
         if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
             Write-Host ""
-            $reply = Read-Host "Do you want to delete all enrolled biometric face profiles and linked password secrets? (y/N)"
+            $reply = Read-Host "Do you want to delete enrolled biometric face profiles from this user profile? (y/N)"
             if ($reply -match "^[yY]") {
-                $cleanData = $true
+                $cleanUser = $true
             }
         }
     } catch { }
 }
 
-if ($cleanData) {
+if ($cleanUser) {
     if (Test-Path $userLocalPeek) {
         Remove-Item -Path $userLocalPeek -Recurse -Force
         Write-Host "      [OK] Removed user biometric profiles from $userLocalPeek" -ForegroundColor Green
     }
-    if (Test-Path $programDataPeek) {
-        Remove-Item -Path $programDataPeek -Recurse -Force
-        Write-Host "      [OK] Removed machine entropy from $programDataPeek" -ForegroundColor Green
-    }
 } else {
     Write-Host "      [i] Biometric profiles preserved in $userLocalPeek" -ForegroundColor Gray
+}
+
+# Machine entropy must be left in place unless -RemoveData switch is explicitly used,
+# because deleting it makes existing profiles undecryptable.
+if ($RemoveData) {
+    if (Test-Path $programDataPeek) {
+        Remove-Item -Path $programDataPeek -Recurse -Force
+        Write-Host "      [OK] Removed machine entropy and ProgramData directory from $programDataPeek (-RemoveData specified)" -ForegroundColor Green
+    }
+} else {
+    Write-Host "      [i] Preserving machine entropy in $programDataPeek (use -RemoveData to remove; leaving it keeps profiles decryptable)." -ForegroundColor Gray
 }
 
 Write-Host ""

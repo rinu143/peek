@@ -175,6 +175,24 @@ try {
     Set-Acl -Path $PeekDataDir -AclObject $peekDirAcl
     Write-Host "      [OK] Secured Peek ProgramData directory ACL at $PeekDataDir (SYSTEM/Admin Full, Users Read)." -ForegroundColor Green
 
+    # 1b. Create machine_entropy.bin if it does not exist, and apply the same protected ACL (SYSTEM/Admin FullControl, Users ReadAndExecute)
+    $entropyFilePath = Join-Path $PeekDataDir "machine_entropy.bin"
+    if (-not (Test-Path $entropyFilePath)) {
+        $entropyGuid = [Guid]::NewGuid().ToString()
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($entropyFilePath, $entropyGuid, $utf8NoBom)
+        Write-Host "      [OK] Initialized machine entropy at $entropyFilePath." -ForegroundColor Green
+    } else {
+        Write-Host "      [OK] Preserving existing machine entropy at $entropyFilePath." -ForegroundColor Green
+    }
+    $entropyAcl = New-Object System.Security.AccessControl.FileSecurity
+    $entropyAcl.SetAccessRuleProtection($true, $false)
+    $entropyAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "Allow")))
+    $entropyAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "Allow")))
+    $entropyAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "Allow")))
+    Set-Acl -Path $entropyFilePath -AclObject $entropyAcl
+    Write-Host "      [OK] Secured machine_entropy.bin ACL at $entropyFilePath (SYSTEM/Admin Full, Users Read)." -ForegroundColor Green
+
     # 2. If engine.json exists, apply the same explicit protected ACL
     $engineJsonPath = Join-Path $PeekDataDir "engine.json"
     if (Test-Path $engineJsonPath) {

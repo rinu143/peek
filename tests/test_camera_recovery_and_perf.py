@@ -210,6 +210,68 @@ class TestCameraAutoSelection(unittest.TestCase):
         self.assertEqual(best_idx, 0)
         self.assertIn("falling back to first opened camera index 0", reason)
         self.assertNotIn("No color camera found", reason)
+        # Device whose status is only "unknown" must never be cached as a proven color camera
+        self.assertIsNone(get_cached_camera_index(), "Device with status 'unknown' must never be cached as proven color camera")
+
+    @patch("engine.camera.camera_capture.probe_camera_index")
+    def test_find_best_camera_index_never_caches_unknown_device(self, mock_probe):
+        clear_camera_cache()
+        mock_probe.side_effect = lambda idx, **kwargs: {
+            "index": idx,
+            "status": "unknown",
+            "reason": "Covered lens/low light",
+            "is_color": "unknown",
+        }
+        chosen, reason, probes = find_best_camera_index(max_indices=2, force_refresh=True)
+        self.assertEqual(chosen, 0)
+        self.assertIsNone(get_cached_camera_index(), "find_best_camera_index must never cache an unknown device")
+
+    @patch("engine.camera.camera_capture.find_best_camera_index")
+    @patch("cv2.VideoCapture")
+    def test_camera_capture_does_not_cache_when_warmup_frames_are_dark(self, mock_vc_cls, mock_find):
+        clear_camera_cache()
+        # Mock VideoCapture to return dark frames (unknown color)
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        dark_frame = np.full((100, 100, 3), 10, dtype=np.uint8)
+        mock_cap.read.return_value = (True, dark_frame)
+        mock_vc_cls.return_value = mock_cap
+
+        mock_find.return_value = (0, "Fallback to unknown", [
+            {"index": 0, "status": "unknown", "is_color": "unknown"}
+        ])
+
+        cam = CameraCapture(camera_index=None)
+        res = cam.start()
+        self.assertTrue(res)
+        self.assertIsNone(get_cached_camera_index(), "Must not cache device if warmup frames remain dark/unknown")
+        cam.stop()
+
+    @patch("engine.camera.camera_capture.find_best_camera_index")
+    @patch("cv2.VideoCapture")
+    def test_camera_capture_caches_after_successful_open_and_color_frame_read(self, mock_vc_cls, mock_find):
+        clear_camera_cache()
+        # Mock VideoCapture to return valid color frame during warmup
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        color_frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        color_frame[:, :, 0] = 30
+        color_frame[:, :, 1] = 120
+        color_frame[:, :, 2] = 200
+        mock_cap.read.return_value = (True, color_frame)
+        mock_vc_cls.return_value = mock_cap
+
+        # Probed as unknown originally (e.g. initial probe was in dark room)
+        mock_find.return_value = (0, "Fallback to unknown", [
+            {"index": 0, "status": "unknown", "is_color": "unknown"}
+        ])
+
+        cam = CameraCapture(camera_index=None)
+        res = cam.start()
+        self.assertTrue(res)
+        # Should now be cached because open and frame read proved color
+        self.assertEqual(get_cached_camera_index(), 0)
+        cam.stop()
 
     @patch("engine.camera.camera_capture.probe_camera_index")
     def test_find_best_camera_index_all_ir_fallback(self, mock_probe):

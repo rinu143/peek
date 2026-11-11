@@ -2,7 +2,7 @@
 
 ## Status: Not Yet Measured
 
-This document records the empirical results of evaluating Peek's biometric and passive liveness pipeline using [`scripts/spoof_eval.py`](file:///E:/Downloads/Peek/scripts/spoof_eval.py) against physical presentation attack instruments (PAIs).
+This document records the empirical results of evaluating Peek's biometric and passive liveness pipeline using [`scripts/spoof_eval.py`](../scripts/spoof_eval.py) against physical presentation attack instruments (PAIs).
 
 > [!NOTE]
 > Physical test recordings across real capture conditions (low-light, direct glare, print attacks, screens, and masks) have **not yet been measured**.
@@ -32,7 +32,7 @@ will populate the empirical metrics table below:
 
 ## Recording Protocol & Methodology
 
-Evaluation videos are collected according to the test protocol defined in [`scripts/spoof_eval.py`](file:///E:/Downloads/Peek/scripts/spoof_eval.py):
+Evaluation videos are collected according to the test protocol defined in [`scripts/spoof_eval.py`](../scripts/spoof_eval.py):
 1. **Capture Distances**: Close (30–35 cm), Nominal (45–55 cm), and Far (70–75 cm).
 2. **Lighting Variations**:
    - Indoor Balanced: 300–500 lux.

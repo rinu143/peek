@@ -21,7 +21,7 @@ Peek integrates a multi-cue passive liveness detection pipeline that is **design
 - **Printed Photos (`photo_print`)**: Designed to detect via motion parallax analysis (lack of non-rigid facial deformation), high-frequency texture deficits, and eye micro-motion absence.
 - **Smartphone & Tablet Screens (`photo_phone_screen`, `video_replay_phone`)**: Designed to detect via automated screen bezel detection (identifying high-contrast rectangular device borders), specular glass reflections, and planar depth consistency.
 - **Desktop Monitor Replays (`video_replay_monitor`)**: Designed to detect via screen boundary edges, moiré interference patterns, and unnatural head dynamics.
-- **Attack Resistance Benchmark**: For empirical measurement protocols, test datasets, and current evaluation benchmarks across presentation attack categories, see [docs/spoof_results.md](file:///E:/Downloads/Peek/docs/spoof_results.md) (currently *not yet measured* on physical recorded clips).
+- **Attack Resistance Benchmark**: For empirical measurement protocols, test datasets, and current evaluation benchmarks across presentation attack categories, see [docs/spoof_results.md](docs/spoof_results.md) (currently *not yet measured* on physical recorded clips).
 
 ### 2.3 Multiple Face Identities & Security Implications
 - **Multi-Identity Capacity**: Peek supports enrolling up to 5 distinct authorized face identities per machine (e.g. multiple appearances, glasses on/off, or trusted family members).
@@ -66,7 +66,7 @@ Understanding Peek's limitations is critical for evaluating its deployment in se
     - However, if an administrator installs a virtual camera driver (DirectShow / Media Foundation filter) or points `engine.json` to a virtual camera, synthetic or deepfake video streams could be piped directly into the pipeline.
 
 ### 3.2 LSA Secret Storage & Administrator Access
-- Peek utilizes Windows Local Security Authority (LSA) private secret `L$PeekCred_<SID>` to store encrypted credential serialization data necessary to complete the unlock handshake during `GetSerialization`.
+- Peek utilizes Windows Local Security Authority (LSA) private secret `L$PeekCred_<SID>` to store the user's Windows password necessary to complete the unlock handshake during `GetSerialization`.
 - **Administrative Boundary**: In the Windows security model, any process running with elevated `Administrator` privileges (or as `NT AUTHORITY\SYSTEM`) possesses the rights (`SeSecurityPrivilege`, `SeTcbPrivilege`) to inspect LSA private data and read process memory (e.g. using LSASS dumping tools).
 - **Peek does not defend against a compromised Administrator or SYSTEM account**. An attacker with root/admin access on the local host can extract credentials regardless of the credential provider.
 

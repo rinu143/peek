@@ -594,13 +594,14 @@ namespace PeekSetup.Tests
             Directory.CreateDirectory(tempDir);
             try
             {
+                byte[] testEntropy = Encoding.UTF8.GetBytes("test-entropy-value-12345");
                 string profileId = "test_profile_id";
                 string filePath = Path.Combine(tempDir, $"{profileId}.peek");
                 string originalJson = "{\"profile_id\":\"test_profile_id\",\"display_name\":\"OriginalName\",\"enabled\":true,\"created_at\":1000.0}";
-                byte[] encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(originalJson), null, DataProtectionScope.CurrentUser);
+                byte[] encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(originalJson), testEntropy, DataProtectionScope.CurrentUser);
                 await File.WriteAllBytesAsync(filePath, encrypted);
 
-                var pm = new ProfileManager(tempDir);
+                var pm = new ProfileManager(tempDir, entropyProvider: () => testEntropy);
                 var profiles = await pm.GetProfilesAsync();
                 Assert.Single(profiles);
                 Assert.Equal("OriginalName", profiles[0].DisplayName);
@@ -634,10 +635,11 @@ namespace PeekSetup.Tests
             Directory.CreateDirectory(tempDir);
             try
             {
-                var pm = new ProfileManager(tempDir);
+                byte[] testEntropy = Encoding.UTF8.GetBytes("test-entropy-save-12345");
+                var pm = new ProfileManager(tempDir, entropyProvider: () => testEntropy);
                 string profileId = "new_save_id";
                 string json = "{\"profile_id\":\"new_save_id\",\"display_name\":\"Saved User\",\"enabled\":false,\"created_at\":2000.0}";
-                byte[] encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(json), null, DataProtectionScope.CurrentUser);
+                byte[] encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(json), testEntropy, DataProtectionScope.CurrentUser);
 
                 bool saved = await pm.SaveProfileAsync(profileId, encrypted);
                 Assert.True(saved);

@@ -58,15 +58,19 @@ def get_machine_entropy() -> bytes:
     program_data = os.environ.get("ProgramData", r"C:\ProgramData")
     entropy_dir = os.path.join(program_data, "Peek")
     entropy_file = os.path.join(entropy_dir, "machine_entropy.bin")
+    read_err = None
     try:
         if os.path.isfile(entropy_file):
             with open(entropy_file, "rb") as f:
                 content = f.read().strip()
                 if content:
                     return content
+                read_err = "Entropy file exists but is empty"
     except Exception as ex:
+        read_err = str(ex)
         logger.warning("Could not read machine entropy file: %s", ex)
 
+    create_err = None
     try:
         os.makedirs(entropy_dir, exist_ok=True)
         new_guid = str(uuid.uuid4()).encode("utf-8")
@@ -74,19 +78,15 @@ def get_machine_entropy() -> bytes:
             f.write(new_guid)
         return new_guid
     except Exception as ex:
+        create_err = str(ex)
         logger.warning("Could not persist machine entropy file: %s", ex)
 
-    if _IS_WINDOWS:
-        try:
-            import winreg
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as key:
-                val, _ = winreg.QueryValueEx(key, "MachineGuid")
-                if val:
-                    return str(val).strip().encode("utf-8")
-        except Exception as ex:
-            logger.warning("Could not read Windows MachineGuid: %s", ex)
-
-    return str(uuid.getnode()).encode("utf-8")
+    err_msg = (
+        f"Peek machine entropy could not be read or created at '{entropy_file}'. "
+        f"Read error: {read_err}; Create error: {create_err}."
+    )
+    logger.error(err_msg)
+    raise RuntimeError(err_msg)
 
 
 def dpapi_encrypt(data: bytes, description: str = "PeekBiometricData", entropy: Optional[bytes] = None) -> bytes:
@@ -198,11 +198,15 @@ class SecureProfileStore:
 
     def save_profile(self, profile: PeekProfile) -> str:
         """
-        Encrypts and saves a PeekProfile to disk using DPAPI.
+        Encrypts and saves a PeekProfile to disk using DPAPI with machine entropy.
         Returns the file path.
         """
         raw_json = json.dumps(profile.to_dict()).encode("utf-8")
-        encrypted_data = dpapi_encrypt(raw_json, description=f"PeekProfile_{profile.profile_id}")
+        encrypted_data = dpapi_encrypt(
+            raw_json,
+            description=f"PeekProfile_{profile.profile_id}",
+            entropy=get_machine_entropy()
+        )
         
         file_path = self._get_profile_path(profile.profile_id)
         temp_path = os.path.join(self.storage_dir, f".tmp.{profile.profile_id}.{uuid.uuid4().hex}")
@@ -228,7 +232,8 @@ class SecureProfileStore:
 
     def load_profile(self, profile_id: str) -> Optional[PeekProfile]:
         """
-        Loads and decrypts a PeekProfile from disk using DPAPI.
+        Loads and decrypts a PeekProfile from disk using DPAPI with machine entropy.
+        Supports seamless backward-compatible migration for legacy profiles.
         """
         file_path = self._get_profile_path(profile_id)
         if not os.path.exists(file_path):
@@ -237,7 +242,19 @@ class SecureProfileStore:
         try:
             with open(file_path, "rb") as f:
                 encrypted_data = f.read()
-            raw_json = dpapi_decrypt(encrypted_data).decode("utf-8")
+            machine_entropy = get_machine_entropy()
+            try:
+                raw_json = dpapi_decrypt(encrypted_data, entropy=machine_entropy).decode("utf-8")
+            except Exception:
+                # Attempt legacy fallback with NULL entropy for backward compatibility,
+                # then re-encrypt in place with machine-bound entropy.
+                raw_json = dpapi_decrypt(encrypted_data, entropy=None).decode("utf-8")
+                data = json.loads(raw_json)
+                profile = PeekProfile.from_dict(data)
+                self.save_profile(profile)
+                logger.info(f"Migrated legacy profile '{profile.profile_id}' to machine-bound entropy.")
+                return profile
+
             data = json.loads(raw_json)
             return PeekProfile.from_dict(data)
         except Exception as ex:

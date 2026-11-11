@@ -15,17 +15,20 @@ namespace PeekSetup.Services
         private readonly string _profilesDirectory;
         private readonly IAuthorizationStore _authStore;
         private readonly IAccountSidResolver _sidResolver;
+        private readonly Func<byte[]> _entropyProvider;
 
         public ProfileManager(
             string? profilesDir = null,
             IAuthorizationStore? authStore = null,
-            IAccountSidResolver? sidResolver = null)
+            IAccountSidResolver? sidResolver = null,
+            Func<byte[]>? entropyProvider = null)
         {
             _profilesDirectory = profilesDir
                 ?? Environment.GetEnvironmentVariable("PEEK_PROFILES_DIR")
                 ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Peek", "Profiles");
             _authStore = authStore ?? new RegistryAuthorizationStore();
             _sidResolver = sidResolver ?? new AccountSidResolver();
+            _entropyProvider = entropyProvider ?? MachineEntropyProvider.GetMachineEntropy;
         }
 
         private string GetCurrentUserSid()
@@ -80,12 +83,34 @@ namespace PeekSetup.Services
             }
 
             var files = Directory.GetFiles(_profilesDirectory, "*.peek");
+            if (files.Length == 0)
+            {
+                return result;
+            }
+
+            byte[] entropy = _entropyProvider();
             foreach (var file in files)
             {
                 try
                 {
                     byte[] encrypted = await File.ReadAllBytesAsync(file).ConfigureAwait(false);
-                    byte[] decrypted = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
+                    byte[] decrypted;
+                    try
+                    {
+                        decrypted = ProtectedData.Unprotect(encrypted, entropy, DataProtectionScope.CurrentUser);
+                    }
+                    catch
+                    {
+                        // Attempt legacy fallback for backward compatibility
+                        decrypted = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
+                        // Re-encrypt in place with machine-bound entropy
+                        try
+                        {
+                            byte[] reEncrypted = ProtectedData.Protect(decrypted, entropy, DataProtectionScope.CurrentUser);
+                            await AtomicWriteProfileAsync(file, reEncrypted).ConfigureAwait(false);
+                        }
+                        catch { }
+                    }
                     string json = Encoding.UTF8.GetString(decrypted);
 
                     using var doc = JsonDocument.Parse(json);
@@ -201,8 +226,17 @@ namespace PeekSetup.Services
 
             try
             {
+                byte[] entropy = _entropyProvider();
                 byte[] encrypted = await File.ReadAllBytesAsync(path).ConfigureAwait(false);
-                byte[] decrypted = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
+                byte[] decrypted;
+                try
+                {
+                    decrypted = ProtectedData.Unprotect(encrypted, entropy, DataProtectionScope.CurrentUser);
+                }
+                catch
+                {
+                    decrypted = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
+                }
                 string json = Encoding.UTF8.GetString(decrypted);
 
                 using var doc = JsonDocument.Parse(json);
@@ -231,7 +265,7 @@ namespace PeekSetup.Services
                 }
 
                 byte[] updatedJson = stream.ToArray();
-                byte[] updatedEncrypted = ProtectedData.Protect(updatedJson, null, DataProtectionScope.CurrentUser);
+                byte[] updatedEncrypted = ProtectedData.Protect(updatedJson, entropy, DataProtectionScope.CurrentUser);
                 await AtomicWriteProfileAsync(path, updatedEncrypted).ConfigureAwait(false);
                 return true;
             }
@@ -267,8 +301,17 @@ namespace PeekSetup.Services
 
             try
             {
+                byte[] entropy = _entropyProvider();
                 byte[] encrypted = await File.ReadAllBytesAsync(path).ConfigureAwait(false);
-                byte[] decrypted = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
+                byte[] decrypted;
+                try
+                {
+                    decrypted = ProtectedData.Unprotect(encrypted, entropy, DataProtectionScope.CurrentUser);
+                }
+                catch
+                {
+                    decrypted = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
+                }
                 string json = Encoding.UTF8.GetString(decrypted);
 
                 using var doc = JsonDocument.Parse(json);
@@ -297,7 +340,7 @@ namespace PeekSetup.Services
                 }
 
                 byte[] updatedJson = stream.ToArray();
-                byte[] updatedEncrypted = ProtectedData.Protect(updatedJson, null, DataProtectionScope.CurrentUser);
+                byte[] updatedEncrypted = ProtectedData.Protect(updatedJson, entropy, DataProtectionScope.CurrentUser);
                 await AtomicWriteProfileAsync(path, updatedEncrypted).ConfigureAwait(false);
                 return true;
             }

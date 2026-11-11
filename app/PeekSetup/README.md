@@ -16,7 +16,7 @@
   ```
   [DWORD length: 4 bytes little-endian UTF-16LE byte count][UTF-16LE password bytes]
   ```
-  Encrypted via `System.Security.Cryptography.ProtectedData.Protect` (CurrentUser scope, null entropy).
+  Encrypted via `System.Security.Cryptography.ProtectedData.Protect` (CurrentUser scope, machine-bound entropy from `%ProgramData%\Peek\machine_entropy.bin`).
 - **Secure Password Handling**:
   - The password is collected exclusively via WPF `PasswordBox.SecurePassword` (`SecureString`).
   - Validated via P/Invoke `advapi32!LogonUserW` (`LOGON32_LOGON_INTERACTIVE = 2`) against the active account.

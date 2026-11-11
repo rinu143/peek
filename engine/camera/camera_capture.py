@@ -360,6 +360,8 @@ def find_best_camera_index(
 
     if chosen_index is not None:
         logger.info(f"Selected camera index {chosen_index} (first valid color camera).")
+        # Cache proven color camera after successful open and frame read during probe
+        update_camera_cache(chosen_index, probe_results)
         return chosen_index, "Success", probe_results
 
     # If every device is rejected or unknown, fall back to cached index,
@@ -447,10 +449,17 @@ class CameraCapture:
 
             # Auto-exposure / sensor stabilization warm-up: discard initial frames
             warmed_frames = 0
+            self._last_warmed_color = False
             for _ in range(self.warm_up_frames):
-                ret, _ = self.cap.read()
-                if ret:
+                ret, frame = self.cap.read()
+                if ret and frame is not None:
                     warmed_frames += 1
+                    try:
+                        c_check = is_color_frame(frame, min_luminance=DEFAULT_MIN_LUMINANCE)
+                        if c_check.verdict is True:
+                            self._last_warmed_color = True
+                    except Exception:
+                        pass
 
             self.is_opened = True
             self.error_message = None
@@ -500,7 +509,26 @@ class CameraCapture:
 
         # Attempt opening selected camera_index
         if self._open_and_warmup(self.camera_index):
-            update_camera_cache(self.camera_index, self.probe_results)
+            # Only cache as a proven color camera after successful open and frame read.
+            # Never cache a device whose status is only "unknown".
+            is_proven_color = any(
+                p.get("index") == self.camera_index and p.get("status") == "color"
+                for p in self.probe_results
+            )
+            if not is_proven_color and getattr(self, "_last_warmed_color", False):
+                is_proven_color = True
+                for p in self.probe_results:
+                    if p.get("index") == self.camera_index:
+                        p["status"] = "color"
+                        p["is_color"] = True
+                        p["reason"] = "Accepted color stream after open and frame read"
+
+            if is_proven_color:
+                update_camera_cache(self.camera_index, self.probe_results)
+            else:
+                logger.info(
+                    f"Camera index {self.camera_index} opened but status is only 'unknown' or unverified color; skipping cache."
+                )
             return True
 
         # If opening or reading the cached index failed, re-probe once and refresh cache!
@@ -517,7 +545,20 @@ class CameraCapture:
             if chosen_idx is not None and chosen_idx != failed_idx:
                 self.camera_index = chosen_idx
                 if self._open_and_warmup(self.camera_index):
-                    update_camera_cache(self.camera_index, self.probe_results)
+                    is_proven_color = any(
+                        p.get("index") == self.camera_index and p.get("status") == "color"
+                        for p in self.probe_results
+                    )
+                    if not is_proven_color and getattr(self, "_last_warmed_color", False):
+                        is_proven_color = True
+                        for p in self.probe_results:
+                            if p.get("index") == self.camera_index:
+                                p["status"] = "color"
+                                p["is_color"] = True
+                                p["reason"] = "Accepted color stream after open and frame read"
+
+                    if is_proven_color:
+                        update_camera_cache(self.camera_index, self.probe_results)
                     return True
 
         return False

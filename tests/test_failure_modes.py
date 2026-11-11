@@ -90,7 +90,10 @@ class TestFailureModes(unittest.TestCase):
         self.server.stop()
 
         # Client attempt to read must fail/unblock in < 2 seconds
+        # Drain any previously buffered in-flight messages until EOF
         msg = client.read_message(timeout_seconds=2.0)
+        while msg is not None:
+            msg = client.read_message(timeout_seconds=0.5)
         elapsed = time.perf_counter() - kill_start
         client.close()
 
