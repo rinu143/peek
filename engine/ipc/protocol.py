@@ -215,9 +215,21 @@ def make_ping() -> Dict[str, Any]:
 
 # --- Helper Constructors for Server Messages ---
 
-def make_engine_ready(message: str = "Engine ready for authentication", nonce: Optional[str] = None) -> Dict[str, Any]:
+def make_engine_ready(
+    message: str = "Engine ready for authentication",
+    nonce: Optional[str] = None,
+    engine_version: Optional[str] = None,
+) -> Dict[str, Any]:
+    if engine_version is None:
+        try:
+            from engine._version import __version__
+            engine_version = __version__
+        except Exception:
+            engine_version = "0.2.0-beta.1"
+
     msg = {
         "protocol_version": PROTOCOL_VERSION,
+        "engine_version": str(engine_version),
         "type": MSG_ENGINE_READY,
         "message": message,
         "timestamp": time.time(),

@@ -31,8 +31,7 @@
         <!-- ============================================================== -->
         <!-- ROW 0: MINIMAL SYSTEM HEADER & PAGINATION DOTS (ONBOARDING ONLY) -->
         <!-- ============================================================== -->
-        <Grid Grid.Row="0" Margin="0,0,0,16"
-              Visibility="{Binding ShowStepIndicator, Converter={StaticResource BoolToVis}}">
+        <Grid Grid.Row="0" Margin="0,0,0,16">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
@@ -43,10 +42,20 @@
                 <Image Source="{DynamicResource AppLogoSource}" Width="20" Height="20" VerticalAlignment="Center" Margin="0,0,8,0"
                        RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" />
                 <TextBlock Text="Peek" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding AppVersionDisplay}" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" VerticalAlignment="Center" Margin="8,1,4,0" />
+                <Button Style="{StaticResource AboutButtonStyle}" Command="{Binding OpenAboutDialogCommand}" Content="About" VerticalAlignment="Center" Margin="4,0,0,0" ToolTip="About Peek" />
+                <Button Style="{StaticResource AboutButtonStyle}" Command="{Binding OpenUpdatesDialogCommand}" VerticalAlignment="Center" Margin="4,0,0,0" ToolTip="Check for Updates">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Updates" VerticalAlignment="Center" />
+                        <Ellipse Width="6" Height="6" Fill="#FF453A" Margin="5,0,0,0" VerticalAlignment="Center"
+                                 Visibility="{Binding HasUpdateNotificationBadge, Converter={StaticResource BoolToVis}}" />
+                    </StackPanel>
+                </Button>
             </StackPanel>
 
             <!-- Apple-Style Step Indicator (Interactive Dynamic Pills) -->
-            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"
+                        Visibility="{Binding ShowStepIndicator, Converter={StaticResource BoolToVis}}">
                 <!-- Step 1: Welcome -->
                 <Rectangle RadiusX="3.5" RadiusY="3.5" Margin="0,0,6,0">
                     <Rectangle.Style>
@@ -1182,6 +1191,204 @@
                         <Button Style="{StaticResource DialogDangerButtonStyle}"
                                 Command="{Binding ConfirmUnlinkPasswordCommand}"
                                 Content="Remove Password" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- 5. MODAL: ABOUT PEEK -->
+        <Grid Grid.Row="0" Grid.RowSpan="3" Margin="-36,-20,-36,-20"
+              Visibility="{Binding IsAboutDialogOpen, Converter={StaticResource BoolToVis}}"
+              Background="#CC000000" Panel.ZIndex="100">
+            <Border Background="{DynamicResource SurfaceDarkBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1.5" CornerRadius="20" Padding="28,24" MaxWidth="460"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
+                        <Image Source="{DynamicResource AppLogoSource}" Width="26" Height="26" VerticalAlignment="Center" Margin="0,0,10,0"
+                               RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" />
+                        <TextBlock Text="About Peek" FontSize="18" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding AppVersionFullText}" FontSize="14" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,0,10" />
+                    <TextBlock Text="Biometric facial authentication for Windows logon and workstation unlock."
+                               FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextWrapping="Wrap" LineHeight="18" Margin="0,0,0,12" />
+                    <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1" CornerRadius="12" Padding="14,12" Margin="0,0,0,20">
+                        <StackPanel>
+                            <TextBlock Text="SECURITY NOTICE" FontSize="11" FontWeight="Bold" Foreground="{DynamicResource WarningBrush}" Margin="0,0,0,4" />
+                            <TextBlock Text="• Uses standard RGB webcam only (not equivalent to Windows Hello depth/IR sensors).&#x0a;• Windows password stored in local LSA secret readable by administrators.&#x0a;• Windows sign-in (PIN / Password) always remains available as fallback."
+                                       FontSize="11" Foreground="{DynamicResource TextMutedBrush}" TextWrapping="Wrap" LineHeight="16" />
+                        </StackPanel>
+                    </Border>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Style="{StaticResource DialogPrimaryButtonStyle}"
+                                Command="{Binding CloseAboutDialogCommand}"
+                                Content="Close" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- 6. MODAL: UPDATES PANEL -->
+        <Grid Grid.Row="0" Grid.RowSpan="3" Margin="-36,-20,-36,-20"
+              Visibility="{Binding IsUpdatesDialogOpen, Converter={StaticResource BoolToVis}}"
+              Background="#CC000000" Panel.ZIndex="101">
+            <Border Background="{DynamicResource SurfaceDarkBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1.5" CornerRadius="20" Padding="28,24" MaxWidth="500"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <!-- Header -->
+                    <Grid Margin="0,0,0,16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Image Source="{DynamicResource AppLogoSource}" Width="24" Height="24" VerticalAlignment="Center" Margin="0,0,10,0"
+                                   RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" />
+                            <TextBlock Text="Software Updates" FontSize="18" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Style="{StaticResource AboutButtonStyle}" Command="{Binding CloseUpdatesDialogCommand}" Content="✕" ToolTip="Close" />
+                    </Grid>
+
+                    <!-- Current Version & Channel Card -->
+                    <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1" CornerRadius="12" Padding="14,12" Margin="0,0,0,12">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="CURRENT VERSION" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,2" />
+                                <TextBlock Text="{Binding UpdateCurrentVersion}" FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <TextBlock Text="{Binding UpdatePolicyManagedNotice}" FontSize="10" FontStyle="Italic" Foreground="{DynamicResource TextMutedBrush}"
+                                           Visibility="{Binding IsPolicyManaged, Converter={StaticResource BoolToVis}}" Margin="0,4,0,0" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="Channel:" FontSize="12" Foreground="{DynamicResource TextMutedBrush}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                <Border Background="{DynamicResource SurfaceDarkBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                                        BorderThickness="1" CornerRadius="6" Padding="6,2">
+                                    <TextBlock Text="{Binding UpdateChannel}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <!-- Auto-Check & Frequency Card -->
+                    <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1" CornerRadius="12" Padding="14,12" Margin="0,0,0,12">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="Automatically check for updates" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                    <TextBlock Text="Checks at logon and every 12 hours" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                </StackPanel>
+                                <CheckBox Grid.Column="1" IsChecked="{Binding UpdateAutoCheckEnabled, Mode=TwoWay}"
+                                          Command="{Binding ToggleAutoCheckCommand}"
+                                          IsEnabled="{Binding IsAutoCheckToggleEnabled}"
+                                          VerticalAlignment="Center" />
+                            </Grid>
+                            <Separator Background="{DynamicResource CardBorderBrush}" Margin="0,4,0,8" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="Last checked: " FontSize="11" Foreground="{DynamicResource TextMutedBrush}" />
+                                    <TextBlock Text="{Binding UpdateLastCheckedText}" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Style="{StaticResource DialogSecondaryButtonStyle}"
+                                        Command="{Binding CheckUpdatesNowCommand}"
+                                        IsEnabled="{Binding IsCheckingForUpdates, Converter={StaticResource InverseBoolConverter}}"
+                                        Padding="10,4" FontSize="11" Content="Check Now" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Update Available Card -->
+                    <Border Visibility="{Binding IsUpdateAvailable, Converter={StaticResource BoolToVis}}"
+                            Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource AccentBrush}"
+                            BorderThickness="1.5" CornerRadius="12" Padding="16,14" Margin="0,0,0,12">
+                        <StackPanel>
+                            <!-- Critical Banner if applicable -->
+                            <Border Visibility="{Binding IsCriticalUpdate, Converter={StaticResource BoolToVis}}"
+                                    Background="#33FF453A" BorderBrush="#FF453A" BorderThickness="1"
+                                    CornerRadius="6" Padding="8,4" Margin="0,0,0,10">
+                                <TextBlock Text="⚠️ CRITICAL SECURITY UPDATE" FontSize="11" FontWeight="Bold" Foreground="#FF453A" />
+                            </Border>
+
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="NEW VERSION AVAILABLE" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}" Margin="0,0,0,2" />
+                                    <TextBlock Text="{Binding UpdateStatusMessage}" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource TextPrimaryBrush}" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Style="{StaticResource AboutButtonStyle}"
+                                        Command="{Binding OpenReleaseNotesCommand}"
+                                        Content="Release Notes ↗" FontSize="11" VerticalAlignment="Center" />
+                            </Grid>
+
+                            <!-- Progress Bar (while downloading) -->
+                            <StackPanel Visibility="{Binding IsDownloadingUpdate, Converter={StaticResource BoolToVis}}" Margin="0,8,0,8">
+                                <ProgressBar Value="{Binding DownloadProgressPercentage}" Minimum="0" Maximum="100" Height="6" />
+                                <TextBlock Text="{Binding DownloadProgressText}" FontSize="11" Foreground="{DynamicResource TextMutedBrush}" Margin="0,4,0,0" HorizontalAlignment="Right" />
+                            </StackPanel>
+
+                            <!-- Actions Row -->
+                            <Grid Margin="0,6,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button Style="{StaticResource AboutButtonStyle}" Command="{Binding SnoozeUpdateCommand}" Content="Snooze" FontSize="11" Margin="0,0,8,0" ToolTip="Snooze for 7 days" />
+                                    <Button Style="{StaticResource AboutButtonStyle}" Command="{Binding SkipVersionCommand}" Content="Skip Version" FontSize="11" ToolTip="Skip this update" />
+                                </StackPanel>
+                                <Button Grid.Column="2" Style="{StaticResource DialogPrimaryButtonStyle}"
+                                        Command="{Binding InstallUpdateCommand}"
+                                        IsEnabled="{Binding IsDownloadingUpdate, Converter={StaticResource InverseBoolConverter}}"
+                                        Content="Install Update" Padding="14,6" FontSize="12" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Up to Date Message (when not update available) -->
+                    <Border Visibility="{Binding IsUpdateAvailable, Converter={StaticResource InverseBoolToVisConverter}}"
+                            Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1" CornerRadius="12" Padding="14,12" Margin="0,0,0,12">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="✓" FontSize="14" FontWeight="Bold" Foreground="#32D74B" Margin="0,0,8,0" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding UpdateStatusMessage}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Error Alert Card -->
+                    <Border Visibility="{Binding HasUpdateError, Converter={StaticResource BoolToVis}}"
+                            Background="#33FF453A" BorderBrush="#FF453A" BorderThickness="1"
+                            CornerRadius="10" Padding="12,10" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="Update Error" FontSize="11" FontWeight="Bold" Foreground="#FF453A" Margin="0,0,0,2" />
+                            <TextBlock Text="{Binding UpdateErrorMessage}" FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" LineHeight="16" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Dialog Footer -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,6,0,0">
+                        <Button Style="{StaticResource DialogPrimaryButtonStyle}" Command="{Binding CloseUpdatesDialogCommand}" Content="Done" />
                     </StackPanel>
                 </StackPanel>
             </Border>

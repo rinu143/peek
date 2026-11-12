@@ -1,5 +1,6 @@
 // Peek Face Engine - Credential Provider Main Class Implementation
 #include "PeekProvider.h"
+#include "version.h"
 #include <sddl.h>
 
 static const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR s_rgcpfd[PFI_COUNT] =
@@ -71,6 +72,12 @@ PeekProvider::PeekProvider()
     , m_pCredential(nullptr)
     , m_pUserArray(nullptr)
 {
+    static bool s_versionLogged = false;
+    if (!s_versionLogged)
+    {
+        s_versionLogged = true;
+        Logger::LogInfo(L"Peek Credential Provider v" PEEK_VERSION_WIDE L" initialized");
+    }
     DllAddRef();
     LogFieldTableOnce();
 }

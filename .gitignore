@@ -57,6 +57,8 @@ x86/
 [Oo]bj/
 Debug/
 Release/
+!scripts/release/
+!scripts/release/**
 *.obj
 *.ilk
 *.pdb

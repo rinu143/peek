@@ -32,6 +32,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from engine._version import __version__
 from engine.pipeline.face_engine import FaceEngine
 from storage.template_store import SecureProfileStore
 from engine.ipc.pipe_server import PipeServer, DEFAULT_PIPE_NAME, DEFAULT_SDDL
@@ -90,6 +91,12 @@ def setup_logging(debug: bool = False):
 def main():
     parser = argparse.ArgumentParser(description="Peek Face Engine - Windows Named Pipe Service")
     parser.add_argument(
+        "--version",
+        action="version",
+        version=f"PeekEngine {__version__}",
+        help="Show engine version and exit"
+    )
+    parser.add_argument(
         "--pipe-name",
         type=str,
         default=DEFAULT_PIPE_NAME,
@@ -123,8 +130,9 @@ def main():
     setup_logging(args.debug)
 
     print("=" * 65)
-    print("   PEEK — FACE RECOGNITION ENGINE SERVICE (Named Pipe IPC)")
+    print(f"   PEEK — FACE RECOGNITION ENGINE SERVICE v{__version__} (Named Pipe IPC)")
     print("=" * 65)
+    logger.info(f"Peek Face Engine v{__version__} starting up...")
     logger.info(f"Initializing FaceEngine and DPAPI SecureProfileStore...")
 
     profile_store = SecureProfileStore()

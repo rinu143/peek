@@ -462,6 +462,7 @@ namespace PeekJson
     {
         std::wstring type;
         std::wstring protocolVersion;
+        std::wstring engineVersion;
         std::wstring nonce;
         std::wstring displayName;
         std::wstring profileId;
@@ -537,6 +538,7 @@ namespace PeekJson
             }
 
             // 4. Extract optional generic fields
+            root.GetString("engine_version", outMsg.engineVersion);
             root.GetString("detail", outMsg.detail);
             root.GetString("display_name", outMsg.displayName);
             root.GetString("profile_id", outMsg.profileId);

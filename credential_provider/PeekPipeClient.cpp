@@ -1,6 +1,7 @@
 // Peek Face Engine - Native C++ Named Pipe Client Implementation
 #include "PeekPipeClient.h"
 #include "JsonParser.h"
+#include "version.h"
 #include <sstream>
 #include <vector>
 #include <sddl.h>
@@ -146,9 +147,28 @@ bool PeekPipeClient::VerifyServerProcess(HANDLE hPipe, const std::wstring& expec
         RegCloseKey(hKey);
     }
 
+    wchar_t szFinalExpected[MAX_PATH * 2] = {};
     if (szExpectedImage[0] == L'\0')
     {
-        ExpandEnvironmentStringsW(L"%ProgramFiles%\\Peek\\PeekEngine.exe", szExpectedImage, ARRAYSIZE(szExpectedImage));
+        ExpandEnvironmentStringsW(L"%ProgramFiles%\\Peek\\engine\\PeekEngine.exe", szFinalExpected, ARRAYSIZE(szFinalExpected));
+    }
+    else
+    {
+        // Support both InstallPath as directory and InstallPath as executable
+        if (wcsstr(szExpectedImage, L"PeekEngine.exe") != nullptr)
+        {
+            wcscpy_s(szFinalExpected, szExpectedImage);
+        }
+        else
+        {
+            wcscpy_s(szFinalExpected, szExpectedImage);
+            size_t len = wcslen(szFinalExpected);
+            if (len > 0 && szFinalExpected[len - 1] != L'\\' && szFinalExpected[len - 1] != L'/')
+            {
+                wcscat_s(szFinalExpected, L"\\");
+            }
+            wcscat_s(szFinalExpected, L"engine\\PeekEngine.exe");
+        }
     }
 
     // Normalize both paths using GetLongPathNameW to avoid short-path / 8.3 mismatch (e.g. PROGRA~1)
@@ -159,9 +179,9 @@ bool PeekPipeClient::VerifyServerProcess(HANDLE hPipe, const std::wstring& expec
     }
 
     wchar_t szExpectedLong[MAX_PATH * 2] = {};
-    if (GetLongPathNameW(szExpectedImage, szExpectedLong, ARRAYSIZE(szExpectedLong)) == 0)
+    if (GetLongPathNameW(szFinalExpected, szExpectedLong, ARRAYSIZE(szExpectedLong)) == 0)
     {
-        wcscpy_s(szExpectedLong, szExpectedImage);
+        wcscpy_s(szExpectedLong, szFinalExpected);
     }
 
     bool bImageMatch = (_wcsicmp(szActualLong, szExpectedLong) == 0);
@@ -184,7 +204,7 @@ bool PeekPipeClient::VerifyServerProcess(HANDLE hPipe, const std::wstring& expec
 
     if (!bImageMatch)
     {
-        Logger::LogError(L"VerifyServerProcess: Server image mismatch. Actual='" + std::wstring(szImagePath) + L"', Expected='" + szExpectedImage + L"'");
+        Logger::LogError(L"VerifyServerProcess: Server image mismatch. Actual='" + std::wstring(szImagePath) + L"', Expected='" + szFinalExpected + L"'");
         CloseHandle(hProc);
         return false;
     }
@@ -452,6 +472,51 @@ bool PeekPipeClient::ReadNextMessage(std::string& outLine)
     }
 }
 
+static bool CheckEngineVersionCompatibility(const std::wstring& engineVer, int expectedMajor, int expectedMinor, std::wstring& outLogReason)
+{
+    if (engineVer.empty())
+    {
+        outLogReason = L"Engine did not provide engine_version in ENGINE_READY";
+        return false;
+    }
+
+    int major = 0;
+    int minor = 0;
+    size_t firstDot = engineVer.find(L'.');
+    if (firstDot == std::wstring::npos)
+    {
+        outLogReason = L"Invalid engine_version format (missing dot): '" + engineVer + L"'";
+        return false;
+    }
+
+    try
+    {
+        major = std::stoi(engineVer.substr(0, firstDot));
+        size_t secondSep = engineVer.find_first_of(L".-+", firstDot + 1);
+        std::wstring minorStr = (secondSep == std::wstring::npos)
+            ? engineVer.substr(firstDot + 1)
+            : engineVer.substr(firstDot + 1, secondSep - (firstDot + 1));
+        minor = std::stoi(minorStr);
+    }
+    catch (...)
+    {
+        outLogReason = L"Exception parsing engine_version: '" + engineVer + L"'";
+        return false;
+    }
+
+    if (major != expectedMajor || minor != expectedMinor)
+    {
+        wchar_t buf[256] = {};
+        swprintf_s(buf, ARRAYSIZE(buf),
+            L"Engine version %d.%d does not match CP version %d.%d (engine_version='%s')",
+            major, minor, expectedMajor, expectedMinor, engineVer.c_str());
+        outLogReason = buf;
+        return false;
+    }
+
+    return true;
+}
+
 void PeekPipeClient::ParseAndDispatchMessage(const std::string& line, PeekAuthResult& result)
 {
     PeekJson::PeekProtocolMessage msg;
@@ -487,6 +552,18 @@ void PeekPipeClient::ParseAndDispatchMessage(const std::string& line, PeekAuthRe
     if (msg.type == L"ENGINE_READY")
     {
         Logger::LogInfo(L"ParseAndDispatchMessage: Received ENGINE_READY");
+
+        std::wstring versionMismatchReason;
+        if (!CheckEngineVersionCompatibility(msg.engineVersion, PEEK_VERSION_MAJOR, PEEK_VERSION_MINOR, versionMismatchReason))
+        {
+            Logger::LogError(L"ParseAndDispatchMessage: Compatibility check failed: " + versionMismatchReason + L". Failing open with restart prompt.");
+            result.state = PeekIPCState::ERROR_STATE;
+            result.reasonCode = L"VERSION_MISMATCH";
+            result.detail = L"Peek was just updated, restart your PC";
+            if (m_callback) m_callback(result);
+            return;
+        }
+
         result.state = PeekIPCState::ENGINE_READY;
     }
     else if (msg.type == L"CAMERA_STARTING")

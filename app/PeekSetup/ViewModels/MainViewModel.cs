@@ -31,7 +31,7 @@ namespace PeekSetup.ViewModels
         Failed
     }
 
-    public class MainViewModel : INotifyPropertyChanged
+    public partial class MainViewModel : INotifyPropertyChanged
     {
         private readonly IEnrollmentPipeClient _pipeClient;
         private readonly IPasswordLinker _passwordLinker;
@@ -1393,6 +1393,25 @@ namespace PeekSetup.ViewModels
         public ICommand CloseOfferRevokeCommand { get; }
         public ICommand ConfirmUnlinkPasswordCommand { get; }
         public ICommand CloseOfferUnlinkCommand { get; }
+        public ICommand OpenAboutDialogCommand { get; }
+        public ICommand CloseAboutDialogCommand { get; }
+
+        public string AppVersionDisplay => "v" + App.GetAppVersion();
+        public string AppVersionFullText => "Peek v" + App.GetAppVersion();
+
+        private bool _isAboutDialogOpen;
+        public bool IsAboutDialogOpen
+        {
+            get => _isAboutDialogOpen;
+            set
+            {
+                if (_isAboutDialogOpen != value)
+                {
+                    _isAboutDialogOpen = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
 
         public MainViewModel()
             : this(null, null, null, null, null, null)
@@ -1453,6 +1472,9 @@ namespace PeekSetup.ViewModels
             CloseOfferRevokeCommand = new RelayCommand(CloseOfferRevokeDialog);
             ConfirmUnlinkPasswordCommand = new AsyncRelayCommand(ConfirmUnlinkPasswordAsync);
             CloseOfferUnlinkCommand = new RelayCommand(CloseOfferUnlinkDialog);
+            OpenAboutDialogCommand = new RelayCommand(() => IsAboutDialogOpen = true);
+            CloseAboutDialogCommand = new RelayCommand(() => IsAboutDialogOpen = false);
+            InitializeUpdates();
         }
 
         private void InitializePoses()

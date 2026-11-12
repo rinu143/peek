@@ -66,7 +66,15 @@ namespace PeekSetup.Services
 
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
 
-            // 1. Same directory as PeekSetup (e.g. Program Files or publish folder)
+            // 1. Check <baseDir>\engine\PeekEngine.exe (Standard installed layout)
+            string engineDirExe = Path.Combine(baseDir, "engine", "PeekEngine.exe");
+            if (File.Exists(engineDirExe))
+            {
+                workingDirectory = Path.GetDirectoryName(engineDirExe);
+                return engineDirExe;
+            }
+
+            // 2. Same directory as PeekSetup (e.g. legacy or flat publish folder)
             string localExe = Path.Combine(baseDir, "PeekEngine.exe");
             if (File.Exists(localExe))
             {
@@ -74,7 +82,40 @@ namespace PeekSetup.Services
                 return localExe;
             }
 
-            // 2. Program Files installation directory
+            // 3. Registry HKLM\SOFTWARE\Peek\InstallPath
+            try
+            {
+                using var hklmKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Peek");
+                if (hklmKey != null)
+                {
+                    string? regInstallPath = hklmKey.GetValue("InstallPath") as string;
+                    if (!string.IsNullOrEmpty(regInstallPath))
+                    {
+                        string expanded = Environment.ExpandEnvironmentVariables(regInstallPath);
+                        if (File.Exists(expanded))
+                        {
+                            workingDirectory = Path.GetDirectoryName(expanded);
+                            return expanded;
+                        }
+                        string candidateInDir = Path.Combine(expanded, "engine", "PeekEngine.exe");
+                        if (File.Exists(candidateInDir))
+                        {
+                            workingDirectory = Path.GetDirectoryName(candidateInDir);
+                            return candidateInDir;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            // 4. Program Files installation directory
+            string progFilesEngine = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Peek", "engine", "PeekEngine.exe");
+            if (File.Exists(progFilesEngine))
+            {
+                workingDirectory = Path.GetDirectoryName(progFilesEngine);
+                return progFilesEngine;
+            }
+
             string progFiles = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Peek", "PeekEngine.exe");
             if (File.Exists(progFiles))
             {
@@ -82,9 +123,14 @@ namespace PeekSetup.Services
                 return progFiles;
             }
 
-            // 3. Search relative build / packaging paths from baseDir
+            // 5. Search relative build / packaging paths from baseDir
             string[] relativeExePaths = new[]
             {
+                Path.Combine(baseDir, @"..\..\..\..\dist\PeekEngine\PeekEngine.exe"),
+                Path.Combine(baseDir, @"..\..\..\dist\PeekEngine\PeekEngine.exe"),
+                Path.Combine(baseDir, @"..\..\dist\PeekEngine\PeekEngine.exe"),
+                Path.Combine(baseDir, @"..\dist\PeekEngine\PeekEngine.exe"),
+                Path.Combine(Directory.GetCurrentDirectory(), @"dist\PeekEngine\PeekEngine.exe"),
                 Path.Combine(baseDir, @"..\..\..\..\scripts\packaging\PeekEngine.exe"),
                 Path.Combine(baseDir, @"..\..\..\..\dist\PeekEngine.exe"),
                 Path.Combine(baseDir, @"..\..\..\scripts\packaging\PeekEngine.exe"),

@@ -1051,6 +1051,13 @@ void PeekCredential::OnEngineStateUpdate(const PeekAuthResult& result)
     case PeekIPCState::DISCONNECTED:
     case PeekIPCState::ERROR_STATE:
     default:
+        if (result.reasonCode == L"VERSION_MISMATCH")
+        {
+            Logger::LogError(L"Engine version mismatch encountered: " + result.detail + L". Displaying restart notification and failing open.");
+            m_pipeClient.Cancel();
+            SetStatusText(result.detail.empty() ? L"Peek was just updated, restart your PC" : result.detail.c_str());
+            break;
+        }
         Logger::LogError(L"Engine offline or pipe disconnected: detail='" + result.detail + L"', reason='" + result.reasonCode + L"'");
         SetStatusText(PeekStatusStrings::kFallback);
         break;

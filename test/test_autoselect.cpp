@@ -2273,6 +2273,54 @@ int main()
         }
     }
 
+    // -------------------------------------------------------------
+    // Test 33: Version Compatibility Check on ENGINE_READY
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 33] Testing ENGINE_READY version compatibility and fail-open on mismatch...\n";
+    {
+        PeekPipeClient client;
+        client.TestSetExpectedNonce("0123456789abcdef0123456789abcdef");
+
+        // 1. Mismatch test: Engine version 0.1.0 (CP is 0.2)
+        int mismatchCallbackCount = 0;
+        PeekAuthResult mismatchResult = {};
+        client.TestSetCallback([&](const PeekAuthResult& r) {
+            mismatchCallbackCount++;
+            mismatchResult = r;
+        });
+
+        PeekAuthResult res1 = {};
+        client.TestParseAndDispatchMessage("{\"protocol_version\":\"2.0\",\"engine_version\":\"0.1.0\",\"type\":\"ENGINE_READY\",\"nonce\":\"0123456789abcdef0123456789abcdef\"}", res1);
+
+        bool mismatchOk = (mismatchCallbackCount == 1 &&
+                           mismatchResult.state == PeekIPCState::ERROR_STATE &&
+                           mismatchResult.reasonCode == L"VERSION_MISMATCH" &&
+                           mismatchResult.detail == L"Peek was just updated, restart your PC");
+
+        // 2. Matching version test: Engine version 0.2.0-beta.1
+        int matchCallbackCount = 0;
+        PeekAuthResult matchResult = {};
+        client.TestSetCallback([&](const PeekAuthResult& r) {
+            matchCallbackCount++;
+            matchResult = r;
+        });
+
+        PeekAuthResult res2 = {};
+        client.TestParseAndDispatchMessage("{\"protocol_version\":\"2.0\",\"engine_version\":\"0.2.0-beta.1\",\"type\":\"ENGINE_READY\",\"nonce\":\"0123456789abcdef0123456789abcdef\"}", res2);
+
+        bool matchOk = (res2.state == PeekIPCState::ENGINE_READY);
+
+        if (mismatchOk && matchOk)
+        {
+            std::wcout << L"  PASS: ENGINE_READY version mismatch fails open with restart text; matching version succeeds\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Version compatibility check failed: mismatchOk=" << mismatchOk << L", matchOk=" << matchOk << L"\n";
+            failed++;
+        }
+    }
+
     // Cleanup
     DeleteTempTestDirectory(tempDir);
     SetEnvironmentVariableW(L"PEEK_PROFILES_DIR", NULL);

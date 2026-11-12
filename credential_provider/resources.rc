@@ -1,5 +1,6 @@
 // Microsoft Visual C++ generated resource script.
 #include "resource.h"
+#include "version.h"
 #include <windows.h>
 
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
@@ -9,8 +10,8 @@ IDR_PNG_LOGO             RCDATA  "res\\frame_search_1.png"
 
 // Version Information
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,0,1
- PRODUCTVERSION 1,0,0,1
+ FILEVERSION PEEK_VERSION_CSV
+ PRODUCTVERSION PEEK_VERSION_CSV
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -27,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Peek Biometrics Team"
             VALUE "FileDescription", "Peek Windows Credential Provider DLL"
-            VALUE "FileVersion", "1.0.0.1"
+            VALUE "FileVersion", PEEK_VERSION_STRING
             VALUE "InternalName", "PeekCredentialProvider.dll"
             VALUE "LegalCopyright", "Copyright (C) 2026 Peek Project"
             VALUE "OriginalFilename", "PeekCredentialProvider.dll"
             VALUE "ProductName", "Peek Face Recognition Engine"
-            VALUE "ProductVersion", "1.0.0.1"
+            VALUE "ProductVersion", PEEK_VERSION_STRING
         END
     END
     BLOCK "VarFileInfo"

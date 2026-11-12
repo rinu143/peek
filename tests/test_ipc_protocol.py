@@ -79,6 +79,18 @@ class TestIPCProtocol(unittest.TestCase):
             self.assertIn("type", msg)
             self.assertIsInstance(msg["type"], str)
 
+    def test_engine_ready_compatibility_fields(self):
+        """Validates that make_engine_ready includes engine_version and protocol_version."""
+        from engine._version import __version__
+        msg = make_engine_ready()
+        self.assertIn("protocol_version", msg)
+        self.assertEqual(msg["protocol_version"], PROTOCOL_VERSION)
+        self.assertIn("engine_version", msg)
+        self.assertEqual(msg["engine_version"], __version__)
+
+        custom_msg = make_engine_ready(engine_version="0.9.9")
+        self.assertEqual(custom_msg["engine_version"], "0.9.9")
+
     def test_serialization_round_trip(self):
         """Validates that messages serialize to UTF-8 JSON lines and parse back identically."""
         original = make_face_found(track_id=42, estimated_pose="TILT_UP", detail="Tracking target 42")

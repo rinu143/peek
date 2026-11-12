@@ -1,5 +1,7 @@
 using System;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Windows;
 using PeekSetup.Services;
@@ -11,14 +13,69 @@ namespace PeekSetup
     /// </summary>
     public partial class App : Application
     {
+        [DllImport("kernel32.dll")]
+        private static extern bool AttachConsole(int dwProcessId);
+        private const int ATTACH_PARENT_PROCESS = -1;
+
+        public static string GetAppVersion()
+        {
+            return typeof(App).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                ?? typeof(App).Assembly.GetName().Version?.ToString(3)
+                ?? "0.2.0-beta.1";
+        }
+
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
 
+            string[] args = e.Args;
+
+            // CLI commands should attach to caller's console if executed from terminal
+            if (args.Length > 0)
+            {
+                AttachConsole(ATTACH_PARENT_PROCESS);
+            }
+
+            // Check for --version / -v
+            if (HasArg(args, "--version") || HasArg(args, "-v"))
+            {
+                Console.WriteLine($"PeekSetup {GetAppVersion()}");
+                Environment.Exit(0);
+                return;
+            }
+
+            // Check for --self-test
+            if (HasArg(args, "--self-test"))
+            {
+                var (success, messages) = SetupOperations.RunSelfTest();
+                foreach (var msg in messages)
+                {
+                    Console.WriteLine(msg);
+                }
+                Environment.Exit(success ? 0 : 1);
+                return;
+            }
+
+            // Check for --rollback
+            if (HasArg(args, "--rollback"))
+            {
+                var (success, message) = SetupOperations.RunRollback();
+                Console.WriteLine(message);
+                Environment.Exit(success ? 0 : 1);
+                return;
+            }
+
+            // Check for --uninstall-cleanup
+            if (HasArg(args, "--uninstall-cleanup"))
+            {
+                var (success, message) = SetupOperations.RunUninstallCleanup();
+                Console.WriteLine(message);
+                Environment.Exit(success ? 0 : 1);
+                return;
+            }
+
             // Initialize dynamic theme based on user's Windows system preference (Light / Dark)
             ThemeManager.InitializeTheme();
-
-            string[] args = e.Args;
 
             // Check for --unlink --sid <SID>
             if (HasArg(args, "--unlink"))

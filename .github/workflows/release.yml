@@ -1,0 +1,179 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Draft Release (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install Inno Setup 6
+        run: |
+          choco install innosetup --no-progress
+
+      - name: Cache ONNX Models
+        id: cache-models
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/models
+            engine/models/*.onnx
+          key: onnx-models-${{ hashFiles('engine/models/download_models.py') }}
+          restore-keys: |
+            onnx-models-
+
+      - name: Cache NuGet Packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Install Python Build Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pytest pywin32
+
+      - name: Fetch and Verify Face Models
+        run: |
+          python engine/models/download_models.py
+
+      - name: Run Release Build Pipeline (Unsigned Manifest Candidate)
+        id: build-release
+        shell: pwsh
+        run: |
+          # Extract clean version tag without leading 'v'
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+
+          Write-Host "[*] Building release package for version $version (Tag: $tag)..."
+
+          # CI execution rule: manifest signing key is strictly kept off CI.
+          # -UnsignedManifest instructs the pipeline to produce unsigned candidate manifests for offline signing.
+          powershell -ExecutionPolicy Bypass -File scripts\release\build_release.ps1 -Version $version -UnsignedManifest
+
+      - name: Optional Code Signing via Azure Trusted Signing
+        if: env.AZURE_CLIENT_ID != '' && env.AZURE_TENANT_ID != '' && env.AZURE_CLIENT_SECRET != ''
+        uses: Azure/trusted-signing-action@v0.4.0
+        with:
+          azure-authenticator-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-authenticator-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-authenticator-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_ENDPOINT || 'https://eus.codesigning.azure.net/' }}
+          trusted-signing-account-name: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
+          files: |
+            dist/release/*.exe
+            dist/*.dll
+            dist/*.exe
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      - name: Optional Code Signing via SignPath
+        if: env.SIGNPATH_API_TOKEN != '' && env.SIGNPATH_ORGANIZATION_ID != ''
+        uses: SignPath/github-action-submit-signing-request@v1.1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: 'installer'
+          wait-for-completion: true
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+
+      - name: Recompute SHA256SUMS (if binaries signed)
+        shell: pwsh
+        run: |
+          $sumsFile = "dist\release\SHA256SUMS"
+          $releaseFiles = Get-ChildItem -Path "dist\release" -File | Where-Object { $_.Name -ne "SHA256SUMS" }
+          $lines = @()
+          foreach ($f in $releaseFiles) {
+              $hash = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              $lines += "$hash  $($f.Name)"
+          }
+          [System.IO.File]::WriteAllLines($sumsFile, $lines, (New-Object System.Text.UTF8Encoding($false)))
+          Write-Host "[OK] Updated SHA256SUMS:"
+          Get-Content $sumsFile
+
+      - name: Extract Release Notes from CHANGELOG.md
+        id: extract-notes
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          $changelog = "CHANGELOG.md"
+          $notes = ""
+
+          if (Test-Path $changelog) {
+              $content = Get-Content $changelog -Raw -Encoding utf8
+              # Pattern matches section between "## [<version>]" and next "## ["
+              $pattern = "(?s)## \[$([regex]::Escape($version))\].*?(?=(?:\r?\n## \[)|\Z)"
+              if ($content -match $pattern) {
+                  $notes = $matches[0].Trim()
+              }
+          }
+
+          if (-not $notes) {
+              $notes = "Release $tag - Peek Face Authentication for Windows.`n`nRefer to [CHANGELOG.md](https://github.com/peek/blob/main/CHANGELOG.md) for full changes."
+          }
+
+          # Multiline output for GitHub Actions
+          $eof = [Guid]::NewGuid().ToString()
+          "notes<<$eof`n$notes`n$eof" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload Unsigned Manifest Candidate Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-manifest-candidate-${{ github.ref_name }}
+          path: |
+            dist/release/*candidate*.json
+            dist/release/SHA256SUMS
+          retention-days: 14
+
+      - name: Publish Draft GitHub Release
+        id: create-draft-release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'rc') }}
+          name: Peek ${{ github.ref_name }}
+          body: ${{ steps.extract-notes.outputs.notes }}
+          files: |
+            dist/release/Peek-Setup-*-x64.exe
+            dist/release/SHA256SUMS
+            dist/release/*candidate*.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

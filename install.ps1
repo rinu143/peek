@@ -56,9 +56,9 @@ Write-Host ""
 
 # 2. Resolve source files (supports both extracted zip layout and repo build layout)
 $sourceMap = @{
-    "PeekEngine.exe"             = $null
     "PeekSetup.exe"              = $null
     "PeekCredentialProvider.dll" = $null
+    "PeekUpdate.exe"             = $null
 }
 
 $candidateDirs = @(
@@ -66,12 +66,16 @@ $candidateDirs = @(
     (Join-Path $SourceDir "dist"),
     (Join-Path $SourceDir "build\Release"),
     (Join-Path $SourceDir "app\PeekSetup\bin\Release\net8.0-windows\win-x64\publish"),
+    (Join-Path $SourceDir "app\PeekUpdate\bin\Release\net8.0-windows\win-x64\publish"),
+    (Join-Path $SourceDir "app\PeekUpdate\bin\Release\net8.0\win-x64\publish"),
     (Join-Path $SourceDir "credential_provider\build\Release"),
     (Join-Path $SourceDir "credential_provider\x64\Release"),
     (Join-Path $SourceDir "scripts\packaging"),
     (Join-Path $SourceDir "..\dist"),
     (Join-Path $SourceDir "..\build\Release"),
     (Join-Path $SourceDir "..\app\PeekSetup\bin\Release\net8.0-windows\win-x64\publish"),
+    (Join-Path $SourceDir "..\app\PeekUpdate\bin\Release\net8.0-windows\win-x64\publish"),
+    (Join-Path $SourceDir "..\app\PeekUpdate\bin\Release\net8.0\win-x64\publish"),
     (Join-Path $SourceDir "..\credential_provider\build\Release"),
     (Join-Path $SourceDir "..\credential_provider\x64\Release")
 )
@@ -90,6 +94,27 @@ foreach ($key in @($sourceMap.Keys)) {
     }
 }
 
+# Resolve PeekEngine (either one-DIR directory or single-file exe)
+$engineDirCandidates = @(
+    (Join-Path $SourceDir "engine"),
+    (Join-Path $SourceDir "dist\PeekEngine"),
+    (Join-Path $SourceDir "..\dist\PeekEngine")
+)
+$resolvedEngineDir = $engineDirCandidates | Where-Object { Test-Path (Join-Path $_ "PeekEngine.exe") } | Select-Object -First 1
+
+$engineExeCandidates = @(
+    (Join-Path $SourceDir "PeekEngine.exe"),
+    (Join-Path $SourceDir "dist\PeekEngine.exe"),
+    (Join-Path $SourceDir "..\dist\PeekEngine.exe")
+)
+$resolvedEngineExe = $engineExeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+if (-not $resolvedEngineDir -and -not $resolvedEngineExe) {
+    Write-Host "[!] ERROR: Missing PeekEngine build artifact (checked dist\PeekEngine and PeekEngine.exe)" -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    exit 1
+}
+
 $missing = @($sourceMap.Keys | Where-Object { [string]::IsNullOrEmpty($sourceMap[$_]) })
 if ($missing.Count -gt 0) {
     Write-Host "[!] ERROR: Missing required build artifacts:" -ForegroundColor Red
@@ -98,6 +123,8 @@ if ($missing.Count -gt 0) {
     }
     Write-Host ""
     Read-Host "Press Enter to exit"
+    exit 1
+}
     exit 1
 }
 
@@ -111,12 +138,29 @@ Get-Process -Name "PeekSetup" -ErrorAction SilentlyContinue | ForEach-Object {
     Write-Host "      Stopping existing PeekSetup process (PID: $($_.Id))..."
     Stop-Process -Id $_.Id -Force
 }
+Get-Process -Name "PeekUpdate" -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host "      Stopping existing PeekUpdate process (PID: $($_.Id))..."
+    Stop-Process -Id $_.Id -Force
+}
 Start-Sleep -Milliseconds 500
 
 # 4. Create destination directory and copy files
 Write-Host "[2/5] Copying binaries to $InstallDir..." -ForegroundColor Cyan
 if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+}
+
+# Copy engine files into $InstallDir\engine
+$targetEngineDir = Join-Path $InstallDir "engine"
+if (-not (Test-Path $targetEngineDir)) {
+    New-Item -ItemType Directory -Path $targetEngineDir -Force | Out-Null
+}
+if ($resolvedEngineDir) {
+    Write-Host "      Copying engine files from $resolvedEngineDir..."
+    Copy-Item -Path "$resolvedEngineDir\*" -Destination $targetEngineDir -Recurse -Force
+} elseif ($resolvedEngineExe) {
+    Write-Host "      Copying $resolvedEngineExe to $targetEngineDir..."
+    Copy-Item -Path $resolvedEngineExe -Destination (Join-Path $targetEngineDir "PeekEngine.exe") -Force
 }
 
 foreach ($file in $sourceMap.Keys) {
@@ -126,20 +170,23 @@ foreach ($file in $sourceMap.Keys) {
     Copy-Item -Path $src -Destination $dst -Force
 }
 
-
 # 5. Register Credential Provider DLL
 Write-Host "[3/5] Registering Credential Provider with Windows LogonUI..." -ForegroundColor Cyan
 $dllPath = Join-Path $InstallDir "PeekCredentialProvider.dll"
 $regProcess = Start-Process -FilePath "regsvr32.exe" -ArgumentList "/s `"$dllPath`"" -Wait -PassThru
 if ($regProcess.ExitCode -ne 0) {
-    Write-Warning "regsvr32 returned exit code $($regProcess.ExitCode)"
+    Write-Host "[!] ERROR: Failed to register Peek Credential Provider DLL (regsvr32 returned exit code $($regProcess.ExitCode))." -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    exit 1
 }
 
 $cpRegKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{4F64A0FC-9F09-4C0B-A5E7-537C44919903}"
 if (Test-Path $cpRegKey) {
     Write-Host "      [OK] Credential Provider successfully registered in Windows registry." -ForegroundColor Green
 } else {
-    Write-Host "      [!] WARNING: Credential Provider registry key not detected at $cpRegKey" -ForegroundColor Yellow
+    Write-Host "[!] ERROR: Credential Provider registry key not detected at $cpRegKey" -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    exit 1
 }
 
 # Configure admin-only Peek registry settings
@@ -147,10 +194,29 @@ $peekRegKey = "HKLM:\SOFTWARE\Peek"
 if (-not (Test-Path $peekRegKey)) {
     New-Item -Path $peekRegKey -Force | Out-Null
 }
-$engineExePath = Join-Path $InstallDir "PeekEngine.exe"
+$engineExePath = if (Test-Path (Join-Path $targetEngineDir "PeekEngine.exe")) {
+    Join-Path $targetEngineDir "PeekEngine.exe"
+} else {
+    Join-Path $InstallDir "PeekEngine.exe"
+}
 Set-ItemProperty -Path $peekRegKey -Name "InstallPath" -Value $engineExePath -Type String -Force
 Set-ItemProperty -Path $peekRegKey -Name "LogLevel" -Value 1 -Type DWord -Force # 1 = ERROR, 0 = OFF, 2 = INFO, 3 = DEBUG
-Write-Host "      [OK] Configured HKLM:\SOFTWARE\Peek (InstallPath, LogLevel)." -ForegroundColor Green
+Write-Host "      [OK] Configured HKLM:\SOFTWARE\Peek (InstallPath: $engineExePath, LogLevel: 1)." -ForegroundColor Green
+
+$updatesRegKey = "HKLM:\SOFTWARE\Peek\Updates"
+if (-not (Test-Path $updatesRegKey)) {
+    New-Item -Path $updatesRegKey -Force | Out-Null
+}
+if (-not (Get-ItemProperty -Path $updatesRegKey -Name "AutoCheck" -ErrorAction SilentlyContinue)) {
+    Set-ItemProperty -Path $updatesRegKey -Name "AutoCheck" -Value 1 -Type DWord -Force
+}
+if (-not (Get-ItemProperty -Path $updatesRegKey -Name "Channel" -ErrorAction SilentlyContinue)) {
+    Set-ItemProperty -Path $updatesRegKey -Name "Channel" -Value "stable" -Type String -Force
+}
+if (-not (Get-ItemProperty -Path $updatesRegKey -Name "FeedUrl" -ErrorAction SilentlyContinue)) {
+    Set-ItemProperty -Path $updatesRegKey -Name "FeedUrl" -Value "https://raw.githubusercontent.com/peek/updates/main" -Type String -Force
+}
+Write-Host "      [OK] Configured HKLM:\SOFTWARE\Peek\Updates (AutoCheck, Channel, FeedUrl)." -ForegroundColor Green
 
 # Configure secure Peek ProgramData and log directory ACL (SYSTEM/Administrators FullControl, Users ReadAndExecute)
 $PeekDataDir = Join-Path $env:ProgramData "Peek"
@@ -230,42 +296,28 @@ try {
     Write-Warning "Could not configure Peek directory or log ACL: $_"
 }
 
-# 6. Configure test-grade logon auto-start
-Write-Host "[4/5] Configuring test-grade logon startup task..." -ForegroundColor Cyan
-# -----------------------------------------------------------------------------
-# TEST-GRADE SCHEDULED TASK NOTE:
-# This logon scheduled task is explicitly test-grade packaging to simplify testing.
-# In a real production release:
-#   - PeekEngine would be implemented as a proper native Windows Service
-#     (running under a dedicated service account or SYSTEM),
-#   - Camera acquisition would use session-isolated brokers or Windows Hello drivers,
-#   - Installation and lifecycle management would be handled by an MSI/MSIX package.
-# -----------------------------------------------------------------------------
+# 6. Configure logon auto-start for ANY user
+Write-Host "[4/5] Configuring logon startup task for BUILTIN\Users..." -ForegroundColor Cyan
 $taskName = "PeekEngine"
-$engineExe = Join-Path $InstallDir "PeekEngine.exe"
+$engineExe = $engineExePath
+$engineWorkingDir = Split-Path -Parent $engineExe
 
 $taskCreated = $false
 try {
-    $currentUser = $env:USERNAME
-    if ([string]::IsNullOrWhiteSpace($currentUser)) { $currentUser = [Environment]::UserName }
-    if ([string]::IsNullOrWhiteSpace($currentUser)) {
-        try { $currentUser = (whoami).Split('\')[-1] } catch {}
-    }
-    if ([string]::IsNullOrWhiteSpace($currentUser)) { $currentUser = "SYSTEM" }
-    $logonType = if ($currentUser -eq "SYSTEM") { "ServiceAccount" } else { "Interactive" }
-    $action = New-ScheduledTaskAction -Execute $engineExe -WorkingDirectory $InstallDir
+    $action = New-ScheduledTaskAction -Execute $engineExe -WorkingDirectory $engineWorkingDir
     $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType $logonType -RunLevel Limited
+    $principal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Users" -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -StartWhenAvailable
     $null = Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop
-    Write-Host "      [OK] Scheduled Task '$taskName' created (starts at logon)." -ForegroundColor Green
+    Write-Host "      [OK] Scheduled Task '$taskName' created (starts at logon for BUILTIN\Users)." -ForegroundColor Green
     $taskCreated = $true
 } catch {
+    Write-Warning "PowerShell task creation failed ($($_)). Trying schtasks.exe..."
     $trEscaped = '"' + $engineExe + '"'
-    $cmdArg = "/c schtasks.exe /Create /TN `"$taskName`" /TR `"$trEscaped`" /SC ONLOGON /RL LIMITED /F"
+    $cmdArg = "/c schtasks.exe /Create /TN `"$taskName`" /TR `"$trEscaped`" /SC ONLOGON /RL LIMITED /RU `"BUILTIN\Users`" /F"
     $schtasksProc = Start-Process -FilePath "cmd.exe" -ArgumentList $cmdArg -Wait -NoNewWindow -PassThru
     if ($schtasksProc.ExitCode -eq 0) {
-        Write-Host "      [OK] Scheduled Task '$taskName' created (starts at logon)." -ForegroundColor Green
+        Write-Host "      [OK] Scheduled Task '$taskName' created via schtasks (starts at logon for BUILTIN\Users)." -ForegroundColor Green
         $taskCreated = $true
     }
 }
@@ -303,6 +355,18 @@ $setupShortcut.Save()
 [System.Runtime.InteropServices.Marshal]::ReleaseComObject($setupShortcut) | Out-Null
 [System.Runtime.InteropServices.Marshal]::ReleaseComObject($wsh) | Out-Null
 Write-Host "      [OK] Created Start Menu shortcut for Peek Setup." -ForegroundColor Green
+
+# 6b. Register user-level PeekUpdate scheduled task
+$updateExe = Join-Path $InstallDir "PeekUpdate.exe"
+if (Test-Path $updateExe) {
+    Write-Host "      Registering user-level PeekUpdate scheduled task..." -ForegroundColor Cyan
+    $regProc = Start-Process -FilePath $updateExe -ArgumentList "--register-task" -Wait -PassThru -NoNewWindow
+    if ($regProc.ExitCode -eq 0) {
+        Write-Host "      [OK] Scheduled Task 'PeekUpdate' registered." -ForegroundColor Green
+    } else {
+        Write-Warning "Failed to register PeekUpdate scheduled task (exit code $($regProc.ExitCode))."
+    }
+}
 
 # 7. Start engine service now
 if (-not $NoStartService) {

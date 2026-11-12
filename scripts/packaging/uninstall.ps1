@@ -68,6 +68,10 @@ Get-Process -Name "PeekSetup" -ErrorAction SilentlyContinue | ForEach-Object {
     Write-Host "      Stopping PeekSetup process (PID: $($_.Id))..."
     Stop-Process -Id $_.Id -Force
 }
+Get-Process -Name "PeekUpdate" -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host "      Stopping PeekUpdate process (PID: $($_.Id))..."
+    Stop-Process -Id $_.Id -Force
+}
 Start-Sleep -Milliseconds 500
 
 # 3. Unregister Credential Provider DLL
@@ -84,7 +88,8 @@ if (Test-Path $dllPath) {
 $regKeysToClean = @(
     "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\$cpGuid",
     "HKLM:\SOFTWARE\Classes\CLSID\$cpGuid",
-    "HKLM:\SOFTWARE\Classes\WOW6432Node\CLSID\$cpGuid"
+    "HKLM:\SOFTWARE\Classes\WOW6432Node\CLSID\$cpGuid",
+    "HKLM:\SOFTWARE\Peek"
 )
 
 foreach ($keyPath in $regKeysToClean) {
@@ -104,13 +109,14 @@ if (-not $cpKeyStillExists -and -not $clsidKeyStillExists) {
 }
 
 # 4. Remove scheduled task and startup shortcuts
-Write-Host "[3/5] Removing scheduled task and startup shortcuts..." -ForegroundColor Cyan
-$taskName = "PeekEngine"
-$taskCheck = Start-Process -FilePath "schtasks.exe" -ArgumentList "/Query /TN `"$taskName`"" -Wait -NoNewWindow -PassThru -ErrorAction SilentlyContinue
-if ($taskCheck.ExitCode -eq 0) {
-    $delProc = Start-Process -FilePath "schtasks.exe" -ArgumentList "/Delete /TN `"$taskName`" /F" -Wait -NoNewWindow -PassThru
-    if ($delProc.ExitCode -eq 0) {
-        Write-Host "      [OK] Scheduled Task '$taskName' deleted." -ForegroundColor Green
+Write-Host "[3/5] Removing scheduled tasks and startup shortcuts..." -ForegroundColor Cyan
+foreach ($taskName in @("PeekEngine", "PeekUpdate")) {
+    $taskCheck = Start-Process -FilePath "schtasks.exe" -ArgumentList "/Query /TN `"$taskName`"" -Wait -NoNewWindow -PassThru -ErrorAction SilentlyContinue
+    if ($taskCheck.ExitCode -eq 0) {
+        $delProc = Start-Process -FilePath "schtasks.exe" -ArgumentList "/Delete /TN `"$taskName`" /F" -Wait -NoNewWindow -PassThru
+        if ($delProc.ExitCode -eq 0) {
+            Write-Host "      [OK] Scheduled Task '$taskName' deleted." -ForegroundColor Green
+        }
     }
 }
 
@@ -121,33 +127,39 @@ if (Test-Path $startupShortcut) {
     Write-Host "      [OK] Removed startup shortcut: $startupShortcut" -ForegroundColor Green
 }
 
-# 5. Remove LSA secrets, Start Menu folder and installed files
+# 5. User profile data cleanup prompt
+$cleanUser = $RemoveUserData -or $RemoveData
+if (-not $cleanUser -and -not $Force) {
+    try {
+        if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+            Write-Host ""
+            $reply = Read-Host "Also remove face data and saved passwords? (y/N)"
+            if ($reply -match "^[yY]") {
+                $cleanUser = $true
+            }
+        }
+    } catch { }
+}
+
+# 6. Remove LSA secrets, Start Menu folder and installed files
 Write-Host "[4/5] Removing LSA secrets, installed binaries and shortcuts..." -ForegroundColor Cyan
 
-# Unlink LSA secrets for each local user
-try {
-    $peekSetupCandidates = @(
-        (Join-Path $InstallDir "PeekSetup.exe"),
-        (Join-Path $PSScriptRoot "PeekSetup.exe"),
-        (Join-Path $PSScriptRoot "..\..\app\PeekSetup\bin\Release\net8.0-windows\win-x64\publish\PeekSetup.exe"),
-        (Join-Path $PSScriptRoot "..\..\app\PeekSetup\bin\Debug\net8.0-windows\PeekSetup.exe")
-    )
-    $peekSetupExe = $peekSetupCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+$peekSetupCandidates = @(
+    (Join-Path $InstallDir "PeekSetup.exe"),
+    (Join-Path $PSScriptRoot "PeekSetup.exe"),
+    (Join-Path $PSScriptRoot "app\PeekSetup\bin\Release\net8.0-windows\win-x64\publish\PeekSetup.exe"),
+    (Join-Path $PSScriptRoot "app\PeekSetup\bin\Debug\net8.0-windows\PeekSetup.exe")
+)
+$peekSetupExe = $peekSetupCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-    if ($peekSetupExe) {
-        $localUsers = Get-LocalUser -ErrorAction SilentlyContinue
-        if ($localUsers) {
-            foreach ($u in $localUsers) {
-                if ($u.SID) {
-                    $sidStr = $u.SID.Value
-                    Start-Process -FilePath $peekSetupExe -ArgumentList "--unlink --sid `"$sidStr`"" -Wait -NoNewWindow -ErrorAction SilentlyContinue
-                }
-            }
-            Write-Host "      [OK] Cleaned up LSA secrets for local users." -ForegroundColor Green
-        }
+if ($peekSetupExe) {
+    if ($cleanUser) {
+        Write-Host "      Running full uninstall cleanup (LSA secrets, identities, face profiles, entropy)..."
+        Start-Process -FilePath $peekSetupExe -ArgumentList "--uninstall-cleanup" -Wait -NoNewWindow -ErrorAction SilentlyContinue
+    } else {
+        # If preserving data, do not wipe secrets or profiles
+        Write-Host "      [i] Preserving biometric data and credentials (use -RemoveData to wipe)." -ForegroundColor Gray
     }
-} catch {
-    # Skip silently when none
 }
 
 $startMenuPeekDir = Join-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" "Peek"
@@ -161,42 +173,23 @@ if (Test-Path $InstallDir) {
     Write-Host "      [OK] Removed installation directory: $InstallDir" -ForegroundColor Green
 }
 
-# 6. User profile data cleanup (optional / interactive prompt)
+# 7. Residual cleanup if requested
 Write-Host "[5/5] Enrolled biometric profiles and secrets cleanup..." -ForegroundColor Cyan
 $userLocalPeek = Join-Path $env:LOCALAPPDATA "Peek"
 $programDataPeek = Join-Path $env:ProgramData "Peek"
-
-$cleanUser = $RemoveUserData -or $RemoveData
-if (-not $cleanUser -and -not $Force) {
-    try {
-        if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
-            Write-Host ""
-            $reply = Read-Host "Do you want to delete enrolled biometric face profiles from this user profile? (y/N)"
-            if ($reply -match "^[yY]") {
-                $cleanUser = $true
-            }
-        }
-    } catch { }
-}
 
 if ($cleanUser) {
     if (Test-Path $userLocalPeek) {
         Remove-Item -Path $userLocalPeek -Recurse -Force
         Write-Host "      [OK] Removed user biometric profiles from $userLocalPeek" -ForegroundColor Green
     }
-} else {
-    Write-Host "      [i] Biometric profiles preserved in $userLocalPeek" -ForegroundColor Gray
-}
-
-# Machine entropy must be left in place unless -RemoveData switch is explicitly used,
-# because deleting it makes existing profiles undecryptable.
-if ($RemoveData) {
     if (Test-Path $programDataPeek) {
         Remove-Item -Path $programDataPeek -Recurse -Force
-        Write-Host "      [OK] Removed machine entropy and ProgramData directory from $programDataPeek (-RemoveData specified)" -ForegroundColor Green
+        Write-Host "      [OK] Removed machine entropy and ProgramData directory from $programDataPeek" -ForegroundColor Green
     }
 } else {
-    Write-Host "      [i] Preserving machine entropy in $programDataPeek (use -RemoveData to remove; leaving it keeps profiles decryptable)." -ForegroundColor Gray
+    Write-Host "      [i] Biometric profiles preserved in $userLocalPeek" -ForegroundColor Gray
+    Write-Host "      [i] Preserving machine entropy in $programDataPeek" -ForegroundColor Gray
 }
 
 Write-Host ""
