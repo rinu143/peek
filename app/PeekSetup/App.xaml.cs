@@ -68,7 +68,8 @@ namespace PeekSetup
             // Check for --uninstall-cleanup
             if (HasArg(args, "--uninstall-cleanup"))
             {
-                var (success, message) = SetupOperations.RunUninstallCleanup();
+                bool removeFaceAndEntropy = HasArg(args, "--remove-data") || HasArg(args, "--remove-all");
+                var (success, message) = SetupOperations.RunUninstallCleanup(removeFaceAndEntropy);
                 Console.WriteLine(message);
                 Environment.Exit(success ? 0 : 1);
                 return;

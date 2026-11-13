@@ -103,7 +103,93 @@ Shared family and enterprise workstations frequently host multiple local or doma
 
 ---
 
-## 5. Environmental & Biometric Boundary Conditions
+## 5. Installer & Update Security VM Verification Protocol
+
+This protocol defines the hands-on verification procedure in a clean, isolated Windows 10/11 VM for installer reliability, directory ACLs, update survival, and silent rollback.
+
+### Test Case 1: Fresh Install Security & State Verification
+1. On a clean VM snapshot, run the installer:
+   ```cmd
+   Peek-Setup-0.2.0-x64.exe /VERYSILENT /SUPPRESSMSGBOXES /LOG="%TEMP%\peek_fresh_install.log"
+   ```
+2. **Verify Directory Access Control Lists (ACLs)**:
+   ```powershell
+   # Program Files must grant Users only Read & Execute
+   (Get-Acl "$env:ProgramFiles\Peek").Access | Select-Object IdentityReference, FileSystemRights, AccessControlType
+
+   # ProgramData must restrict modification to SYSTEM & Administrators
+   (Get-Acl "$env:ProgramData\Peek").Access | Select-Object IdentityReference, FileSystemRights, AccessControlType
+   (Get-Acl "$env:ProgramData\Peek\updates").Access | Select-Object IdentityReference, FileSystemRights, AccessControlType
+   ```
+   *Acceptance: Neither standard users nor `BUILTIN\Users` have `Write`, `Modify`, or `FullControl` permissions.*
+
+3. **Verify Machine Entropy File**:
+   ```powershell
+   $entropyPath = "$env:ProgramData\Peek\machine_entropy.bin"
+   Test-Path $entropyPath
+   (Get-Item $entropyPath).Length  # Must be exactly 64 bytes
+   ```
+
+4. **Verify Scheduled Tasks**:
+   ```powershell
+   schtasks.exe /Query /TN "PeekEngine" /V /FO LIST
+   schtasks.exe /Query /TN "PeekUpdate" /V /FO LIST
+   ```
+   *Acceptance: `PeekEngine` task configured for user logon; `PeekUpdate` task configured under `SYSTEM` at 03:00 daily.*
+
+5. **Verify Credential Provider COM Registration**:
+   ```powershell
+   $cpGuid = "{4F64A0FC-9F09-4C0B-A5E7-537C44919903}"
+   Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\$cpGuid"
+   Test-Path "HKLM:\SOFTWARE\Classes\CLSID\$cpGuid"
+   ```
+   *Acceptance: Both keys exist and point to `$env:ProgramFiles\Peek\PeekCredentialProvider.dll`.*
+
+### Test Case 2: Upgrade State Preservation & Process Survival
+1. Verify existing registry values before upgrade:
+   ```powershell
+   # Suppose AutoCheck was disabled by user/admin policy:
+   Set-ItemProperty -Path "HKLM:\SOFTWARE\Peek\Updates" -Name "AutoCheck" -Value 0 -Type DWord
+   ```
+2. Run `PeekUpdate.exe --apply --version <new_version>`:
+   - Observe process tree in Sysinternals Process Explorer:
+   - `PeekUpdate.exe` creates `%TEMP%\PeekUpdateRunner-<guid>\` and re-launches itself from that temporary directory.
+   - The installer is spawned with `/UPDATE /VERYSILENT`.
+   - The installer terminates processes running under `{app}` (`$env:ProgramFiles\Peek`), but **does not kill** `PeekUpdateRunner-*.exe`.
+   - `PeekUpdateRunner` survives, monitors installer completion, executes `--self-test`, and exits cleanly.
+3. Verify `AutoCheck` registry value was **preserved**:
+   ```powershell
+   (Get-ItemProperty -Path "HKLM:\SOFTWARE\Peek\Updates").AutoCheck  # Must still equal 0
+   ```
+
+### Test Case 3: Silent Mode Rollback on Upgrade Failure
+1. Simulate a broken upgrade by replacing `PeekEngine.exe` or triggering a failure condition in `--self-test`:
+   ```cmd
+   Peek-Setup-0.2.1-x64.exe /VERYSILENT /SUPPRESSMSGBOXES /UPDATE /LOG="%TEMP%\peek_upgrade_fail.log"
+   ```
+2. Verify behavior:
+   - Installer runs self-test polling up to 15 seconds for engine and pipe.
+   - Upon failure, installer automatically initiates complete rollback.
+   - **No dialog boxes or prompts** appear (silent execution invariant).
+   - Installer process terminates with a **non-zero exit code** (`ExitCode != 0`).
+   - The original version files and Credential Provider registration remain intact and functional.
+
+### Test Case 4: Complete Uninstall Secrets Wipe
+1. Run uninstaller:
+   ```cmd
+   "%ProgramFiles%\Peek\unins000.exe" /VERYSILENT
+   ```
+2. Verify LSA secrets and Identity registry entries:
+   ```powershell
+   # Verify registry identities removed
+   Test-Path "HKLM:\SOFTWARE\Peek\Identities"  # Must return False
+   Test-Path "HKLM:\SOFTWARE\Peek"            # Must return False
+   ```
+   *Acceptance: All `L$PeekCred_<SID>` LSA secrets and `HKLM\SOFTWARE\Peek` identities are unconditionally purged.*
+
+---
+
+## 6. Environmental & Biometric Boundary Conditions
 
 | Condition | Lux Level | Test Description | Acceptance Threshold |
 | :--- | :--- | :--- | :--- |

@@ -147,7 +147,7 @@ jobs:
           }
 
           if (-not $notes) {
-              $notes = "Release $tag - Peek Face Authentication for Windows.`n`nRefer to [CHANGELOG.md](https://github.com/peek/blob/main/CHANGELOG.md) for full changes."
+              $notes = "Release $tag - Peek Face Authentication for Windows.`n`nRefer to [CHANGELOG.md](https://github.com/rinu143/peek/blob/main/CHANGELOG.md) for full changes."
           }
 
           # Multiline output for GitHub Actions

@@ -135,6 +135,16 @@ namespace PeekUpdate
                     state.ErrorMessage = null;
                     policyManager.SaveUserState(state);
 
+                    try
+                    {
+                        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                        string updateDir = Path.Combine(localAppData, "Peek", "updates", m.Version);
+                        if (!Directory.Exists(updateDir)) Directory.CreateDirectory(updateDir);
+                        string sidecarPath = Path.Combine(updateDir, $"Peek-Setup-{m.Version}-x64.json");
+                        File.WriteAllText(sidecarPath, JsonSerializer.Serialize(m, new JsonSerializerOptions { WriteIndented = true }));
+                    }
+                    catch { }
+
                     Console.WriteLine($"[+] New version available: Peek {m.Version} (Critical: {m.Critical})");
                     Console.WriteLine($"    Notes: {m.NotesUrl}");
                     Console.WriteLine($"    Download: {m.Url}");
@@ -152,21 +162,16 @@ namespace PeekUpdate
                 return 0;
             }
 
-            // --apply [--version <ver>] [--installer <path>]
+            // --apply [--version <ver>]
             if (mode == "--apply")
             {
                 string? version = null;
-                string? installerPath = null;
 
                 for (int i = 1; i < args.Length; i++)
                 {
                     if (args[i].Equals("--version", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
                     {
                         version = args[++i];
-                    }
-                    else if (args[i].Equals("--installer", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-                    {
-                        installerPath = args[++i];
                     }
                 }
 
@@ -176,11 +181,12 @@ namespace PeekUpdate
                     version = state.AvailableVersion;
                 }
 
-                if (string.IsNullOrWhiteSpace(version))
+                if (string.IsNullOrWhiteSpace(version) || !ElevatedInstaller.VersionRegex.IsMatch(version.Trim()))
                 {
-                    Console.WriteLine("[!] ERROR: No target version specified or found in update state for --apply.");
+                    Console.WriteLine("[!] ERROR: Target version is missing or invalid for --apply. Must match format ^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.]+)?$");
                     return 1;
                 }
+                version = version.Trim();
 
                 // If not elevated, relaunch elevated
                 if (!ElevatedInstaller.IsAdministrator())
@@ -190,8 +196,14 @@ namespace PeekUpdate
                     return launched ? 0 : 1;
                 }
 
+                // If elevated but not running from temp runner, launch from runner copy to survive upgrade
+                if (!ElevatedInstaller.IsRunningFromTempRunner())
+                {
+                    return ElevatedInstaller.LaunchFromTempRunner(version);
+                }
+
                 var elevatedInstaller = new ElevatedInstaller(signatureVerifier, policyManager);
-                return elevatedInstaller.ExecuteApply(version, installerPath);
+                return elevatedInstaller.ExecuteApply(version);
             }
 
             // --register-task

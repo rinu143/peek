@@ -33,6 +33,15 @@ Write-Host "       PEEK FACE AUTHENTICATION - TEST PACKAGE INSTALLER    " -Foreg
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
 
+function Pause-IfInteractive {
+    param([string]$Prompt = "Press Enter to exit")
+    try {
+        if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+            Read-Host $Prompt
+        }
+    } catch { }
+}
+
 # 1. Require Administrator Privileges
 $currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 $isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -43,18 +52,30 @@ if (-not $isAdmin) {
     Write-Host ""
     Write-Host "    Please right-click 'install.bat' (or PowerShell) and choose 'Run as administrator'." -ForegroundColor Yellow
     Write-Host ""
-    Read-Host "Press Enter to exit"
+    Pause-IfInteractive
     exit 1
 }
 
 $SourceDir = $PSScriptRoot
 $InstallDir = Join-Path $env:ProgramFiles "Peek"
 
+# Resolve repo root if running from within repository
+$RepoRoot = $SourceDir
+$curr = $SourceDir
+while ($curr -and -not (Test-Path (Join-Path $curr "VERSION"))) {
+    $parent = Split-Path -Parent $curr
+    if ($parent -eq $curr) { break }
+    $curr = $parent
+}
+if ($curr -and (Test-Path (Join-Path $curr "VERSION"))) {
+    $RepoRoot = $curr
+}
+
 Write-Host "[*] Source Directory : $SourceDir"
 Write-Host "[*] Target Directory : $InstallDir"
 Write-Host ""
 
-# 2. Resolve source files (supports both extracted zip layout and repo build layout)
+# 2. Resolve source files (supports extracted zip layout, scripts/packaging, and repo build layout)
 $sourceMap = @{
     "PeekSetup.exe"              = $null
     "PeekCredentialProvider.dll" = $null
@@ -64,20 +85,18 @@ $sourceMap = @{
 $candidateDirs = @(
     $SourceDir,
     (Join-Path $SourceDir "dist"),
-    (Join-Path $SourceDir "build\Release"),
-    (Join-Path $SourceDir "app\PeekSetup\bin\Release\net8.0-windows\win-x64\publish"),
-    (Join-Path $SourceDir "app\PeekUpdate\bin\Release\net8.0-windows\win-x64\publish"),
-    (Join-Path $SourceDir "app\PeekUpdate\bin\Release\net8.0\win-x64\publish"),
-    (Join-Path $SourceDir "credential_provider\build\Release"),
-    (Join-Path $SourceDir "credential_provider\x64\Release"),
-    (Join-Path $SourceDir "scripts\packaging"),
-    (Join-Path $SourceDir "..\dist"),
-    (Join-Path $SourceDir "..\build\Release"),
-    (Join-Path $SourceDir "..\app\PeekSetup\bin\Release\net8.0-windows\win-x64\publish"),
-    (Join-Path $SourceDir "..\app\PeekUpdate\bin\Release\net8.0-windows\win-x64\publish"),
-    (Join-Path $SourceDir "..\app\PeekUpdate\bin\Release\net8.0\win-x64\publish"),
-    (Join-Path $SourceDir "..\credential_provider\build\Release"),
-    (Join-Path $SourceDir "..\credential_provider\x64\Release")
+    (Join-Path $SourceDir "engine"),
+    (Join-Path $RepoRoot "dist"),
+    (Join-Path $RepoRoot "build\Release"),
+    (Join-Path $RepoRoot "credential_provider\build\Release"),
+    (Join-Path $RepoRoot "credential_provider\x64\Release"),
+    (Join-Path $RepoRoot "app\PeekSetup\bin\Release\net8.0-windows\win-x64\publish"),
+    (Join-Path $RepoRoot "app\PeekSetup\bin\Release\net8.0-windows\publish"),
+    (Join-Path $RepoRoot "app\PeekSetup\bin\Debug\net8.0-windows"),
+    (Join-Path $RepoRoot "app\PeekUpdate\bin\Release\net8.0-windows\win-x64\publish"),
+    (Join-Path $RepoRoot "app\PeekUpdate\bin\Release\net8.0\win-x64\publish"),
+    (Join-Path $RepoRoot "app\PeekUpdate\bin\Debug\net8.0-windows\win-x64"),
+    (Join-Path $RepoRoot "scripts\packaging")
 )
 
 foreach ($key in @($sourceMap.Keys)) {
@@ -97,50 +116,51 @@ foreach ($key in @($sourceMap.Keys)) {
 # Resolve PeekEngine (either one-DIR directory or single-file exe)
 $engineDirCandidates = @(
     (Join-Path $SourceDir "engine"),
+    (Join-Path $SourceDir "PeekEngine"),
     (Join-Path $SourceDir "dist\PeekEngine"),
-    (Join-Path $SourceDir "..\dist\PeekEngine")
+    (Join-Path $RepoRoot "dist\PeekEngine")
 )
 $resolvedEngineDir = $engineDirCandidates | Where-Object { Test-Path (Join-Path $_ "PeekEngine.exe") } | Select-Object -First 1
 
 $engineExeCandidates = @(
     (Join-Path $SourceDir "PeekEngine.exe"),
+    (Join-Path $SourceDir "engine\PeekEngine.exe"),
     (Join-Path $SourceDir "dist\PeekEngine.exe"),
-    (Join-Path $SourceDir "..\dist\PeekEngine.exe")
+    (Join-Path $RepoRoot "dist\PeekEngine.exe"),
+    (Join-Path $RepoRoot "scripts\packaging\PeekEngine.exe")
 )
 $resolvedEngineExe = $engineExeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 
 if (-not $resolvedEngineDir -and -not $resolvedEngineExe) {
     Write-Host "[!] ERROR: Missing PeekEngine build artifact (checked dist\PeekEngine and PeekEngine.exe)" -ForegroundColor Red
-    Read-Host "Press Enter to exit"
+    Pause-IfInteractive
     exit 1
 }
 
-$missing = @($sourceMap.Keys | Where-Object { [string]::IsNullOrEmpty($sourceMap[$_]) })
+# Mandatory artifacts: PeekSetup.exe and PeekCredentialProvider.dll (PeekUpdate is optional for test package)
+$requiredArtifacts = @("PeekSetup.exe", "PeekCredentialProvider.dll")
+$missing = @($requiredArtifacts | Where-Object { [string]::IsNullOrEmpty($sourceMap[$_]) })
 if ($missing.Count -gt 0) {
     Write-Host "[!] ERROR: Missing required build artifacts:" -ForegroundColor Red
     foreach ($m in $missing) {
         Write-Host "    - $m" -ForegroundColor Red
     }
     Write-Host ""
-    Read-Host "Press Enter to exit"
+    Pause-IfInteractive
     exit 1
 }
-    exit 1
+
+if (-not $sourceMap["PeekUpdate.exe"]) {
+    Write-Host "      [i] PeekUpdate.exe not present in build; update service will not be configured." -ForegroundColor Gray
 }
 
 # 3. Stop running instances of Peek processes
 Write-Host "[1/5] Stopping any running Peek processes..." -ForegroundColor Cyan
-Get-Process -Name "PeekEngine" -ErrorAction SilentlyContinue | ForEach-Object {
-    Write-Host "      Stopping existing PeekEngine process (PID: $($_.Id))..."
-    Stop-Process -Id $_.Id -Force
-}
-Get-Process -Name "PeekSetup" -ErrorAction SilentlyContinue | ForEach-Object {
-    Write-Host "      Stopping existing PeekSetup process (PID: $($_.Id))..."
-    Stop-Process -Id $_.Id -Force
-}
-Get-Process -Name "PeekUpdate" -ErrorAction SilentlyContinue | ForEach-Object {
-    Write-Host "      Stopping existing PeekUpdate process (PID: $($_.Id))..."
-    Stop-Process -Id $_.Id -Force
+Get-Process -Name "PeekEngine", "PeekSetup", "PeekUpdate" -ErrorAction SilentlyContinue | ForEach-Object {
+    try {
+        Write-Host "      Stopping existing $($_.Name) process (PID: $($_.Id))..."
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+    } catch {}
 }
 Start-Sleep -Milliseconds 500
 
@@ -165,6 +185,7 @@ if ($resolvedEngineDir) {
 
 foreach ($file in $sourceMap.Keys) {
     $src = $sourceMap[$file]
+    if (-not $src) { continue }
     $dst = Join-Path $InstallDir $file
     Write-Host "      Copying $file (from $src)..."
     Copy-Item -Path $src -Destination $dst -Force
@@ -176,7 +197,7 @@ $dllPath = Join-Path $InstallDir "PeekCredentialProvider.dll"
 $regProcess = Start-Process -FilePath "regsvr32.exe" -ArgumentList "/s `"$dllPath`"" -Wait -PassThru
 if ($regProcess.ExitCode -ne 0) {
     Write-Host "[!] ERROR: Failed to register Peek Credential Provider DLL (regsvr32 returned exit code $($regProcess.ExitCode))." -ForegroundColor Red
-    Read-Host "Press Enter to exit"
+    Pause-IfInteractive
     exit 1
 }
 
@@ -185,7 +206,7 @@ if (Test-Path $cpRegKey) {
     Write-Host "      [OK] Credential Provider successfully registered in Windows registry." -ForegroundColor Green
 } else {
     Write-Host "[!] ERROR: Credential Provider registry key not detected at $cpRegKey" -ForegroundColor Red
-    Read-Host "Press Enter to exit"
+    Pause-IfInteractive
     exit 1
 }
 
@@ -214,7 +235,7 @@ if (-not (Get-ItemProperty -Path $updatesRegKey -Name "Channel" -ErrorAction Sil
     Set-ItemProperty -Path $updatesRegKey -Name "Channel" -Value "stable" -Type String -Force
 }
 if (-not (Get-ItemProperty -Path $updatesRegKey -Name "FeedUrl" -ErrorAction SilentlyContinue)) {
-    Set-ItemProperty -Path $updatesRegKey -Name "FeedUrl" -Value "https://raw.githubusercontent.com/peek/updates/main" -Type String -Force
+    Set-ItemProperty -Path $updatesRegKey -Name "FeedUrl" -Value "https://rinu143.github.io/peek" -Type String -Force
 }
 Write-Host "      [OK] Configured HKLM:\SOFTWARE\Peek\Updates (AutoCheck, Channel, FeedUrl)." -ForegroundColor Green
 
@@ -406,4 +427,4 @@ Write-Host "HOW TO UNINSTALL:" -ForegroundColor White
 Write-Host "  Run 'uninstall.bat' (as Administrator) to fully remove Peek." -ForegroundColor White
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host ""
-Read-Host "Press Enter to exit"
+Pause-IfInteractive

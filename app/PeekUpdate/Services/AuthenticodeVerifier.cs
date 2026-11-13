@@ -48,7 +48,7 @@ namespace PeekUpdate.Services
             [In] [MarshalAs(UnmanagedType.LPStruct)] Guid pgActionID,
             [In] IntPtr pWVTData);
 
-        public static bool VerifyAuthenticode(string filePath, string? expectedThumbprint, out string errorMessage)
+        public static bool VerifyAuthenticode(string filePath, string? expectedThumbprint, out string errorMessage, bool allowTestOverride = false)
         {
             errorMessage = string.Empty;
 
@@ -58,12 +58,16 @@ namespace PeekUpdate.Services
                 return false;
             }
 
-            // Test environment override
-            string? testAllowUnsigned = Environment.GetEnvironmentVariable("PEEK_TEST_ALLOW_UNSIGNED");
-            if (string.Equals(testAllowUnsigned, "1", StringComparison.OrdinalIgnoreCase))
+#if PEEK_TEST_BUILD
+            if (allowTestOverride)
             {
-                return true;
+                string? testAllowUnsigned = Environment.GetEnvironmentVariable("PEEK_TEST_ALLOW_UNSIGNED");
+                if (string.Equals(testAllowUnsigned, "1", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
             }
+#endif
 
             var fileInfo = new WINTRUST_FILE_INFO
             {

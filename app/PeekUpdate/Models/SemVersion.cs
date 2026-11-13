@@ -79,8 +79,8 @@ namespace PeekUpdate.Models
                 string p1 = parts1[i];
                 string p2 = parts2[i];
 
-                bool isNum1 = int.TryParse(p1, out int n1);
-                bool isNum2 = int.TryParse(p2, out int n2);
+                bool isNum1 = long.TryParse(p1, out long n1);
+                bool isNum2 = long.TryParse(p2, out long n2);
 
                 if (isNum1 && isNum2)
                 {

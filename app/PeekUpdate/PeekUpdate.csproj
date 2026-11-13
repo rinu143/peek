@@ -12,6 +12,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DefineConstants Condition="'$(PEEK_TEST_BUILD)' == 'true'">$(DefineConstants);PEEK_TEST_BUILD</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

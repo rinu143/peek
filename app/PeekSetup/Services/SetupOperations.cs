@@ -118,26 +118,40 @@ namespace PeekSetup.Services
                 allPassed = false;
             }
 
-            // 3. Check Engine Process Running
-            Process[] engineProcesses = Process.GetProcessesByName("PeekEngine");
+            // 3 & 4. Check Engine Process Running & Auth Pipe Reachability (Poll for up to 15 seconds)
+            Process[] engineProcesses = Array.Empty<Process>();
+            bool pipeListening = false;
+            var pollStart = DateTime.UtcNow;
+            var pollTimeout = TimeSpan.FromSeconds(15);
+
+            while (DateTime.UtcNow - pollStart < pollTimeout)
+            {
+                engineProcesses = Process.GetProcessesByName("PeekEngine");
+                if (engineProcesses.Length > 0 && IsAuthPipeListening(500))
+                {
+                    pipeListening = true;
+                    break;
+                }
+                Thread.Sleep(300);
+            }
+
             if (engineProcesses.Length > 0)
             {
                 messages.Add($"[PASS] Engine Service Process: Running (PID: {engineProcesses[0].Id})");
             }
             else
             {
-                messages.Add("[FAIL] Engine Service Process: PeekEngine process is not running");
+                messages.Add("[FAIL] Engine Service Process: PeekEngine process is not running (timed out after 15s)");
                 allPassed = false;
             }
 
-            // 4. Check Auth Pipe Reachability
-            if (IsAuthPipeListening(1500))
+            if (pipeListening || IsAuthPipeListening(1000))
             {
                 messages.Add($"[PASS] Auth Named Pipe: {PipeName} is active and listening");
             }
             else
             {
-                messages.Add($"[FAIL] Auth Named Pipe: {PipeName} could not be reached (engine offline or wrong DACL)");
+                messages.Add($"[FAIL] Auth Named Pipe: {PipeName} could not be reached (engine offline or wrong DACL, timed out after 15s)");
                 allPassed = false;
             }
 
@@ -277,14 +291,14 @@ namespace PeekSetup.Services
             }
         }
 
-        public static (bool Success, string Message) RunUninstallCleanup()
+        public static (bool Success, string Message) RunUninstallCleanup(bool removeFaceProfilesAndEntropy = true)
         {
             var cleanedItems = new List<string>();
             var secretStore = new LsaSecretStore();
 
             try
             {
-                // 1. Remove all L$PeekCred_<SID> secrets for local users
+                // 1. ALWAYS remove all L$PeekCred_<SID> secrets for local users
                 try
                 {
                     using var profileListKey = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList");
@@ -299,16 +313,19 @@ namespace PeekSetup.Services
                                 secretStore.DeleteSecret(secretName);
                                 cleanedItems.Add($"LSA Secret: {secretName}");
 
-                                // Clean user AppData\Local\Peek
-                                using var sub = profileListKey.OpenSubKey(sid);
-                                string? profilePath = sub?.GetValue("ProfileImagePath") as string;
-                                if (!string.IsNullOrEmpty(profilePath))
+                                if (removeFaceProfilesAndEntropy)
                                 {
-                                    string expandedProfile = Environment.ExpandEnvironmentVariables(profilePath);
-                                    string userPeekDir = Path.Combine(expandedProfile, "AppData", "Local", "Peek");
-                                    if (Directory.Exists(userPeekDir))
+                                    // Clean user AppData\Local\Peek
+                                    using var sub = profileListKey.OpenSubKey(sid);
+                                    string? profilePath = sub?.GetValue("ProfileImagePath") as string;
+                                    if (!string.IsNullOrEmpty(profilePath))
                                     {
-                                        try { Directory.Delete(userPeekDir, true); cleanedItems.Add($"User Data: {userPeekDir}"); } catch { }
+                                        string expandedProfile = Environment.ExpandEnvironmentVariables(profilePath);
+                                        string userPeekDir = Path.Combine(expandedProfile, "AppData", "Local", "Peek");
+                                        if (Directory.Exists(userPeekDir))
+                                        {
+                                            try { Directory.Delete(userPeekDir, true); cleanedItems.Add($"User Data: {userPeekDir}"); } catch { }
+                                        }
                                     }
                                 }
                             }
@@ -317,14 +334,17 @@ namespace PeekSetup.Services
                 }
                 catch { }
 
-                // Clean current user AppData\Local\Peek
-                string localPeek = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Peek");
-                if (Directory.Exists(localPeek))
+                if (removeFaceProfilesAndEntropy)
                 {
-                    try { Directory.Delete(localPeek, true); cleanedItems.Add($"Current User Data: {localPeek}"); } catch { }
+                    // Clean current user AppData\Local\Peek
+                    string localPeek = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Peek");
+                    if (Directory.Exists(localPeek))
+                    {
+                        try { Directory.Delete(localPeek, true); cleanedItems.Add($"Current User Data: {localPeek}"); } catch { }
+                    }
                 }
 
-                // 2. Remove HKLM Identities and HKLM\SOFTWARE\Peek
+                // 2. ALWAYS Remove HKLM Identities and HKLM\SOFTWARE\Peek
                 try
                 {
                     using var hklmKey = Registry.LocalMachine.OpenSubKey(@"SOFTWARE", true);
@@ -336,17 +356,32 @@ namespace PeekSetup.Services
                 }
                 catch { }
 
-                // 3. Remove %ProgramData%\Peek\machine_entropy.bin and %ProgramData%\Peek
+                // 3. Remove entropy file and ProgramData only if removeFaceProfilesAndEntropy is true
                 string progDataPeek = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Peek");
-                string entropyFile = Path.Combine(progDataPeek, "machine_entropy.bin");
-                if (File.Exists(entropyFile))
+                if (removeFaceProfilesAndEntropy)
                 {
-                    try { File.Delete(entropyFile); cleanedItems.Add($"Entropy: {entropyFile}"); } catch { }
-                }
+                    string entropyFile = Path.Combine(progDataPeek, "machine_entropy.bin");
+                    if (File.Exists(entropyFile))
+                    {
+                        try { File.Delete(entropyFile); cleanedItems.Add($"Entropy: {entropyFile}"); } catch { }
+                    }
 
-                if (Directory.Exists(progDataPeek))
+                    if (Directory.Exists(progDataPeek))
+                    {
+                        try { Directory.Delete(progDataPeek, true); cleanedItems.Add($"ProgramData: {progDataPeek}"); } catch { }
+                    }
+                }
+                else
                 {
-                    try { Directory.Delete(progDataPeek, true); cleanedItems.Add($"ProgramData: {progDataPeek}"); } catch { }
+                    // If preserving face profiles and entropy, clean residual logs, backup, and updates
+                    foreach (var sub in new[] { "logs", "backup", "updates" })
+                    {
+                        string subDir = Path.Combine(progDataPeek, sub);
+                        if (Directory.Exists(subDir))
+                        {
+                            try { Directory.Delete(subDir, true); cleanedItems.Add($"ProgramData Subdir: {subDir}"); } catch { }
+                        }
+                    }
                 }
 
                 return (true, $"Uninstall cleanup finished. Cleaned: {string.Join(", ", cleanedItems)}");

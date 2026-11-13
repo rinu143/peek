@@ -6,9 +6,13 @@ namespace PeekUpdate.Services
 {
     public class SignatureVerifier
     {
-        // Embedded public keys (BCRYPT_ECCKEY_BLOB / EccPublicBlob base64) for key rotation
-        public const string PrimaryPublicKeyBase64 = "RUNTMSAAAACu8UFFjKHdTbvgHGY449zdlpwy6asNxlPUnEZkNmbi3A3xKUS06eJQnBFZcLoC9N839PIVPCKVSACOkfJTCo48";
-        public const string SecondaryPublicKeyBase64 = "RUNTMSAAAAA5a2Yv3VxEArbVPDhIaj0DIbufNxv/VREWV/O2V0DNLcCJWBF8MvCtF1yA+1J3ZCa+OshHf1cgEUObDKBFSXe+";
+        // Known development test public keys (used to verify prod keys are not left as dev keys)
+        public const string DevTestPrimaryPublicKeyBase64 = "RUNTMSAAAACu8UFFjKHdTbvgHGY449zdlpwy6asNxlPUnEZkNmbi3A3xKUS06eJQnBFZcLoC9N839PIVPCKVSACOkfJTCo48";
+        public const string DevTestSecondaryPublicKeyBase64 = "RUNTMSAAAAA5a2Yv3VxEArbVPDhIaj0DIbufNxv/VREWV/O2V0DNLcCJWBF8MvCtF1yA+1J3ZCa+OshHf1cgEUObDKBFSXe+";
+
+        // Production embedded public keys (BCRYPT_ECCKEY_BLOB / EccPublicBlob base64) for key rotation
+        public const string PrimaryPublicKeyBase64 = "RUNTMSAAAADfn247G1L9hT7qSUUDdm5lc34BeSqB7hYlAXUl9tJi58Fbvt4ZJMP37Lycy21oE/+PHuCRLFeYWkh2Bkh5Nntk";
+        public const string SecondaryPublicKeyBase64 = "RUNTMSAAAAAmdKEx+809BjdB/daHuhQ9jHbzUxkBrwlrz46wBKy8XhphG6l6LLWQEVen2G8giNzmmrEoTpv0hLH2ePtnUxta";
 
         private readonly string[] _trustedPublicKeys;
 

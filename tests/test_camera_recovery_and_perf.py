@@ -493,6 +493,24 @@ class MockFailingCamera:
         return False
 
 
+class MockFaceEngine:
+    """Mock face engine with an active profile for isolated tests."""
+
+    def __init__(self, display_name: str = "Test User"):
+        self.active_profile = PeekProfile(
+            profile_id="mock_p1",
+            display_name=display_name,
+            enabled=True
+        )
+        self.enabled_profiles = [self.active_profile]
+
+    def reload_active_profile(self, user_sid=None):
+        pass
+
+    def process_frame(self, frame):
+        return None
+
+
 class TestPipeServerRecoveryAndIsolation(unittest.TestCase):
     """
     Validates:
@@ -511,7 +529,7 @@ class TestPipeServerRecoveryAndIsolation(unittest.TestCase):
     def test_camera_consecutive_failure_reopen_exhaustion(self):
         # Camera fails immediately, reopen fails -> emits REASON_CAMERA_ERROR
         failing_camera = MockFailingCamera(fail_after=0, reopen_succeeds=False)
-        self.server = PipeServer(pipe_name=self.pipe_name, camera=failing_camera)
+        self.server = PipeServer(pipe_name=self.pipe_name, camera=failing_camera, face_engine=MockFaceEngine())
         self.server.start()
         time.sleep(0.15)
 
@@ -545,7 +563,7 @@ class TestPipeServerRecoveryAndIsolation(unittest.TestCase):
         mock_cam.is_opened = True
         mock_cam.read_frame.side_effect = RuntimeError("Catastrophic hardware fault simulation")
 
-        self.server = PipeServer(pipe_name=self.pipe_name, camera=mock_cam)
+        self.server = PipeServer(pipe_name=self.pipe_name, camera=mock_cam, face_engine=MockFaceEngine())
         self.server.start()
         time.sleep(0.15)
 

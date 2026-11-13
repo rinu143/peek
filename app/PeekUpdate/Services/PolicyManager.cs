@@ -9,7 +9,7 @@ namespace PeekUpdate.Services
     public class PolicyManager
     {
         private const string HklmUpdatesKey = @"SOFTWARE\Peek\Updates";
-        public const string DefaultFeedUrl = "https://raw.githubusercontent.com/peek/updates/main";
+        public const string DefaultFeedUrl = UpdateConstants.DefaultFeedUrl;
 
         private readonly string _userSettingsPath;
         private readonly string _userStatePath;

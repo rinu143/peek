@@ -12,7 +12,42 @@ To protect users from supply-chain compromises, Peek strictly adheres to the **O
 > [!IMPORTANT]
 > The ECDSA P-256 update manifest signing private key (`peek_update_primary.key`) **MUST NEVER be stored on GitHub Actions, CI/CD runners, or committed to version control**.
 > 
+> Application code must **NEVER** generate keys at runtime. All trust originates from embedded public keys compiled directly into `PeekUpdate` (`SignatureVerifier.cs`).
+>
 > Continuous Integration runners only generate **unsigned candidate manifests** (`manifest-candidate.json` / `stable.candidate.json`). An authorized maintainer must sign the manifest locally on an isolated, secure machine using the offline private key.
+
+### Cryptographic Key Generation & Rotation
+
+Update manifests are verified using ECDSA P-256 (`secp256r1`) public keys embedded in `PeekUpdate\Services\SignatureVerifier.cs`. Peek embeds both a primary and secondary public key (`PrimaryPublicKeyBase64` and `SecondaryPublicKeyBase64`) to support seamless key rotation.
+
+#### 1. Generating a Keypair Offline
+Run the key generator on an offline, trusted workstation:
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\release\sign_manifest.ps1 `
+    -GenKey `
+    -OutKeyPath "C:\secure\keys\peek_update_primary.key" `
+    -OutPublicKeyPath "C:\secure\keys\peek_update_primary.pub"
+```
+The script outputs:
+- The private key file (`peek_update_primary.key` in CNG EccPrivateBlob format).
+- The public key file (`peek_update_primary.pub` in CNG EccPublicBlob base64 format).
+- The raw Base64 string for immediate embedding.
+
+#### 2. Offline Private Key Custody
+- **NEVER** commit private `.key` files to Git, GitHub Actions secrets, or CI environments.
+- Store the private key on air-gapped encrypted hardware (e.g., FIPS-certified USB drive or hardware security module).
+- Restrict file access permissions: only the release officer should have read permissions.
+
+#### 3. Embedding the Public Key
+Copy the Base64 public key output into [`app/PeekUpdate/Services/SignatureVerifier.cs`](../app/PeekUpdate/Services/SignatureVerifier.cs):
+```csharp
+public const string PrimaryPublicKeyBase64 = "<new_ecc_public_blob_base64>";
+```
+When rotating keys:
+1. Promote the current `PrimaryPublicKeyBase64` to `SecondaryPublicKeyBase64`.
+2. Generate a new keypair and assign the new public key to `PrimaryPublicKeyBase64`.
+3. Release an update containing both keys. This ensures existing installations verify signatures from either key.
+4. Unit tests (`PeekSetup.Tests`) enforce that release builds cannot use the development test keys.
 
 ### Release Pipeline Flow
 
@@ -77,7 +112,7 @@ credential_provider\build\Release\test_autoselect.exe
 *All tests must pass with zero failures.*
 
 ### Gate 3: Biometric PAD & Spoof Evaluation Table
-Update the empirical Presentation Attack Detection benchmark in [`docs/spoof_results.md`](file:///E:/Downloads/Peek/docs/spoof_results.md):
+Update the empirical Presentation Attack Detection benchmark in [`docs/spoof_results.md`](spoof_results.md):
 ```powershell
 python scripts/spoof_eval.py --manifest eval_data/manifest.csv --output-markdown docs/spoof_results.md
 ```
@@ -86,7 +121,7 @@ python scripts/spoof_eval.py --manifest eval_data/manifest.csv --output-markdown
 - Ensure Attack Success Rate (ASR) across print, screen, and replay attacks is strictly $0.0\%$.
 
 ### Gate 4: Release Test Matrix Verification
-Review and check off all target environments specified in [`docs/RELEASE_TEST_MATRIX.md`](file:///E:/Downloads/Peek/docs/RELEASE_TEST_MATRIX.md):
+Review and check off all target environments specified in [`docs/RELEASE_TEST_MATRIX.md`](RELEASE_TEST_MATRIX.md):
 - [ ] Clean Windows 10 (1809+ / 22H2) clean VM snapshot.
 - [ ] Clean Windows 11 (22H2 / 23H2 / 24H2) clean VM snapshot.
 - [ ] Post-Cumulative Update resilience check.
@@ -161,7 +196,7 @@ After the draft release is generated on GitHub:
 ## 5. Publishing and Announcing
 
 1. **Publish to Update Host**:
-   - Commit and push `stable.json` and `beta.json` to the update mirror repository (e.g. `https://raw.githubusercontent.com/peek/updates/main/` or designated CDN).
+   - Commit and push `stable.json` and `beta.json` to the update mirror repository (e.g. `https://rinu143.github.io/peek` or designated CDN).
 2. **Verify Live Update Feed**:
    - Run a test check against the live feed:
      ```powershell

@@ -13,7 +13,7 @@
 
 #define MyAppName "Peek"
 #define MyAppPublisher "Peek Biometrics Team"
-#define MyAppURL "https://github.com/peek"
+#define MyAppURL "https://github.com/rinu143/peek"
 #define MyAppExeName "PeekSetup.exe"
 #define MyAppId "{{A35F4C74-8846-4B82-AE68-2C7BE6E44E3D}}"
 
@@ -39,7 +39,6 @@ MinVersion=10.0.17763
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
-PrivilegesRequiredOverridesAllowed=dialog
 CloseApplications=no
 RestartIfNeededByRun=no
 SetupIconFile=..\build\peek.ico
@@ -65,6 +64,9 @@ Source: "..\dist\PeekCredentialProvider.dll"; DestDir: "{app}"; Flags: ignorever
 ; 5. Documentation & Licenses
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+; 6. Helper scripts
+Source: "postinstall.ps1"; DestDir: "{tmp}"; Flags: ignoreversion
+Source: "uninstall_cleanup.ps1"; DestDir: "{app}"; Flags: ignoreversion uninsneveruninstall
 
 [Icons]
 Name: "{autoprograms}\Peek\Peek Setup"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"
@@ -74,11 +76,11 @@ Name: "{autoprograms}\Peek\Peek Setup"; Filename: "{app}\{#MyAppExeName}"; Worki
 Root: HKLM; Subkey: "SOFTWARE\Peek"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"; Flags: uninsdeletekeyifempty
 Root: HKLM; Subkey: "SOFTWARE\Peek"; ValueType: dword; ValueName: "LogLevel"; ValueData: 1; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "SOFTWARE\Peek"; ValueType: string; ValueName: "DisplayVersion"; ValueData: "{#MyAppVersion}"; Flags: uninsdeletevalue
-; Updates\AutoCheck
-Root: HKLM; Subkey: "SOFTWARE\Peek\Updates"; ValueType: dword; ValueName: "AutoCheck"; ValueData: 1; Tasks: autocheck; Flags: uninsdeletevalue
-Root: HKLM; Subkey: "SOFTWARE\Peek\Updates"; ValueType: dword; ValueName: "AutoCheck"; ValueData: 0; Tasks: not autocheck; Flags: uninsdeletevalue
+; Updates\AutoCheck (written on fresh install only; on upgrade, preserved unless /AUTOCHECK is passed)
+Root: HKLM; Subkey: "SOFTWARE\Peek\Updates"; ValueType: dword; ValueName: "AutoCheck"; ValueData: 1; Tasks: autocheck; Check: ShouldWriteRegistryAutoCheck(1); Flags: uninsdeletevalue
+Root: HKLM; Subkey: "SOFTWARE\Peek\Updates"; ValueType: dword; ValueName: "AutoCheck"; ValueData: 0; Tasks: not autocheck; Check: ShouldWriteRegistryAutoCheck(0); Flags: uninsdeletevalue
 Root: HKLM; Subkey: "SOFTWARE\Peek\Updates"; ValueType: string; ValueName: "Channel"; ValueData: "stable"; Flags: createvalueifdoesntexist uninsdeletevalue
-Root: HKLM; Subkey: "SOFTWARE\Peek\Updates"; ValueType: string; ValueName: "FeedUrl"; ValueData: "https://raw.githubusercontent.com/peek/updates/main"; Flags: createvalueifdoesntexist uninsdeletevalue
+Root: HKLM; Subkey: "SOFTWARE\Peek\Updates"; ValueType: string; ValueName: "FeedUrl"; ValueData: "https://rinu143.github.io/peek"; Flags: createvalueifdoesntexist uninsdeletevalue
 
 [Code]
 var
@@ -86,6 +88,22 @@ var
   IsUpgradeInstall: Boolean;
   ExistingInstalledVersion: String;
   ShouldRemoveUserData: Boolean;
+
+// Helper: Check if string consists of only ASCII digits
+function IsAllDigits(const S: String): Boolean;
+var
+  j: Integer;
+begin
+  Result := Length(S) > 0;
+  for j := 1 to Length(S) do
+  begin
+    if (S[j] < '0') or (S[j] > '9') then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
+end;
 
 // Helper: Parse integer safely
 function SafeStrToInt(const S: String; DefaultVal: Integer): Integer;
@@ -125,7 +143,7 @@ begin
       if P1 > 0 then
       begin
         Part1 := Copy(V1, 1, P1 - 1);
-        V1 := Copy(V1, P1, Length(V1));
+        V1 := Copy(V1, P1 + 1, Length(V1));
       end
       else
       begin
@@ -146,7 +164,7 @@ begin
       if P2 > 0 then
       begin
         Part2 := Copy(V2, 1, P2 - 1);
-        V2 := Copy(V2, P2, Length(V2));
+        V2 := Copy(V2, P2 + 1, Length(V2));
       end
       else
       begin
@@ -172,22 +190,121 @@ begin
 
   // If major.minor.patch are equal, check prerelease (presence of '-' indicates lower precedence than release)
   if (V1 <> '') and (V2 = '') then
-    Result := -1
-  else if (V1 = '') and (V2 <> '') then
-    Result := 1
-  else if (V1 <> '') and (V2 <> '') then
   begin
-    if V1 > V2 then Result := 1
-    else if V1 < V2 then Result := -1;
+    Result := -1;
+    Exit;
+  end;
+  if (V1 = '') and (V2 <> '') then
+  begin
+    Result := 1;
+    Exit;
+  end;
+  if (V1 = '') and (V2 = '') then
+  begin
+    Result := 0;
+    Exit;
+  end;
+
+  // Both have prereleases: compare dot-separated identifiers
+  while (V1 <> '') or (V2 <> '') do
+  begin
+    if (V1 = '') and (V2 <> '') then
+    begin
+      Result := -1;
+      Exit;
+    end;
+    if (V1 <> '') and (V2 = '') then
+    begin
+      Result := 1;
+      Exit;
+    end;
+
+    P1 := Pos('.', V1);
+    if P1 > 0 then
+    begin
+      Part1 := Copy(V1, 1, P1 - 1);
+      V1 := Copy(V1, P1 + 1, Length(V1));
+    end
+    else
+    begin
+      Part1 := V1;
+      V1 := '';
+    end;
+
+    P2 := Pos('.', V2);
+    if P2 > 0 then
+    begin
+      Part2 := Copy(V2, 1, P2 - 1);
+      V2 := Copy(V2, P2 + 1, Length(V2));
+    end
+    else
+    begin
+      Part2 := V2;
+      V2 := '';
+    end;
+
+    if IsAllDigits(Part1) and IsAllDigits(Part2) then
+    begin
+      Num1 := SafeStrToInt(Part1, 0);
+      Num2 := SafeStrToInt(Part2, 0);
+      if Num1 > Num2 then
+      begin
+        Result := 1;
+        Exit;
+      end
+      else if Num1 < Num2 then
+      begin
+        Result := -1;
+        Exit;
+      end;
+    end
+    else if IsAllDigits(Part1) then
+    begin
+      Result := -1;
+      Exit;
+    end
+    else if IsAllDigits(Part2) then
+    begin
+      Result := 1;
+      Exit;
+    end
+    else
+    begin
+      if Part1 > Part2 then
+      begin
+        Result := 1;
+        Exit;
+      end
+      else if Part1 < Part2 then
+      begin
+        Result := -1;
+        Exit;
+      end;
+    end;
   end;
 end;
 
-// Helper: Stop Peek running processes
+// Helper: Stop Peek running processes whose image path is under {app}
 procedure StopPeekProcesses();
 var
   ResultCode: Integer;
+  AppDir: String;
+  PsCmd: String;
 begin
-  Exec('taskkill.exe', '/f /im PeekEngine.exe /im PeekSetup.exe /im PeekUpdate.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  AppDir := ExpandConstant('{app}');
+  // Only terminate PeekEngine, PeekSetup, and PeekUpdate if their executable image is located under {app}.
+  // This allows PeekUpdate running from %TEMP%\PeekUpdateRunner-* to survive upgrades.
+  PsCmd :=
+    '$app = "' + AppDir + '"; ' +
+    'Get-Process -Name PeekEngine, PeekSetup, PeekUpdate -ErrorAction SilentlyContinue | ForEach-Object { ' +
+    '  try { ' +
+    '    $p = $_.Path; ' +
+    '    if ($p -and $p.StartsWith($app, [System.StringComparison]::OrdinalIgnoreCase)) { ' +
+    '      Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue; ' +
+    '    } ' +
+    '  } catch {} ' +
+    '};';
+  Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -Command "' + PsCmd + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(400);
 end;
 
@@ -282,6 +399,32 @@ begin
       Exit;
     end;
   end;
+end;
+
+function ShouldWriteRegistryAutoCheck(ExpectedVal: Integer): Boolean;
+var
+  ParamVal: String;
+begin
+  ParamVal := GetCommandLineParam('AUTOCHECK');
+  if ParamVal = '1' then
+  begin
+    Result := (ExpectedVal = 1);
+    Exit;
+  end
+  else if ParamVal = '0' then
+  begin
+    Result := (ExpectedVal = 0);
+    Exit;
+  end;
+
+  // On upgrade without explicit /AUTOCHECK parameter, preserve existing value in registry
+  if IsUpgradeInstall then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  Result := True;
 end;
 
 function InitializeSetup(): Boolean;
@@ -387,55 +530,29 @@ begin
     else if AutoCheckParam = '1' then
       RegWriteDWordValue(HKLM, 'SOFTWARE\Peek\Updates', 'AutoCheck', 1);
 
-    // 2. Execute post-install configuration via PowerShell
-    // Configures ProgramData ACLs, machine_entropy.bin, regsvr32 CP DLL, and BUILTIN\Users scheduled task
-    PsScript :=
-      '$ErrorActionPreference = "Stop"; ' +
-      '$InstallDir = "' + ExpandConstant('{app}') + '"; ' +
-      '$DataDir = Join-Path $env:ProgramData "Peek"; ' +
-      '$LogDir = Join-Path $DataDir "logs"; ' +
-      'New-Item -ItemType Directory -Path $DataDir -Force | Out-Null; ' +
-      'New-Item -ItemType Directory -Path $LogDir -Force | Out-Null; ' +
-      '$sys = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null); ' +
-      '$adm = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null); ' +
-      '$usr = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinUsersSid, $null); ' +
-      '$acl = New-Object System.Security.AccessControl.DirectorySecurity; ' +
-      '$acl.SetAccessRuleProtection($true, $false); ' +
-      '$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sys, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"))); ' +
-      '$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adm, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"))); ' +
-      '$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usr, "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow"))); ' +
-      'Set-Acl -Path $DataDir -AclObject $acl; ' +
-      'Set-Acl -Path $LogDir -AclObject $acl; ' +
-      '$entropyPath = Join-Path $DataDir "machine_entropy.bin"; ' +
-      'if (-not (Test-Path $entropyPath)) { ' +
-      '  $guid = [Guid]::NewGuid().ToString(); ' +
-      '  [System.IO.File]::WriteAllText($entropyPath, $guid, (New-Object System.Text.UTF8Encoding($false))); ' +
-      '  $fAcl = New-Object System.Security.AccessControl.FileSecurity; ' +
-      '  $fAcl.SetAccessRuleProtection($true, $false); ' +
-      '  $fAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sys, "FullControl", "Allow"))); ' +
-      '  $fAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adm, "FullControl", "Allow"))); ' +
-      '  $fAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usr, "ReadAndExecute", "Allow"))); ' +
-      '  Set-Acl -Path $entropyPath -AclObject $fAcl; ' +
-      '}; ' +
-      '$engineExe = Join-Path $InstallDir "engine\PeekEngine.exe"; ' +
-      '$engineDir = Join-Path $InstallDir "engine"; ' +
-      '$action = New-ScheduledTaskAction -Execute $engineExe -WorkingDirectory $engineDir; ' +
-      '$trigger = New-ScheduledTaskTrigger -AtLogOn; ' +
-      '$principal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Users" -RunLevel Limited; ' +
-      '$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -StartWhenAvailable; ' +
-      'Register-ScheduledTask -TaskName "PeekEngine" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null; ';
-
-    Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -Command "' + PsScript + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    // 2. Execute post-install configuration via external PowerShell script installed to {tmp}
+    PsScript := ExpandConstant('{tmp}\postinstall.ps1');
+    Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -File "' + PsScript + '" -InstallDir "' + ExpandConstant('{app}') + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    if ResultCode <> 0 then
+    begin
+      SuppressibleMsgBox('ERROR: Peek post-installation configuration failed with exit code ' + IntToStr(ResultCode) + '.' + #13#10 +
+                         'Check the installation log in ' + ExpandConstant('{commonappdata}\Peek\logs') + ' for details.', mbCriticalError, MB_OK, MB_OK);
+      Abort();
+    end;
 
     // 3. Register Credential Provider DLL via regsvr32
     Exec('regsvr32.exe', '/s "' + ExpandConstant('{app}\PeekCredentialProvider.dll') + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
-    // Verify CP registration in registry
+    // Verify CP registration in registry (for both fresh installs and upgrades)
     if not RegKeyExists(HKLM, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{4F64A0FC-9F09-4C0B-A5E7-537C44919903}') then
     begin
-      SuppressibleMsgBox('ERROR: Peek Credential Provider DLL registration failed.' + #13#10 +
-                         'Windows LogonUI integration could not be established.' + #13#10 +
-                         'Check ' + ExpandConstant('{commonappdata}\Peek\logs') + ' for details.', mbCriticalError, MB_OK, MB_OK);
+      if SuppressibleMsgBox('ERROR: Peek Credential Provider DLL registration failed.' + #13#10 +
+                            'Windows LogonUI integration could not be established.' + #13#10 +
+                            'Check ' + ExpandConstant('{commonappdata}\Peek\logs') + ' for details.' + #13#10 + #13#10 +
+                            'Do you want to abort the installation?', mbCriticalError, MB_YESNO, IDYES) = IDYES then
+      begin
+        Abort();
+      end;
     end;
 
     // 4. Start the engine for the interactive user
@@ -458,14 +575,23 @@ begin
     begin
       if IsUpgradeInstall then
       begin
-        if SuppressibleMsgBox('WARNING: Peek post-installation health check reported issues.' + #13#10 +
-                              'Log path: ' + ExpandConstant('{commonappdata}\Peek\logs') + #13#10 + #13#10 +
-                              'Would you like to roll back to the previous version (' + ExistingInstalledVersion + ')?',
-                              mbConfirmation, MB_YESNO, IDNO) = IDYES then
+        if WizardSilent then
         begin
+          // Silent mode: roll back automatically (no prompt) and abort with non-zero exit code
           Exec(ExpandConstant('{app}\PeekSetup.exe'), '--rollback', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-          SuppressibleMsgBox('Rollback completed. The previous version has been restored.', mbInformation, MB_OK, MB_OK);
-          Exit;
+          Abort();
+        end
+        else
+        begin
+          if SuppressibleMsgBox('WARNING: Peek post-installation health check reported issues.' + #13#10 +
+                                'Log path: ' + ExpandConstant('{commonappdata}\Peek\logs') + #13#10 + #13#10 +
+                                'Would you like to roll back to the previous version (' + ExistingInstalledVersion + ')?',
+                                mbConfirmation, MB_YESNO, IDNO) = IDYES then
+          begin
+            Exec(ExpandConstant('{app}\PeekSetup.exe'), '--rollback', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+            SuppressibleMsgBox('Rollback completed. The previous version has been restored.', mbInformation, MB_OK, MB_OK);
+            Abort();
+          end;
         end;
       end
       else
@@ -502,10 +628,11 @@ begin
   end
   else if not UninstallSilent then
   begin
-    // Prompt user whether to remove face data and saved passwords (Default: NO)
-    if SuppressibleMsgBox('Also remove face data and saved passwords?' + #13#10 + #13#10 +
-                          '(Default: No. If removed, enrolled biometric face profiles and Windows ' +
-                          'passwords linked to Peek will be permanently erased).',
+    // Prompt user whether to remove face profiles and machine entropy (Default: NO)
+    // Passwords and LSA secrets are ALWAYS removed upon uninstallation.
+    if SuppressibleMsgBox('Also remove enrolled face profiles and machine entropy?' + #13#10 + #13#10 +
+                          '(Default: No. Biometric face profiles and machine entropy will be preserved for future installations. ' +
+                          'All saved Windows passwords and identity bindings are always removed).',
                           mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES then
     begin
       ShouldRemoveUserData := True;
@@ -538,30 +665,25 @@ begin
     RegDeleteKeyIncludingSubkeys(HKLM, 'SOFTWARE\Classes\CLSID\{4F64A0FC-9F09-4C0B-A5E7-537C44919903}');
     RegDeleteKeyIncludingSubkeys(HKLM, 'SOFTWARE\Classes\WOW6432Node\CLSID\{4F64A0FC-9F09-4C0B-A5E7-537C44919903}');
 
-    // 5. If data removal was requested, run PeekSetup.exe --uninstall-cleanup
-    if ShouldRemoveUserData then
+    // 5. Always remove LSA secrets and HKLM Identities; clean face profiles and entropy if requested
+    if FileExists(ExpandConstant('{app}\PeekSetup.exe')) then
     begin
-      if FileExists(ExpandConstant('{app}\PeekSetup.exe')) then
-      begin
-        Exec(ExpandConstant('{app}\PeekSetup.exe'), '--uninstall-cleanup', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-      end
+      if ShouldRemoveUserData then
+        Exec(ExpandConstant('{app}\PeekSetup.exe'), '--uninstall-cleanup --remove-data', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)
       else
-      begin
-        // Direct PowerShell fallback cleanup
-        PsCleanup :=
-          'try { ' +
-          '  Remove-Item -Path "HKLM:\SOFTWARE\Peek" -Recurse -Force -ErrorAction SilentlyContinue; ' +
-          '  Remove-Item -Path (Join-Path $env:ProgramData "Peek") -Recurse -Force -ErrorAction SilentlyContinue; ' +
-          '  Remove-Item -Path (Join-Path $env:LOCALAPPDATA "Peek") -Recurse -Force -ErrorAction SilentlyContinue; ' +
-          '} catch {}';
-        Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -Command "' + PsCleanup + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-      end;
+        Exec(ExpandConstant('{app}\PeekSetup.exe'), '--uninstall-cleanup', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     end
     else
     begin
-      // Preserve data, remove only HKLM\SOFTWARE\Peek (InstallPath and DisplayVersion)
-      RegDeleteValue(HKLM, 'SOFTWARE\Peek', 'InstallPath');
-      RegDeleteValue(HKLM, 'SOFTWARE\Peek', 'DisplayVersion');
+      // Direct PowerShell fallback cleanup using installer\uninstall_cleanup.ps1
+      PsCleanup := ExpandConstant('{app}\uninstall_cleanup.ps1');
+      if FileExists(PsCleanup) then
+      begin
+        if ShouldRemoveUserData then
+          Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -File "' + PsCleanup + '" -RemoveBiometricsAndEntropy', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)
+        else
+          Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -File "' + PsCleanup + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      end;
     end;
   end;
 end;

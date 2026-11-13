@@ -133,11 +133,16 @@ if (-not (Test-Path $StagingDir)) {
 $engineSource = Join-Path $DistDir "PeekEngine.exe"
 $setupSource = Join-Path $RepoRoot "app\PeekSetup\bin\Release\net8.0-windows\win-x64\publish\PeekSetup.exe"
 $dllSource = Join-Path $RepoRoot "credential_provider\build\Release\PeekCredentialProvider.dll"
+$updateSource = Join-Path $RepoRoot "app\PeekUpdate\bin\Release\net8.0-windows\win-x64\publish\PeekUpdate.exe"
+if (-not (Test-Path $updateSource)) { $updateSource = Join-Path $DistDir "PeekUpdate.exe" }
 $packagingSrcDir = Join-Path $RepoRoot "scripts\packaging"
 
 Copy-Item -Path $engineSource -Destination (Join-Path $StagingDir "PeekEngine.exe") -Force
 Copy-Item -Path $setupSource -Destination (Join-Path $StagingDir "PeekSetup.exe") -Force
 Copy-Item -Path $dllSource -Destination (Join-Path $StagingDir "PeekCredentialProvider.dll") -Force
+if (Test-Path $updateSource) {
+    Copy-Item -Path $updateSource -Destination (Join-Path $StagingDir "PeekUpdate.exe") -Force
+}
 
 Copy-Item -Path (Join-Path $packagingSrcDir "install.ps1") -Destination $StagingDir -Force
 Copy-Item -Path (Join-Path $packagingSrcDir "install.bat") -Destination $StagingDir -Force

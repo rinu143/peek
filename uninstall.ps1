@@ -58,19 +58,35 @@ if (-not $isAdmin) {
 $InstallDir = Join-Path $env:ProgramFiles "Peek"
 $cpGuid = "{4F64A0FC-9F09-4C0B-A5E7-537C44919903}"
 
-# 2. Stop running processes
-Write-Host "[1/5] Stopping Peek processes..." -ForegroundColor Cyan
-Get-Process -Name "PeekEngine" -ErrorAction SilentlyContinue | ForEach-Object {
-    Write-Host "      Stopping PeekEngine process (PID: $($_.Id))..."
-    Stop-Process -Id $_.Id -Force
+# Resolve repo root if running within git workspace
+$RepoRoot = $PSScriptRoot
+$curr = $PSScriptRoot
+while ($curr -and -not (Test-Path (Join-Path $curr "VERSION"))) {
+    $parent = Split-Path -Parent $curr
+    if ($parent -eq $curr) { break }
+    $curr = $parent
 }
-Get-Process -Name "PeekSetup" -ErrorAction SilentlyContinue | ForEach-Object {
-    Write-Host "      Stopping PeekSetup process (PID: $($_.Id))..."
-    Stop-Process -Id $_.Id -Force
+if ($curr -and (Test-Path (Join-Path $curr "VERSION"))) {
+    $RepoRoot = $curr
 }
-Get-Process -Name "PeekUpdate" -ErrorAction SilentlyContinue | ForEach-Object {
-    Write-Host "      Stopping PeekUpdate process (PID: $($_.Id))..."
-    Stop-Process -Id $_.Id -Force
+
+# 2. Stop running processes under InstallDir
+Write-Host "[1/5] Stopping Peek processes under $InstallDir..." -ForegroundColor Cyan
+Get-Process -Name "PeekEngine", "PeekSetup", "PeekUpdate" -ErrorAction SilentlyContinue | ForEach-Object {
+    $procName = $_.Name
+    $procId = $_.Id
+    $shouldKill = $false
+    try {
+        if ($_.Path -and ($_.Path.StartsWith($InstallDir, [System.StringComparison]::OrdinalIgnoreCase))) {
+            $shouldKill = $true
+        }
+    } catch {
+        $shouldKill = $true
+    }
+    if ($shouldKill) {
+        Write-Host "      Stopping process $procName (PID: $procId)..."
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+    }
 }
 Start-Sleep -Milliseconds 500
 
@@ -133,7 +149,7 @@ if (-not $cleanUser -and -not $Force) {
     try {
         if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
             Write-Host ""
-            $reply = Read-Host "Also remove face data and saved passwords? (y/N)"
+            $reply = Read-Host "Also remove face profiles and machine entropy? (y/N)"
             if ($reply -match "^[yY]") {
                 $cleanUser = $true
             }
@@ -147,30 +163,42 @@ Write-Host "[4/5] Removing LSA secrets, installed binaries and shortcuts..." -Fo
 $peekSetupCandidates = @(
     (Join-Path $InstallDir "PeekSetup.exe"),
     (Join-Path $PSScriptRoot "PeekSetup.exe"),
-    (Join-Path $PSScriptRoot "app\PeekSetup\bin\Release\net8.0-windows\win-x64\publish\PeekSetup.exe"),
-    (Join-Path $PSScriptRoot "app\PeekSetup\bin\Debug\net8.0-windows\PeekSetup.exe")
+    (Join-Path $RepoRoot "dist\PeekSetup.exe"),
+    (Join-Path $RepoRoot "app\PeekSetup\bin\Release\net8.0-windows\win-x64\publish\PeekSetup.exe"),
+    (Join-Path $RepoRoot "app\PeekSetup\bin\Debug\net8.0-windows\PeekSetup.exe")
 )
 $peekSetupExe = $peekSetupCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 
 if ($peekSetupExe) {
+    $cleanupArgs = "--uninstall-cleanup"
     if ($cleanUser) {
-        Write-Host "      Running full uninstall cleanup (LSA secrets, identities, face profiles, entropy)..."
-        Start-Process -FilePath $peekSetupExe -ArgumentList "--uninstall-cleanup" -Wait -NoNewWindow -ErrorAction SilentlyContinue
-    } else {
-        # If preserving data, do not wipe secrets or profiles
-        Write-Host "      [i] Preserving biometric data and credentials (use -RemoveData to wipe)." -ForegroundColor Gray
+        $cleanupArgs += " --remove-data"
     }
+    Write-Host "      Running uninstall cleanup (LSA secrets and Identities always removed)..."
+    Start-Process -FilePath $peekSetupExe -ArgumentList $cleanupArgs -Wait -NoNewWindow -ErrorAction SilentlyContinue
 }
 
 $startMenuPeekDir = Join-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" "Peek"
 if (Test-Path $startMenuPeekDir) {
-    Remove-Item -Path $startMenuPeekDir -Recurse -Force
+    Remove-Item -Path $startMenuPeekDir -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "      [OK] Removed Start Menu folder." -ForegroundColor Green
 }
 
 if (Test-Path $InstallDir) {
-    Remove-Item -Path $InstallDir -Recurse -Force
-    Write-Host "      [OK] Removed installation directory: $InstallDir" -ForegroundColor Green
+    try {
+        Start-Sleep -Milliseconds 500
+        Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction Stop
+        Write-Host "      [OK] Removed installation directory: $InstallDir" -ForegroundColor Green
+    } catch {
+        Write-Warning "Could not immediately remove all files from $InstallDir ($($_.Exception.Message)). Cleaning up unlocked files..."
+        Get-ChildItem -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | ForEach-Object {
+            try { Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue } catch {}
+        }
+        try { Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+        if (Test-Path $InstallDir) {
+            Write-Host "      [i] Any remaining locked files in $InstallDir will be removed on next system restart." -ForegroundColor Yellow
+        }
+    }
 }
 
 # 7. Residual cleanup if requested

@@ -50,12 +50,86 @@ namespace PeekSetup.Tests
                 Expires = DateTime.UtcNow.AddDays(20).ToString("o"),
                 MinSupportedVersion = "0.1.0",
                 Critical = false,
-                NotesUrl = "https://github.com/peek/releases/tag/v" + version,
-                Url = $"https://github.com/peek/releases/download/v{version}/Peek-Setup-{version}-x64.exe",
+                NotesUrl = "https://github.com/rinu143/peek/releases/tag/v" + version,
+                Url = $"https://github.com/rinu143/peek/releases/download/v{version}/Peek-Setup-{version}-x64.exe",
                 Sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                 Size = 100 * 1024 * 1024,
                 PublisherThumbprint = "A1B2C3D4E5"
             };
+        }
+
+        [Fact]
+        public void Test_EmbeddedKeys_DoNotMatchDevelopmentKeys()
+        {
+            // Requirement 9: Fail if embedded production keys equal development test keys
+            Assert.NotEqual(SignatureVerifier.DevTestPrimaryPublicKeyBase64, SignatureVerifier.PrimaryPublicKeyBase64);
+            Assert.NotEqual(SignatureVerifier.DevTestSecondaryPublicKeyBase64, SignatureVerifier.SecondaryPublicKeyBase64);
+            Assert.NotEqual(SignatureVerifier.DevTestPrimaryPublicKeyBase64, SignatureVerifier.SecondaryPublicKeyBase64);
+            Assert.NotEqual(SignatureVerifier.DevTestSecondaryPublicKeyBase64, SignatureVerifier.PrimaryPublicKeyBase64);
+
+            // Default constructor should instantiate verifier with non-empty embedded keys
+            var verifier = new SignatureVerifier();
+            Assert.NotNull(verifier);
+        }
+
+        [Fact]
+        public void Test_CanonicalJson_StringEscaping_QuotesBackslashesAndNonAscii()
+        {
+            // Requirement 11: JSON-escape string fields identically with tests for quotes, backslashes and non-ASCII
+            var manifest = new UpdateManifest
+            {
+                Schema = 1,
+                Channel = "stable",
+                Version = "1.0.0",
+                Released = "2026-11-13T00:00:00Z",
+                Expires = "2026-12-13T00:00:00Z",
+                MinSupportedVersion = "0.1.0",
+                Critical = false,
+                NotesUrl = "https://github.com/rinu143/peek/releases/tag/v1.0.0?arg=\"quote\"&path=C:\\test\\dir",
+                Url = "https://github.com/rinu143/peek/releases/download/v1.0.0/Peek-Setup-\"special\"-\\backslash\\-emoji-\ud83d\ude80.exe",
+                Sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                Size = 1048576,
+                PublisherThumbprint = "THUMB\"PRINT\\WITH\\SPECIAL\"CHARS"
+            };
+
+            string json = CanonicalJsonSerializer.SerializeToString(manifest);
+
+            // Verify escaping format
+            Assert.Contains(@"\""quote\""", json);
+            Assert.Contains(@"C:\\test\\dir", json);
+            Assert.Contains(@"\""special\""", json);
+            Assert.Contains(@"\\backslash\\", json);
+
+            // Verify output is strictly valid JSON by parsing with System.Text.Json
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            Assert.Equal("stable", root.GetProperty("channel").GetString());
+            Assert.Equal("https://github.com/rinu143/peek/releases/tag/v1.0.0?arg=\"quote\"&path=C:\\test\\dir", root.GetProperty("notes_url").GetString());
+            Assert.Equal("THUMB\"PRINT\\WITH\\SPECIAL\"CHARS", root.GetProperty("publisher_thumbprint").GetString());
+
+            // Verify UTF-8 bytes match UTF-8 string encoding
+            byte[] bytes = CanonicalJsonSerializer.SerializeToBytes(manifest);
+            string fromBytes = Encoding.UTF8.GetString(bytes);
+            Assert.Equal(json, fromBytes);
+        }
+
+        [Theory]
+        [InlineData("1.0.0-beta.2", "1.0.0-beta.10", -1)] // Numeric: 2 < 10
+        [InlineData("1.0.0-beta.10", "1.0.0-beta.2", 1)]  // Numeric: 10 > 2
+        [InlineData("1.0.0-beta.10", "1.0.0-beta.10", 0)] // Identical
+        [InlineData("1.0.0-alpha.1", "1.0.0-alpha.beta", -1)] // Numeric < Non-numeric
+        [InlineData("1.0.0-alpha.beta", "1.0.0-alpha.1", 1)]  // Non-numeric > Numeric
+        [InlineData("1.0.0-alpha", "1.0.0-beta", -1)] // Lexical
+        [InlineData("1.0.0-beta", "1.0.0-alpha", 1)]  // Lexical
+        [InlineData("1.0.0-1", "1.0.0-2", -1)]        // Pure numeric
+        [InlineData("1.0.0-2", "1.0.0-1", 1)]         // Pure numeric
+        public void Test_SemVersion_Prerelease_NumericComparison(string v1Str, string v2Str, int expectedSign)
+        {
+            // Requirement 10: Compare prerelease identifiers numerically when both are numeric
+            var v1 = SemVersion.Parse(v1Str);
+            var v2 = SemVersion.Parse(v2Str);
+            int cmp = v1.CompareTo(v2);
+            Assert.Equal(expectedSign, Math.Sign(cmp));
         }
 
         [Fact]
@@ -68,7 +142,7 @@ namespace PeekSetup.Tests
             var manifest = CreateValidManifest("0.3.0");
             manifest.Signature = SignCanonical(manifest, priv);
 
-            string err = checker.ValidateManifest(manifest, "0.2.0", "https://github.com/peek");
+            string err = checker.ValidateManifest(manifest, "0.2.0", "https://rinu143.github.io/peek");
             Assert.Empty(err);
             Assert.True(verifier.VerifyManifest(manifest));
         }
@@ -86,7 +160,7 @@ namespace PeekSetup.Tests
             // Signed with wrong private key!
             manifest.Signature = SignCanonical(manifest, priv2);
 
-            string err = checker.ValidateManifest(manifest, "0.2.0", "https://github.com/peek");
+            string err = checker.ValidateManifest(manifest, "0.2.0", "https://rinu143.github.io/peek");
             Assert.Contains("signature verification failed", err, StringComparison.OrdinalIgnoreCase);
             Assert.False(verifier.VerifyManifest(manifest));
         }
@@ -104,7 +178,7 @@ namespace PeekSetup.Tests
             // Tamper version after signing!
             manifest.Version = "0.4.0";
 
-            string err = checker.ValidateManifest(manifest, "0.2.0", "https://github.com/peek");
+            string err = checker.ValidateManifest(manifest, "0.2.0", "https://rinu143.github.io/peek");
             Assert.Contains("signature verification failed", err, StringComparison.OrdinalIgnoreCase);
             Assert.False(verifier.VerifyManifest(manifest));
         }
@@ -121,7 +195,7 @@ namespace PeekSetup.Tests
             manifestExpired.Expires = DateTime.UtcNow.AddMinutes(-5).ToString("o");
             manifestExpired.Signature = SignCanonical(manifestExpired, priv);
 
-            string err1 = checker.ValidateManifest(manifestExpired, "0.2.0", "https://github.com/peek");
+            string err1 = checker.ValidateManifest(manifestExpired, "0.2.0", "https://rinu143.github.io/peek");
             Assert.Contains("expired", err1, StringComparison.OrdinalIgnoreCase);
 
             // Case B: released over 30 days ago
@@ -130,7 +204,7 @@ namespace PeekSetup.Tests
             manifestOldRelease.Expires = DateTime.UtcNow.AddDays(5).ToString("o");
             manifestOldRelease.Signature = SignCanonical(manifestOldRelease, priv);
 
-            string err2 = checker.ValidateManifest(manifestOldRelease, "0.2.0", "https://github.com/peek");
+            string err2 = checker.ValidateManifest(manifestOldRelease, "0.2.0", "https://rinu143.github.io/peek");
             Assert.Contains("30 days old", err2, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -144,13 +218,13 @@ namespace PeekSetup.Tests
             // Same version
             var manifestSame = CreateValidManifest("0.2.0");
             manifestSame.Signature = SignCanonical(manifestSame, priv);
-            string err1 = checker.ValidateManifest(manifestSame, "0.2.0", "https://github.com/peek");
+            string err1 = checker.ValidateManifest(manifestSame, "0.2.0", "https://rinu143.github.io/peek");
             Assert.Contains("not greater than installed version", err1, StringComparison.OrdinalIgnoreCase);
 
             // Downgrade
             var manifestOld = CreateValidManifest("0.1.9");
             manifestOld.Signature = SignCanonical(manifestOld, priv);
-            string err2 = checker.ValidateManifest(manifestOld, "0.2.0", "https://github.com/peek");
+            string err2 = checker.ValidateManifest(manifestOld, "0.2.0", "https://rinu143.github.io/peek");
             Assert.Contains("not greater than installed version", err2, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -174,6 +248,7 @@ namespace PeekSetup.Tests
         [InlineData("www.github.com", true)]
         [InlineData("objects.githubusercontent.com", true)]
         [InlineData("raw.githubusercontent.com", true)]
+        [InlineData("rinu143.github.io", true)]
         [InlineData("updates.peek.local", true)]
         [InlineData("evil-hacker.com", false)]
         [InlineData("github.com.evil.com", false)]
@@ -194,7 +269,7 @@ namespace PeekSetup.Tests
             manifest.Size = 501L * 1024L * 1024L; // 501 MB
             manifest.Signature = SignCanonical(manifest, priv);
 
-            string err = checker.ValidateManifest(manifest, "0.2.0", "https://github.com/peek");
+            string err = checker.ValidateManifest(manifest, "0.2.0", "https://rinu143.github.io/peek");
             Assert.Contains("500 MB limit", err, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -209,7 +284,7 @@ namespace PeekSetup.Tests
             manifest.Schema = 99; // Unknown future schema
             manifest.Signature = SignCanonical(manifest, priv);
 
-            string err = checker.ValidateManifest(manifest, "0.2.0", "https://github.com/peek");
+            string err = checker.ValidateManifest(manifest, "0.2.0", "https://rinu143.github.io/peek");
             Assert.Contains("Unsupported manifest schema", err, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -282,7 +357,7 @@ namespace PeekSetup.Tests
                 // Verify: EffectiveFeedUrl strictly returns HKLM or default, NEVER the malicious URL!
                 string effectiveFeed = policy.GetEffectiveFeedUrl();
                 Assert.NotEqual("https://malicious-update-server.com/evil", effectiveFeed);
-                Assert.Contains("githubusercontent.com", effectiveFeed); // Fallback default
+                Assert.Contains("rinu143.github.io", effectiveFeed); // Centralized repository default
             }
             finally
             {
@@ -343,6 +418,223 @@ namespace PeekSetup.Tests
             int actualSign = Math.Sign(cmp);
 
             Assert.Equal(expectedSign, actualSign);
+        }
+
+        // ====================================================================
+        // Requirement 1 & Test Matrix: Elevated Apply Security Tests
+        // ====================================================================
+
+        [Fact]
+        public void Test_ElevatedApply_MissingSidecar_Refused()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "PeekTestApply_" + Guid.NewGuid());
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                string installerPath = Path.Combine(tempDir, "Peek-Setup-0.3.0-x64.exe");
+                File.WriteAllBytes(installerPath, new byte[] { 1, 2, 3 });
+                // Note: Sidecar JSON is intentionally omitted
+
+                var (pub, _) = GenerateTestKeyPair();
+                var verifier = new SignatureVerifier(pub);
+                var installer = new ElevatedInstaller(verifier);
+
+                int exitCode = installer.ExecuteApply("0.3.0", installerPath, skipElevationCheckForTest: true);
+                Assert.NotEqual(0, exitCode);
+                Assert.Equal(2, exitCode); // Code 2: Missing sidecar / validation failed
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+            }
+        }
+
+        [Fact]
+        public void Test_ElevatedApply_UnsignedSidecar_Refused()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "PeekTestApply_" + Guid.NewGuid());
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                string installerPath = Path.Combine(tempDir, "Peek-Setup-0.3.0-x64.exe");
+                File.WriteAllBytes(installerPath, new byte[] { 1, 2, 3 });
+
+                var manifest = CreateValidManifest("0.3.0");
+                manifest.Signature = ""; // Unsigned!
+                string sidecarPath = Path.Combine(tempDir, "Peek-Setup-0.3.0-x64.json");
+                File.WriteAllText(sidecarPath, JsonSerializer.Serialize(manifest));
+
+                var (pub, _) = GenerateTestKeyPair();
+                var verifier = new SignatureVerifier(pub);
+                var installer = new ElevatedInstaller(verifier);
+
+                int exitCode = installer.ExecuteApply("0.3.0", installerPath, skipElevationCheckForTest: true);
+                Assert.NotEqual(0, exitCode);
+                Assert.Equal(5, exitCode); // Code 5: Unsigned or invalid signature
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+            }
+        }
+
+        [Fact]
+        public void Test_ElevatedApply_WrongVersion_Refused()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "PeekTestApply_" + Guid.NewGuid());
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                string installerPath = Path.Combine(tempDir, "Peek-Setup-0.3.0-x64.exe");
+                File.WriteAllBytes(installerPath, new byte[] { 1, 2, 3 });
+
+                var (pub, priv) = GenerateTestKeyPair();
+                var manifest = CreateValidManifest("0.4.0"); // Manifest claims 0.4.0
+                manifest.Signature = SignCanonical(manifest, priv);
+                string sidecarPath = Path.Combine(tempDir, "Peek-Setup-0.3.0-x64.json");
+                File.WriteAllText(sidecarPath, JsonSerializer.Serialize(manifest));
+
+                var verifier = new SignatureVerifier(pub);
+                var installer = new ElevatedInstaller(verifier);
+
+                // Requested version is 0.3.0, but signed manifest specifies 0.4.0!
+                int exitCode = installer.ExecuteApply("0.3.0", installerPath, skipElevationCheckForTest: true);
+                Assert.NotEqual(0, exitCode);
+                Assert.Equal(2, exitCode); // Version mismatch
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+            }
+        }
+
+        [Fact]
+        public void Test_ElevatedApply_EmptyThumbprint_Refused()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "PeekTestApply_" + Guid.NewGuid());
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                string installerPath = Path.Combine(tempDir, "Peek-Setup-0.3.0-x64.exe");
+                File.WriteAllBytes(installerPath, new byte[] { 1, 2, 3 });
+
+                var (pub, priv) = GenerateTestKeyPair();
+                var manifest = CreateValidManifest("0.3.0");
+                manifest.PublisherThumbprint = ""; // Empty publisher thumbprint!
+                manifest.Signature = SignCanonical(manifest, priv);
+                string sidecarPath = Path.Combine(tempDir, "Peek-Setup-0.3.0-x64.json");
+                File.WriteAllText(sidecarPath, JsonSerializer.Serialize(manifest));
+
+                var verifier = new SignatureVerifier(pub);
+                var installer = new ElevatedInstaller(verifier);
+
+                int exitCode = installer.ExecuteApply("0.3.0", installerPath, skipElevationCheckForTest: true);
+                Assert.NotEqual(0, exitCode);
+                Assert.Equal(4, exitCode); // Code 4: Publisher thumbprint missing/empty
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+            }
+        }
+
+        [Theory]
+        [InlineData("../../0.3.0")]
+        [InlineData("..\\..\\evil")]
+        [InlineData("0.3.0/traversal")]
+        [InlineData("0.3.0\\evil")]
+        [InlineData("1.0.0;calc.exe")]
+        public void Test_ElevatedApply_VersionTraversal_Refused(string badVersion)
+        {
+            var installer = new ElevatedInstaller();
+            int exitCode = installer.ExecuteApply(badVersion, null, skipElevationCheckForTest: true);
+            Assert.Equal(1, exitCode); // Code 1: Refused before accessing filesystem
+        }
+
+        [Fact]
+        public void Test_ElevatedApply_TamperedInstaller_Refused()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "PeekTestApply_" + Guid.NewGuid());
+            string stagingDir = Path.Combine(Path.GetTempPath(), "PeekTestStage_" + Guid.NewGuid());
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(stagingDir);
+            try
+            {
+                string installerPath = Path.Combine(tempDir, "Peek-Setup-0.3.0-x64.exe");
+                // Installer has tampered content
+                File.WriteAllBytes(installerPath, new byte[] { 9, 9, 9 });
+
+                var (pub, priv) = GenerateTestKeyPair();
+                var manifest = CreateValidManifest("0.3.0");
+                // Manifest specifies hash for different content
+                manifest.Sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+                manifest.Signature = SignCanonical(manifest, priv);
+                string sidecarPath = Path.Combine(tempDir, "Peek-Setup-0.3.0-x64.json");
+                File.WriteAllText(sidecarPath, JsonSerializer.Serialize(manifest));
+
+                var verifier = new SignatureVerifier(pub);
+                var installer = new ElevatedInstaller(verifier);
+
+                int exitCode = installer.ExecuteApply("0.3.0", installerPath, skipElevationCheckForTest: true, stagingDirOverride: stagingDir);
+                Assert.NotEqual(0, exitCode);
+                // Either elevated SHA-256 mismatch (3) or ACL restriction on test dir (8)
+                Assert.True(exitCode == 3 || exitCode == 8);
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+                if (Directory.Exists(stagingDir)) { try { Directory.Delete(stagingDir, true); } catch { } }
+            }
+        }
+
+        [Fact]
+        public void Test_ElevatedApply_TestEnvVarSet_Refused()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "PeekTestApply_" + Guid.NewGuid());
+            string stagingDir = Path.Combine(Path.GetTempPath(), "PeekTestStage_" + Guid.NewGuid());
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(stagingDir);
+
+            string? originalEnv = Environment.GetEnvironmentVariable("PEEK_TEST_ALLOW_UNSIGNED");
+            try
+            {
+                // Explicitly set the test bypass variable
+                Environment.SetEnvironmentVariable("PEEK_TEST_ALLOW_UNSIGNED", "1");
+
+                byte[] dummyInstaller = new byte[] { 0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00 };
+                string installerPath = Path.Combine(tempDir, "Peek-Setup-0.3.0-x64.exe");
+                File.WriteAllBytes(installerPath, dummyInstaller);
+
+                string actualHash;
+                using (var sha = SHA256.Create())
+                {
+                    actualHash = BitConverter.ToString(sha.ComputeHash(dummyInstaller)).Replace("-", "").ToLowerInvariant();
+                }
+
+                var (pub, priv) = GenerateTestKeyPair();
+                var manifest = CreateValidManifest("0.3.0");
+                manifest.Sha256 = actualHash;
+                manifest.Size = dummyInstaller.Length;
+                manifest.Signature = SignCanonical(manifest, priv);
+
+                string sidecarPath = Path.Combine(tempDir, "Peek-Setup-0.3.0-x64.json");
+                File.WriteAllText(sidecarPath, JsonSerializer.Serialize(manifest));
+
+                var verifier = new SignatureVerifier(pub);
+                var installer = new ElevatedInstaller(verifier);
+
+                // Elevated apply must NEVER allow test bypass variable to approve unsigned installer
+                int exitCode = installer.ExecuteApply("0.3.0", installerPath, skipElevationCheckForTest: true, stagingDirOverride: stagingDir);
+                Assert.NotEqual(0, exitCode);
+                // Authenticode verification failure (4) or ACL failure (8)
+                Assert.True(exitCode == 4 || exitCode == 8);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("PEEK_TEST_ALLOW_UNSIGNED", originalEnv);
+                if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+                if (Directory.Exists(stagingDir)) { try { Directory.Delete(stagingDir, true); } catch { } }
+            }
         }
     }
 }

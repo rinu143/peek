@@ -11,8 +11,13 @@ net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo [!] Administrator privileges required.
     echo     Requesting elevation via Windows UAC...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -ArgumentList '/c \"\"%~f0\"\"' -Verb RunAs"
     exit /b
 )
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0uninstall.ps1"
+if %errorlevel% neq 0 (
+    echo.
+    echo [!] Uninstallation exited with status %errorlevel%.
+    pause
+)

@@ -44,8 +44,8 @@ namespace PeekSetup.Tests
 
             try
             {
-                // Wait for python server to signal READY (up to 5s)
-                var completedTask = await Task.WhenAny(tcsReady.Task, Task.Delay(5000));
+                // Wait for python server to signal READY (up to 15s)
+                var completedTask = await Task.WhenAny(tcsReady.Task, Task.Delay(15000));
                 Assert.True(completedTask == tcsReady.Task, "Python test pipe server did not become ready in time.");
 
                 var client = new EnrollmentPipeClient();

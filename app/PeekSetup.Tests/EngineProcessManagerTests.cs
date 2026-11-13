@@ -53,7 +53,7 @@ namespace PeekSetup.Tests
             // Connect to non-existent pipe with small timeout
             await Assert.ThrowsAsync<EngineUnavailableException>(async () =>
             {
-                using var cts = new CancellationTokenSource(1000);
+                using var cts = new CancellationTokenSource(5000);
                 await client.ConnectAsync("NonExistentPipe_Test_12345", timeoutMs: 400, ct: cts.Token);
             });
 

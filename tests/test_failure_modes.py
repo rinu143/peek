@@ -55,6 +55,24 @@ class MockDisconnectingCamera:
         return False
 
 
+class MockFaceEngine:
+    """Mock face engine with an active profile for isolated tests."""
+
+    def __init__(self, display_name: str = "Test User"):
+        self.active_profile = PeekProfile(
+            profile_id="mock_p1",
+            display_name=display_name,
+            enabled=True
+        )
+        self.enabled_profiles = [self.active_profile]
+
+    def reload_active_profile(self, user_sid=None):
+        pass
+
+    def process_frame(self, frame):
+        return None
+
+
 class TestFailureModes(unittest.TestCase):
     """Automated failure-mode resiliency tests."""
 
@@ -74,7 +92,7 @@ class TestFailureModes(unittest.TestCase):
         Mode 1: Engine killed mid-session.
         Client must detect broken pipe immediately (< 2.0s << 15s) and unblock.
         """
-        self.server = PipeServer(pipe_name=self.pipe_name)
+        self.server = PipeServer(pipe_name=self.pipe_name, face_engine=MockFaceEngine())
         self.server.start()
         time.sleep(0.15)
 
@@ -107,7 +125,7 @@ class TestFailureModes(unittest.TestCase):
         REASON_CAMERA_ERROR in < 3.0s (<< 15s) without crashing.
         """
         cam = MockDisconnectingCamera()
-        self.server = PipeServer(pipe_name=self.pipe_name, camera=cam)
+        self.server = PipeServer(pipe_name=self.pipe_name, camera=cam, face_engine=MockFaceEngine())
         self.server.start()
         time.sleep(0.15)
 

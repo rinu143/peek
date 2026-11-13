@@ -5,6 +5,8 @@ using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using Microsoft.Win32;
 using PeekUpdate.Models;
 
@@ -12,6 +14,8 @@ namespace PeekUpdate.Services
 {
     public class ElevatedInstaller
     {
+        public static readonly Regex VersionRegex = new(@"^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$", RegexOptions.Compiled);
+
         private readonly SignatureVerifier _signatureVerifier;
         private readonly PolicyManager _policyManager;
 
@@ -28,15 +32,56 @@ namespace PeekUpdate.Services
             return principal.IsInRole(WindowsBuiltInRole.Administrator);
         }
 
+        public static bool IsRunningFromTempRunner()
+        {
+            string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? string.Empty;
+            return currentExe.IndexOf("PeekUpdateRunner-", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         public static bool RelaunchElevated(string version)
         {
             try
             {
-                string exePath = Process.GetCurrentProcess().MainModule?.FileName ?? "PeekUpdate.exe";
+                if (string.IsNullOrWhiteSpace(version) || !VersionRegex.IsMatch(version.Trim()))
+                {
+                    Console.WriteLine("[!] Invalid version format for elevation.");
+                    return false;
+                }
+
+                string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? "PeekUpdate.exe";
+                if (!File.Exists(currentExe))
+                {
+                    currentExe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PeekUpdate.exe");
+                }
+
+                string tempBase = Path.GetTempPath();
+                string runnerDir = Path.Combine(tempBase, $"PeekUpdateRunner-{Guid.NewGuid():N}");
+                Directory.CreateDirectory(runnerDir);
+
+                string runnerExe = Path.Combine(runnerDir, "PeekUpdate.exe");
+                File.Copy(currentExe, runnerExe, true);
+
+                string? currentDir = Path.GetDirectoryName(currentExe);
+                if (!string.IsNullOrEmpty(currentDir) && Directory.Exists(currentDir))
+                {
+                    foreach (var ext in new[] { "*.dll", "*.json" })
+                    {
+                        foreach (var f in Directory.GetFiles(currentDir, ext))
+                        {
+                            try
+                            {
+                                string dest = Path.Combine(runnerDir, Path.GetFileName(f));
+                                if (!File.Exists(dest)) File.Copy(f, dest, true);
+                            }
+                            catch { }
+                        }
+                    }
+                }
+
                 var psi = new ProcessStartInfo
                 {
-                    FileName = exePath,
-                    Arguments = $"--apply --version \"{version}\"",
+                    FileName = runnerExe,
+                    Arguments = $"--apply --version \"{version.Trim()}\"",
                     UseShellExecute = true,
                     Verb = "runas"
                 };
@@ -51,60 +96,241 @@ namespace PeekUpdate.Services
             }
         }
 
-        public int ExecuteApply(string version, string? sourceInstallerPath = null)
+        public static int LaunchFromTempRunner(string version)
+        {
+            try
+            {
+                string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(currentExe) || !File.Exists(currentExe))
+                {
+                    currentExe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PeekUpdate.exe");
+                }
+
+                string tempBase = Path.GetTempPath();
+                string runnerDir = Path.Combine(tempBase, $"PeekUpdateRunner-{Guid.NewGuid():N}");
+                Directory.CreateDirectory(runnerDir);
+
+                string runnerExe = Path.Combine(runnerDir, "PeekUpdate.exe");
+                File.Copy(currentExe, runnerExe, true);
+
+                string? currentDir = Path.GetDirectoryName(currentExe);
+                if (!string.IsNullOrEmpty(currentDir) && Directory.Exists(currentDir))
+                {
+                    foreach (var ext in new[] { "*.dll", "*.json" })
+                    {
+                        foreach (var f in Directory.GetFiles(currentDir, ext))
+                        {
+                            try
+                            {
+                                string dest = Path.Combine(runnerDir, Path.GetFileName(f));
+                                if (!File.Exists(dest)) File.Copy(f, dest, true);
+                            }
+                            catch { }
+                        }
+                    }
+                }
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = runnerExe,
+                    Arguments = $"--apply --version \"{version.Trim()}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                using var proc = Process.Start(psi);
+                if (proc == null)
+                {
+                    Console.WriteLine("[!] Failed to launch PeekUpdate runner copy.");
+                    return 1;
+                }
+
+                proc.OutputDataReceived += (_, e) => { if (e.Data != null) Console.WriteLine(e.Data); };
+                proc.ErrorDataReceived += (_, e) => { if (e.Data != null) Console.Error.WriteLine(e.Data); };
+                proc.BeginOutputReadLine();
+                proc.BeginErrorReadLine();
+                proc.WaitForExit();
+
+                return proc.ExitCode;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[!] Failed to run PeekUpdate from temp runner: {ex.Message}");
+                return 1;
+            }
+        }
+
+        public int ExecuteApply(string version, string? sourceInstallerPath = null, bool skipElevationCheckForTest = false, string? stagingDirOverride = null)
         {
             Console.WriteLine($"[*] Executing elevated update installation for version {version}...");
 
-            if (!IsAdministrator())
+            // 0. Validate version before building ANY paths
+            if (string.IsNullOrWhiteSpace(version) || !VersionRegex.IsMatch(version.Trim()))
+            {
+                Console.WriteLine($"[!] FATAL: Target version '{version}' is invalid. Must match ^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.]+)?$");
+                return 1;
+            }
+            version = version.Trim();
+
+            if (!skipElevationCheckForTest && !IsAdministrator())
             {
                 Console.WriteLine("[!] ERROR: --apply requires elevated administrator privileges.");
                 return 1;
             }
 
-            // 1. Resolve source installer
+            // 1. Resolve source installer and mandatory manifest sidecar
             if (string.IsNullOrWhiteSpace(sourceInstallerPath) || !File.Exists(sourceInstallerPath))
             {
                 string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
                 sourceInstallerPath = Path.Combine(localAppData, "Peek", "updates", version, $"Peek-Setup-{version}-x64.exe");
+
+                if (!File.Exists(sourceInstallerPath))
+                {
+                    string commonAppData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+                    string candidatePath = Path.Combine(commonAppData, "Peek", "updates", version, $"Peek-Setup-{version}-x64.exe");
+                    if (File.Exists(candidatePath))
+                    {
+                        sourceInstallerPath = candidatePath;
+                    }
+                }
+            }
+
+            string manifestSidecar = Path.ChangeExtension(sourceInstallerPath, ".json");
+
+            // Manifest sidecar is MANDATORY
+            if (!File.Exists(manifestSidecar))
+            {
+                Console.WriteLine($"[!] FATAL: Mandatory manifest sidecar file missing at: {manifestSidecar}");
+                return 2;
             }
 
             if (!File.Exists(sourceInstallerPath))
             {
-                Console.WriteLine($"[!] ERROR: Downloaded installer artifact not found at {sourceInstallerPath}");
+                Console.WriteLine($"[!] FATAL: Downloaded installer artifact not found at {sourceInstallerPath}");
                 return 2;
             }
 
-            // 2. Load manifest from update state or manifest file
-            var updateState = _policyManager.LoadUserState();
-            UpdateManifest? manifest = null;
-
-            if (!string.IsNullOrWhiteSpace(updateState.Sha256))
+            // 2. Load and verify signed manifest
+            UpdateManifest? manifest;
+            try
             {
-                manifest = new UpdateManifest
-                {
-                    Version = updateState.AvailableVersion ?? version,
-                    Sha256 = updateState.Sha256,
-                    Size = updateState.Size,
-                    PublisherThumbprint = updateState.PublisherThumbprint ?? string.Empty
-                };
+                string mJson = File.ReadAllText(manifestSidecar);
+                manifest = JsonSerializer.Deserialize<UpdateManifest>(mJson);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[!] FATAL: Failed to parse manifest sidecar JSON: {ex.Message}");
+                return 2;
             }
 
-            // Check if manifest was downloaded alongside
-            string manifestSidecar = Path.ChangeExtension(sourceInstallerPath, ".json");
-            if (File.Exists(manifestSidecar))
+            if (manifest == null)
             {
-                try
+                Console.WriteLine("[!] FATAL: Manifest sidecar deserialized to null.");
+                return 2;
+            }
+
+            // First verify ECDSA signature (fail closed if missing, unsigned or invalid)
+            if (string.IsNullOrWhiteSpace(manifest.Signature))
+            {
+                Console.WriteLine("[!] FATAL: Manifest sidecar is unsigned (missing signature). Update refused.");
+                return 5;
+            }
+
+            if (!_signatureVerifier.VerifyManifest(manifest))
+            {
+                Console.WriteLine("[!] FATAL: Manifest sidecar ECDSA signature verification failed. Untrusted or tampered update manifest.");
+                return 5;
+            }
+            Console.WriteLine("[OK] Manifest ECDSA signature verified successfully.");
+
+            // Verify version == --version
+            if (!string.Equals(manifest.Version, version, StringComparison.Ordinal))
+            {
+                Console.WriteLine($"[!] FATAL: Manifest version '{manifest.Version}' does not match target version '{version}'. Update refused.");
+                return 2;
+            }
+
+            // Verify version > installed
+            string installedVerStr = UpdateChecker.GetAppVersion();
+            if (SemVersion.TryParse(manifest.Version, out var mVer) && SemVersion.TryParse(installedVerStr, out var iVer) && mVer != null && iVer != null)
+            {
+                if (mVer <= iVer)
                 {
-                    string mJson = File.ReadAllText(manifestSidecar);
-                    manifest = JsonSerializer.Deserialize<UpdateManifest>(mJson);
+                    Console.WriteLine($"[!] FATAL: Manifest version {manifest.Version} is not greater than installed version {installedVerStr}. Downgrade/reinstall refused.");
+                    return 2;
                 }
-                catch { }
+            }
+
+            // Verify not expired
+            if (string.IsNullOrWhiteSpace(manifest.Expires) || !DateTime.TryParse(manifest.Expires, out var expiresDate))
+            {
+                Console.WriteLine("[!] FATAL: Manifest missing valid 'expires' timestamp.");
+                return 2;
+            }
+            if (expiresDate.ToUniversalTime() < DateTime.UtcNow)
+            {
+                Console.WriteLine($"[!] FATAL: Manifest expired on {manifest.Expires}. Update refused.");
+                return 2;
+            }
+
+            if (!string.IsNullOrWhiteSpace(manifest.Released) && DateTime.TryParse(manifest.Released, out var releaseDate))
+            {
+                if (DateTime.UtcNow - releaseDate.ToUniversalTime() > TimeSpan.FromDays(30))
+                {
+                    Console.WriteLine($"[!] FATAL: Manifest release date {manifest.Released} is over 30 days old. Expired.");
+                    return 2;
+                }
+            }
+
+            // Verify channel allowed
+            string effectiveChannel = _policyManager.GetEffectiveChannel();
+            if (!string.Equals(manifest.Channel, effectiveChannel, StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"[!] FATAL: Manifest channel '{manifest.Channel}' does not match effective channel '{effectiveChannel}'. Update refused.");
+                return 2;
+            }
+
+            // Verify host allow-list
+            if (!Uri.TryCreate(manifest.Url, UriKind.Absolute, out var updateUri) || updateUri.Scheme != Uri.UriSchemeHttps)
+            {
+                Console.WriteLine($"[!] FATAL: Manifest URL is invalid or not HTTPS: '{manifest.Url}'");
+                return 2;
+            }
+
+            if (!UpdateChecker.IsHostAllowed(updateUri.Host, _policyManager.GetEffectiveFeedUrl()))
+            {
+                Console.WriteLine($"[!] FATAL: Manifest download host '{updateUri.Host}' is not on the trusted allow-list.");
+                return 2;
+            }
+
+            // Verify size cap
+            if (manifest.Size <= 0 || manifest.Size > UpdateChecker.MaxAllowedSizeBytes)
+            {
+                Console.WriteLine($"[!] FATAL: Manifest download size ({manifest.Size} bytes) is invalid or exceeds 500 MB limit.");
+                return 2;
+            }
+
+            // Use sha256 and publisher_thumbprint from SIGNED manifest only.
+            // publisher_thumbprint is REQUIRED (non-empty) for every release; reject manifests without it.
+            if (string.IsNullOrWhiteSpace(manifest.Sha256) || manifest.Sha256.Trim().Length != 64)
+            {
+                Console.WriteLine($"[!] FATAL: Manifest specifies invalid SHA-256 hash: '{manifest.Sha256}'");
+                return 3;
+            }
+
+            if (string.IsNullOrWhiteSpace(manifest.PublisherThumbprint))
+            {
+                Console.WriteLine("[!] FATAL: publisher_thumbprint is missing or empty in signed manifest. Every release requires a non-empty publisher_thumbprint.");
+                return 4;
             }
 
             // 3. Stage into %ProgramData%\Peek\updates\<version> with admin-only ACL
             string programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-            string adminUpdateDir = Path.Combine(programData, "Peek", "updates", version);
+            string adminUpdateDir = stagingDirOverride ?? Path.Combine(programData, "Peek", "updates", version);
 
+            string adminInstallerPath = Path.Combine(adminUpdateDir, Path.GetFileName(sourceInstallerPath));
             try
             {
                 if (!Directory.Exists(adminUpdateDir))
@@ -112,7 +338,7 @@ namespace PeekUpdate.Services
                     Directory.CreateDirectory(adminUpdateDir);
                 }
 
-                // Apply admin-only ACL
+                // Apply strict admin-only ACL; failure to set this is fatal
                 var dirAcl = new DirectorySecurity();
                 dirAcl.SetAccessRuleProtection(true, false);
                 var systemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
@@ -122,74 +348,78 @@ namespace PeekUpdate.Services
                 dirAcl.AddAccessRule(new FileSystemAccessRule(systemSid, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
                 dirAcl.AddAccessRule(new FileSystemAccessRule(adminSid, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
                 dirAcl.AddAccessRule(new FileSystemAccessRule(usersSid, FileSystemRights.ReadAndExecute, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+
+                if (skipElevationCheckForTest)
+                {
+                    try
+                    {
+                        var currentUserSid = WindowsIdentity.GetCurrent().User;
+                        if (currentUserSid != null)
+                        {
+                            dirAcl.AddAccessRule(new FileSystemAccessRule(currentUserSid, FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+                        }
+                    }
+                    catch { }
+                }
+
                 new DirectoryInfo(adminUpdateDir).SetAccessControl(dirAcl);
+
+                File.Copy(sourceInstallerPath, adminInstallerPath, true);
+                Console.WriteLine($"[OK] Copied installer to protected location: {adminInstallerPath}");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[!] WARNING: Could not configure strict ACL on {adminUpdateDir}: {ex.Message}");
+                Console.WriteLine($"[!] FATAL: Could not stage installer or configure strict admin ACL on {adminUpdateDir}: {ex.Message}");
+                return 8;
             }
 
-            string adminInstallerPath = Path.Combine(adminUpdateDir, Path.GetFileName(sourceInstallerPath));
-            File.Copy(sourceInstallerPath, adminInstallerPath, true);
-            Console.WriteLine($"[OK] Copied installer to protected location: {adminInstallerPath}");
+            // 4. Open with FileShare.Read and keep handle open until process has started
+            FileStream? lockedStream = null;
+            int installerExitCode = -1;
 
-            // 4. TRIPLE SECURITY RE-VERIFICATION IN ELEVATED CONTEXT
+            string logDir = Path.Combine(programData, "Peek", "logs");
+            if (!Directory.Exists(logDir)) Directory.CreateDirectory(logDir);
+            string installLogPath = Path.Combine(logDir, "update_install.log");
+            string installerArgs = $"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /UPDATE /LOG=\"{installLogPath}\"";
 
-            // Gate A: Re-verify SHA-256
-            if (manifest != null && !string.IsNullOrWhiteSpace(manifest.Sha256))
+            try
             {
-                Console.WriteLine("[*] [Re-verify 1/3] Computing SHA-256 in elevated context...");
+                lockedStream = new FileStream(adminInstallerPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+                // Gate A: Re-verify SHA-256 on locked copy
+                Console.WriteLine("[*] [Re-verify 1/2] Computing SHA-256 in elevated context on protected copy...");
                 string actualHash;
                 using (var sha = SHA256.Create())
-                using (var fs = File.OpenRead(adminInstallerPath))
                 {
-                    byte[] hash = sha.ComputeHash(fs);
+                    byte[] hash = sha.ComputeHash(lockedStream);
                     actualHash = BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
                 }
+                lockedStream.Position = 0;
 
                 if (!string.Equals(actualHash, manifest.Sha256.Trim().ToLowerInvariant(), StringComparison.OrdinalIgnoreCase))
                 {
                     Console.WriteLine($"[!] FATAL: Elevated SHA-256 re-verification failed! Expected: {manifest.Sha256}, Actual: {actualHash}");
-                    File.Delete(adminInstallerPath);
+                    lockedStream.Dispose();
+                    lockedStream = null;
+                    try { File.Delete(adminInstallerPath); } catch { }
                     return 3;
                 }
                 Console.WriteLine("[OK] Elevated SHA-256 verified successfully.");
-            }
 
-            // Gate B: Re-verify Authenticode (WinVerifyTrust + publisher thumbprint)
-            Console.WriteLine("[*] [Re-verify 2/3] Verifying Authenticode signature and publisher thumbprint...");
-            if (!AuthenticodeVerifier.VerifyAuthenticode(adminInstallerPath, manifest?.PublisherThumbprint, out string authErr))
-            {
-                Console.WriteLine($"[!] FATAL: Authenticode signature verification failed: {authErr}");
-                File.Delete(adminInstallerPath);
-                return 4;
-            }
-            Console.WriteLine("[OK] Authenticode signature verified successfully.");
-
-            // Gate C: Re-verify Manifest Signature (if full manifest available)
-            if (manifest != null && !string.IsNullOrWhiteSpace(manifest.Signature))
-            {
-                Console.WriteLine("[*] [Re-verify 3/3] Re-verifying manifest ECDSA signature...");
-                if (!_signatureVerifier.VerifyManifest(manifest))
+                // Gate B: Re-verify Authenticode (allowTestOverride: false - elevated apply NEVER allows unsigned)
+                Console.WriteLine("[*] [Re-verify 2/2] Verifying Authenticode signature and publisher thumbprint...");
+                if (!AuthenticodeVerifier.VerifyAuthenticode(adminInstallerPath, manifest.PublisherThumbprint, out string authErr, allowTestOverride: false))
                 {
-                    Console.WriteLine("[!] FATAL: Manifest ECDSA signature re-verification failed!");
-                    File.Delete(adminInstallerPath);
-                    return 5;
+                    Console.WriteLine($"[!] FATAL: Authenticode signature verification failed: {authErr}");
+                    lockedStream.Dispose();
+                    lockedStream = null;
+                    try { File.Delete(adminInstallerPath); } catch { }
+                    return 4;
                 }
-                Console.WriteLine("[OK] Manifest ECDSA signature verified successfully.");
-            }
+                Console.WriteLine("[OK] Authenticode signature verified successfully.");
 
-            // 5. Execute Installer with /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /UPDATE /LOG
-            string logDir = Path.Combine(programData, "Peek", "logs");
-            if (!Directory.Exists(logDir)) Directory.CreateDirectory(logDir);
-            string installLogPath = Path.Combine(logDir, "update_install.log");
-
-            string installerArgs = $"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /UPDATE /LOG=\"{installLogPath}\"";
-            Console.WriteLine($"[*] Running installer: {adminInstallerPath} {installerArgs}");
-
-            int installerExitCode = -1;
-            try
-            {
+                // Launch installer process while holding lockedStream open
+                Console.WriteLine($"[*] Running installer: {adminInstallerPath} {installerArgs}");
                 var psi = new ProcessStartInfo
                 {
                     FileName = adminInstallerPath,
@@ -199,6 +429,11 @@ namespace PeekUpdate.Services
                 };
 
                 using var proc = Process.Start(psi);
+
+                // Handle is held open until the installer process has started
+                lockedStream.Dispose();
+                lockedStream = null;
+
                 if (proc != null)
                 {
                     proc.WaitForExit();
@@ -210,6 +445,10 @@ namespace PeekUpdate.Services
                 Console.WriteLine($"[!] Failed to execute installer: {ex.Message}");
                 installerExitCode = -99;
             }
+            finally
+            {
+                lockedStream?.Dispose();
+            }
 
             if (installerExitCode != 0)
             {
@@ -220,7 +459,7 @@ namespace PeekUpdate.Services
 
             Console.WriteLine("[OK] Installer finished successfully.");
 
-            // 6. Post-Install Health Check: PeekSetup.exe --self-test
+            // 5. Post-Install Health Check: PeekSetup.exe --self-test with 30s timeout and HasExited check
             string installDir = GetInstalledPath();
             string setupExe = Path.Combine(installDir, "PeekSetup.exe");
             bool selfTestPassed = false;
@@ -240,11 +479,23 @@ namespace PeekUpdate.Services
                     using var testProc = Process.Start(testPsi);
                     if (testProc != null)
                     {
-                        testProc.WaitForExit(10000);
-                        selfTestPassed = (testProc.ExitCode == 0);
+                        testProc.WaitForExit(30000); // 30 second timeout
+                        if (!testProc.HasExited)
+                        {
+                            try { testProc.Kill(); } catch { }
+                            Console.WriteLine("[!] Health check timed out after 30 seconds.");
+                            selfTestPassed = false;
+                        }
+                        else
+                        {
+                            selfTestPassed = (testProc.ExitCode == 0);
+                        }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[!] Health check execution error: {ex.Message}");
+                }
             }
             else
             {
@@ -260,11 +511,12 @@ namespace PeekUpdate.Services
 
             Console.WriteLine("[OK] Health check passed cleanly.");
 
-            // 7. Cleanup downloads
+            // 6. Cleanup downloads
             try
             {
                 if (File.Exists(adminInstallerPath)) File.Delete(adminInstallerPath);
                 if (File.Exists(sourceInstallerPath)) File.Delete(sourceInstallerPath);
+                if (File.Exists(manifestSidecar)) File.Delete(manifestSidecar);
                 string? userDir = Path.GetDirectoryName(sourceInstallerPath);
                 if (!string.IsNullOrEmpty(userDir) && Directory.Exists(userDir))
                 {
@@ -273,7 +525,8 @@ namespace PeekUpdate.Services
             }
             catch { }
 
-            // 8. Update State to up_to_date
+            // 7. Update State to up_to_date
+            var updateState = _policyManager.LoadUserState();
             updateState.Status = "up_to_date";
             updateState.InstalledVersion = version;
             updateState.AvailableVersion = null;
@@ -301,7 +554,7 @@ namespace PeekUpdate.Services
                         CreateNoWindow = true
                     };
                     using var proc = Process.Start(psi);
-                    proc?.WaitForExit(15000);
+                    proc?.WaitForExit(30000);
                     Console.WriteLine("[OK] Rollback executed.");
                 }
                 catch (Exception ex)

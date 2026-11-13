@@ -87,6 +87,11 @@ namespace PeekUpdate.Services
             if (File.Exists(targetPath)) File.Delete(targetPath);
             File.Move(tempPath, targetPath);
 
+            // Write manifest sidecar alongside installer for mandatory elevated verification
+            string sidecarPath = Path.ChangeExtension(targetPath, ".json");
+            string manifestJson = System.Text.Json.JsonSerializer.Serialize(manifest, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(sidecarPath, manifestJson);
+
             return targetPath;
         }
     }

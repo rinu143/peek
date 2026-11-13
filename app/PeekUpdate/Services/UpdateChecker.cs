@@ -309,7 +309,8 @@ namespace PeekUpdate.Services
             if (cleanHost == "github.com" ||
                 cleanHost == "www.github.com" ||
                 cleanHost == "objects.githubusercontent.com" ||
-                cleanHost == "raw.githubusercontent.com")
+                cleanHost == "raw.githubusercontent.com" ||
+                cleanHost == "rinu143.github.io")
             {
                 return true;
             }

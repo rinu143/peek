@@ -104,6 +104,32 @@ if (-not (Test-Path (Join-Path $RepoRoot "VERSION"))) {
     $RepoRoot = (Get-Item $PSScriptRoot).Parent.Parent.FullName
 }
 
+function Escape-JsonString {
+    param([string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { return "" }
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($char in $Value.ToCharArray()) {
+        switch ($char) {
+            '"'  { $null = $sb.Append('\"') }
+            '\'  { $null = $sb.Append('\\') }
+            "`b" { $null = $sb.Append('\b') }
+            "`f" { $null = $sb.Append('\f') }
+            "`n" { $null = $sb.Append('\n') }
+            "`r" { $null = $sb.Append('\r') }
+            "`t" { $null = $sb.Append('\t') }
+            default {
+                $code = [int][char]$char
+                if ($code -lt 0x20) {
+                    $null = $sb.Append(('\\u{0:x4}' -f $code))
+                } else {
+                    $null = $sb.Append($char)
+                }
+            }
+        }
+    }
+    return $sb.ToString()
+}
+
 # -----------------------------------------------------------------------------
 # Helper: Canonical JSON Formatter
 # Must match C# CanonicalJsonSerializer strictly:
@@ -122,18 +148,18 @@ function Get-CanonicalJson {
 
     $sb = New-Object System.Text.StringBuilder
     $null = $sb.Append("{")
-    $null = $sb.Append('"channel":"').Append($ManifestData["channel"]).Append('",')
+    $null = $sb.Append('"channel":"').Append((Escape-JsonString $ManifestData["channel"])).Append('",')
     $null = $sb.Append('"critical":').Append($critStr).Append(',')
-    $null = $sb.Append('"expires":"').Append($ManifestData["expires"]).Append('",')
-    $null = $sb.Append('"min_supported_version":"').Append($ManifestData["min_supported_version"]).Append('",')
-    $null = $sb.Append('"notes_url":"').Append($ManifestData["notes_url"]).Append('",')
-    $null = $sb.Append('"publisher_thumbprint":"').Append($ManifestData["publisher_thumbprint"]).Append('",')
-    $null = $sb.Append('"released":"').Append($ManifestData["released"]).Append('",')
+    $null = $sb.Append('"expires":"').Append((Escape-JsonString $ManifestData["expires"])).Append('",')
+    $null = $sb.Append('"min_supported_version":"').Append((Escape-JsonString $ManifestData["min_supported_version"])).Append('",')
+    $null = $sb.Append('"notes_url":"').Append((Escape-JsonString $ManifestData["notes_url"])).Append('",')
+    $null = $sb.Append('"publisher_thumbprint":"').Append((Escape-JsonString $ManifestData["publisher_thumbprint"])).Append('",')
+    $null = $sb.Append('"released":"').Append((Escape-JsonString $ManifestData["released"])).Append('",')
     $null = $sb.Append('"schema":').Append($schemaVal).Append(',')
-    $null = $sb.Append('"sha256":"').Append($ManifestData["sha256"]).Append('",')
+    $null = $sb.Append('"sha256":"').Append((Escape-JsonString $ManifestData["sha256"])).Append('",')
     $null = $sb.Append('"size":').Append($sizeVal).Append(',')
-    $null = $sb.Append('"url":"').Append($ManifestData["url"]).Append('",')
-    $null = $sb.Append('"version":"').Append($ManifestData["version"]).Append('"')
+    $null = $sb.Append('"url":"').Append((Escape-JsonString $ManifestData["url"])).Append('",')
+    $null = $sb.Append('"version":"').Append((Escape-JsonString $ManifestData["version"])).Append('"')
     $null = $sb.Append("}")
 
     return $sb.ToString()
@@ -354,10 +380,10 @@ $fileSize = $installerItem.Length
 $fileHash = (Get-FileHash -Path $InstallerPath -Algorithm SHA256).Hash.ToLowerInvariant()
 
 if (-not $Url) {
-    $Url = "https://github.com/peek/releases/download/v$Version/$($installerItem.Name)"
+    $Url = "https://github.com/rinu143/peek/releases/download/v$Version/$($installerItem.Name)"
 }
 if (-not $NotesUrl) {
-    $NotesUrl = "https://github.com/peek/releases/tag/v$Version"
+    $NotesUrl = "https://github.com/rinu143/peek/releases/tag/v$Version"
 }
 
 $nowUtc = [DateTime]::UtcNow
