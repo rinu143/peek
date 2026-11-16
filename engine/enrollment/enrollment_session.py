@@ -297,6 +297,13 @@ class EnrollmentSession:
 
         existing_profiles = self.profile_store.list_profiles()
 
+        # If not keeping existing, purge any unlinked/disabled draft profiles from storage
+        if not keep_existing:
+            for ep in list(existing_profiles):
+                if not ep.enabled:
+                    self.profile_store.delete_profile(ep.profile_id)
+            existing_profiles = self.profile_store.list_profiles()
+
         # Check for recapture
         recapture_target: Optional[PeekProfile] = None
         if profile_id:
@@ -322,9 +329,13 @@ class EnrollmentSession:
         if len(existing_profiles) >= 5:
             raise IdentityLimitError("Maximum number of identities (5) reached")
 
-        # Duplicate check against existing templates
+        # Duplicate check against existing active templates
         new_embs = [np.asarray(t.embedding, dtype=np.float32) for t in self.final_templates]
         for ep in existing_profiles:
+            # Unlinked / disabled draft profiles must never block enrollment as a duplicate
+            if not ep.enabled:
+                continue
+
             threshold = ep.matching_threshold or matching_threshold
             for et in ep.templates:
                 e_vec = np.asarray(et.embedding, dtype=np.float32)

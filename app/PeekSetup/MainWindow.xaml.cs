@@ -35,16 +35,31 @@ namespace PeekSetup
 
         protected override async void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
-            if (DataContext is MainViewModel vm && vm.IsEnrolling)
+            if (DataContext is MainViewModel vm)
             {
-                // Cleanly cancel pipe enrollment on window close
-                try
+                if (vm.IsEnrolling)
                 {
-                    await vm.CancelEnrollmentFlowAsync();
+                    // Cleanly cancel pipe enrollment on window close
+                    try
+                    {
+                        await vm.CancelEnrollmentFlowAsync();
+                    }
+                    catch
+                    {
+                        // Ignore during shutdown
+                    }
                 }
-                catch
+                else if (vm.IsPasswordLinkStep && !vm.IsPasswordLinked)
                 {
-                    // Ignore during shutdown
+                    // If user exits before entering password and linking, clean up the unlinked draft profile
+                    try
+                    {
+                        await vm.CleanupUnlinkedDraftAsync();
+                    }
+                    catch
+                    {
+                        // Ignore during shutdown
+                    }
                 }
             }
             base.OnClosing(e);

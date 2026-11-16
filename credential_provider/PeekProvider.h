@@ -43,10 +43,18 @@ public:
     static void SetTestConsoleUserSid(const std::wstring& sid) { s_testConsoleUserSid = sid; s_hasTestConsoleUserSid = true; }
     static void SetTestSessionId(DWORD sessionId) { s_testSessionId = sessionId; s_hasTestSessionId = true; }
     static void SetTestSessionUserName(const std::wstring& userName) { s_testSessionUserName = userName; s_hasTestSessionUserName = true; }
+    static void SetTestLastLoggedOnUserSid(const std::wstring& sid) { s_testLastLoggedOnUserSid = sid; s_hasTestLastLoggedOnUserSid = true; }
+    static void SetTestAutoSelect(bool enabled) { s_testAutoSelect = enabled; s_hasTestAutoSelect = true; }
+    static bool HasTestLastLoggedOnUserSid() { return s_hasTestLastLoggedOnUserSid; }
+    static std::wstring GetTestLastLoggedOnUserSid() { return s_testLastLoggedOnUserSid; }
+    static bool HasTestAutoSelect() { return s_hasTestAutoSelect; }
+    static bool GetTestAutoSelect() { return s_testAutoSelect; }
     static void ClearTestOverrides() {
         s_testConsoleUserSid.clear(); s_hasTestConsoleUserSid = false;
         s_testSessionId = 0xFFFFFFFF; s_hasTestSessionId = false;
         s_testSessionUserName.clear(); s_hasTestSessionUserName = false;
+        s_testLastLoggedOnUserSid.clear(); s_hasTestLastLoggedOnUserSid = false;
+        s_testAutoSelect = false; s_hasTestAutoSelect = false;
     }
 #endif
 
@@ -75,5 +83,9 @@ private:
     static inline bool s_hasTestSessionId = false;
     static inline std::wstring s_testSessionUserName = L"";
     static inline bool s_hasTestSessionUserName = false;
+    static inline std::wstring s_testLastLoggedOnUserSid = L"";
+    static inline bool s_hasTestLastLoggedOnUserSid = false;
+    static inline bool s_testAutoSelect = false;
+    static inline bool s_hasTestAutoSelect = false;
 #endif
 };

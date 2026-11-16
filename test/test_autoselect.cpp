@@ -2321,6 +2321,117 @@ int main()
         }
     }
 
+    // -------------------------------------------------------------
+    // Test 34: Cold Boot Resolution via LastLoggedOnUserSID (enrolled user)
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 34] Testing Cold Boot Resolution (no session, matching enrolled LastLoggedOnUserSID)...\n";
+    {
+        PeekProvider::ClearTestOverrides();
+        PeekProvider provider;
+        provider.SetUsageScenario(CPUS_LOGON, 0);
+
+        const std::wstring coldBootSid = L"S-1-5-21-COLD-BOOT-ENROLLED-1001";
+        const std::wstring coldBootProfile = L"cold_boot_profile";
+        const std::wstring coldBootPassword = L"ColdBootPassword123!";
+
+        // Emulate cold boot: No console session, but LastLoggedOnUserSID is set
+        PeekProvider::SetTestSessionId(0xFFFFFFFF);
+        PeekProvider::SetTestConsoleUserSid(L"NONE");
+        PeekProvider::SetTestLastLoggedOnUserSid(coldBootSid);
+
+        auto fakeStore = std::make_shared<PeekSecretVault::InMemoryLsaSecretStore>();
+        auto fakeIdStore = std::make_shared<PeekSecretVault::InMemoryIdentityStore>();
+        fakeIdStore->SetAuthorizedIdentities(coldBootSid, { coldBootProfile });
+        PeekSecretVault::SetLsaSecretStore(fakeStore);
+        PeekSecretVault::SetIdentityStore(fakeIdStore);
+        PeekSecretVault::StorePasswordSecret(coldBootSid, coldBootProfile, coldBootPassword, fakeStore.get());
+
+        MockCredentialProviderUserArray* pArray = new MockCredentialProviderUserArray();
+        MockCredentialProviderUser* pUser = new MockCredentialProviderUser(coldBootSid, L"ColdUser", L"ColdDomain");
+        pArray->AddUser(pUser);
+        pUser->Release();
+
+        provider.SetUserArray(pArray);
+
+        DWORD count = 0;
+        DWORD defaultIndex = 999;
+        BOOL autoLogon = TRUE;
+
+        HRESULT hr = provider.GetCredentialCount(&count, &defaultIndex, &autoLogon);
+        bool coldBootOk = (SUCCEEDED(hr) && count == 1 && autoLogon == FALSE);
+
+        PeekProvider::ClearTestOverrides();
+        pArray->Release();
+
+        if (coldBootOk)
+        {
+            std::wcout << L"  PASS: Cold boot correctly offered credential tile for enrolled LastLoggedOnUserSID\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Cold boot test failed: hr=0x" << std::hex << hr << L", count=" << count << L"\n";
+            failed++;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Test 35: Primary Unlock Source AutoSelect Toggle (Tile Defaulting)
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 35] Testing AutoSelect primary unlock toggle and auto-logon...\n";
+    {
+        PeekProvider::ClearTestOverrides();
+        PeekProvider provider;
+        provider.SetUsageScenario(CPUS_LOGON, 0);
+
+        const std::wstring sid = L"S-1-5-21-AUTOPRIMARY-1001";
+        const std::wstring profile = L"primary_profile";
+        const std::wstring password = L"PrimaryPass123!";
+
+        PeekProvider::SetTestSessionId(1);
+        PeekProvider::SetTestConsoleUserSid(sid);
+
+        auto fakeStore = std::make_shared<PeekSecretVault::InMemoryLsaSecretStore>();
+        auto fakeIdStore = std::make_shared<PeekSecretVault::InMemoryIdentityStore>();
+        fakeIdStore->SetAuthorizedIdentities(sid, { profile });
+        PeekSecretVault::SetLsaSecretStore(fakeStore);
+        PeekSecretVault::SetIdentityStore(fakeIdStore);
+        PeekSecretVault::StorePasswordSecret(sid, profile, password, fakeStore.get());
+
+        MockCredentialProviderUserArray* pArray = new MockCredentialProviderUserArray();
+        MockCredentialProviderUser* pUser = new MockCredentialProviderUser(sid, L"PrimaryUser", L"PrimaryDomain");
+        pArray->AddUser(pUser);
+        pUser->Release();
+
+        provider.SetUserArray(pArray);
+
+        // Case 1: AutoSelect = true -> defaultIndex = 0
+        PeekProvider::SetTestAutoSelect(true);
+        DWORD count1 = 0, defaultIndex1 = 999;
+        BOOL autoLogon1 = TRUE;
+        provider.GetCredentialCount(&count1, &defaultIndex1, &autoLogon1);
+        bool autoSelectEnabledOk = (count1 == 1 && defaultIndex1 == 0 && autoLogon1 == FALSE);
+
+        // Case 2: AutoSelect = false -> defaultIndex = CREDENTIAL_PROVIDER_NO_DEFAULT
+        PeekProvider::SetTestAutoSelect(false);
+        DWORD count2 = 0, defaultIndex2 = 999;
+        BOOL autoLogon2 = TRUE;
+        provider.GetCredentialCount(&count2, &defaultIndex2, &autoLogon2);
+        bool autoSelectDisabledOk = (count2 == 1 && defaultIndex2 == CREDENTIAL_PROVIDER_NO_DEFAULT && autoLogon2 == FALSE);
+
+        PeekProvider::ClearTestOverrides();
+        pArray->Release();
+
+        if (autoSelectEnabledOk && autoSelectDisabledOk)
+        {
+            std::wcout << L"  PASS: AutoSelect primary unlock toggle correctly defaults tile (0) when enabled, and NO_DEFAULT when disabled\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: AutoSelect check failed: enabledOk=" << autoSelectEnabledOk << L", disabledOk=" << autoSelectDisabledOk << L"\n";
+            failed++;
+        }
+    }
+
     // Cleanup
     DeleteTempTestDirectory(tempDir);
     SetEnvironmentVariableW(L"PEEK_PROFILES_DIR", NULL);

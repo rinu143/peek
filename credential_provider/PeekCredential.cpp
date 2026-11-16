@@ -467,6 +467,7 @@ HRESULT PeekCredential::SetSelected(BOOL* pbAutoLogon)
     {
         ResetEvent(m_hRetryCancelEvent);
     }
+    m_pipeClient.Cancel();
     LeaveCriticalSection(&m_cs);
 
     // Initial state presentation: "Looking for face..." status text

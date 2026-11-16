@@ -8,6 +8,9 @@
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon Condition="Exists('..\..\build\peek.ico')">..\..\build\peek.ico</ApplicationIcon>
+    <AssemblyTitle>Peek</AssemblyTitle>
+    <Product>Peek</Product>
+    <Description>Peek - Fast, private biometric face unlock for Windows</Description>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

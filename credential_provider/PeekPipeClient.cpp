@@ -6,6 +6,98 @@
 #include <vector>
 #include <sddl.h>
 #include <wincrypt.h>
+#include <tlhelp32.h>
+
+static bool EnsureEngineRunning()
+{
+#ifdef PEEK_TEST_BUILD
+    // In unit test harnesses, do not attempt to spawn real external engine binaries unless explicitly requested
+    wchar_t szEnv[16] = {};
+    if (GetEnvironmentVariableW(L"PEEK_TEST_AUTO_LAUNCH", szEnv, ARRAYSIZE(szEnv)) == 0)
+    {
+        return false;
+    }
+#endif
+    // Check if PeekEngine.exe is already running
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap != INVALID_HANDLE_VALUE)
+    {
+        PROCESSENTRY32W pe = {};
+        pe.dwSize = sizeof(pe);
+        if (Process32FirstW(hSnap, &pe))
+        {
+            do
+            {
+                if (_wcsicmp(pe.szExeFile, L"PeekEngine.exe") == 0)
+                {
+                    CloseHandle(hSnap);
+                    return false; // Already running
+                }
+            } while (Process32NextW(hSnap, &pe));
+        }
+        CloseHandle(hSnap);
+    }
+
+    // Engine is not running; attempt to launch from HKLM\SOFTWARE\Peek\InstallPath
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Peek", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        wchar_t szInstallPath[MAX_PATH] = {};
+        DWORD dwSize = sizeof(szInstallPath);
+        DWORD dwType = REG_SZ;
+        if (RegQueryValueExW(hKey, L"InstallPath", nullptr, &dwType, reinterpret_cast<LPBYTE>(szInstallPath), &dwSize) == ERROR_SUCCESS)
+        {
+            std::wstring exePath = szInstallPath;
+            if (exePath.find(L"PeekEngine.exe") == std::wstring::npos)
+            {
+                if (!exePath.empty() && exePath.back() != L'\\' && exePath.back() != L'/') exePath += L'\\';
+                // Support both direct exe in InstallPath and under engine\ subdir
+                if (GetFileAttributesW((exePath + L"PeekEngine.exe").c_str()) != INVALID_FILE_ATTRIBUTES)
+                {
+                    exePath += L"PeekEngine.exe";
+                }
+                else
+                {
+                    exePath += L"engine\\PeekEngine.exe";
+                }
+            }
+
+            if (GetFileAttributesW(exePath.c_str()) != INVALID_FILE_ATTRIBUTES)
+            {
+                STARTUPINFOW si = { sizeof(si) };
+                PROCESS_INFORMATION pi = {};
+                std::wstring cmd = L"\"" + exePath + L"\"";
+                std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
+                cmdBuf.push_back(L'\0');
+
+                std::wstring workingDir;
+                size_t lastSlash = exePath.find_last_of(L"\\/");
+                if (lastSlash != std::wstring::npos)
+                {
+                    workingDir = exePath.substr(0, lastSlash);
+                }
+
+                if (CreateProcessW(
+                    exePath.c_str(),
+                    cmdBuf.data(),
+                    nullptr, nullptr, FALSE,
+                    CREATE_NO_WINDOW | DETACHED_PROCESS,
+                    nullptr,
+                    workingDir.empty() ? nullptr : workingDir.c_str(),
+                    &si, &pi))
+                {
+                    CloseHandle(pi.hProcess);
+                    CloseHandle(pi.hThread);
+                    RegCloseKey(hKey);
+                    Logger::LogInfo("EnsureEngineRunning: Successfully launched PeekEngine on demand");
+                    return true;
+                }
+            }
+        }
+        RegCloseKey(hKey);
+    }
+    return false;
+}
 
 static std::wstring GetConfiguredPipeName(const std::wstring& defaultName = PEEK_PIPE_NAME)
 {
@@ -291,8 +383,8 @@ bool PeekPipeClient::StartAuthAsync(PeekStateCallback callback, const std::wstri
 
     if (m_isRunning.load())
     {
-        Logger::LogError("StartAuthAsync called while already running");
-        return false;
+        Logger::LogInfo("StartAuthAsync called while already running - cancelling previous session before restart");
+        Cancel();
     }
 
     m_callback = callback;
@@ -366,6 +458,7 @@ DWORD WINAPI PeekPipeClient::WorkerThreadProc(LPVOID lpParam)
 bool PeekPipeClient::ConnectToPipe(DWORD timeoutMs)
 {
     DWORD startTime = GetTickCount();
+    bool triedLaunch = false;
 
     while (GetTickCount() - startTime < timeoutMs)
     {
@@ -405,6 +498,39 @@ bool PeekPipeClient::ConnectToPipe(DWORD timeoutMs)
         if (err == ERROR_PIPE_BUSY)
         {
             WaitNamedPipeW(m_pipeName.c_str(), 500);
+        }
+        else if (err == ERROR_FILE_NOT_FOUND)
+        {
+            if (!triedLaunch)
+            {
+                triedLaunch = true;
+                bool launched = EnsureEngineRunning();
+                if (launched)
+                {
+                    // Engine was successfully spawned; wait up to 5s for pipe creation
+                    DWORD waitStart = GetTickCount();
+                    while (GetTickCount() - waitStart < 5000)
+                    {
+                        if (WaitForSingleObject(m_hCancelEvent, 200) == WAIT_OBJECT_0)
+                        {
+                            return false;
+                        }
+                        if (WaitNamedPipeW(m_pipeName.c_str(), 200))
+                        {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                else
+                {
+                    // If engine was not spawned, fail immediately without 2.5s lock screen hang
+                    Logger::LogError("ConnectToPipe: Pipe not found and engine not running");
+                    return false;
+                }
+            }
+            Logger::LogError("ConnectToPipe: Pipe not found after launch attempt");
+            return false;
         }
         else
         {

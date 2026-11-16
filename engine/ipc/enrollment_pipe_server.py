@@ -633,6 +633,11 @@ class EnrollmentPipeServer:
 
                     store = getattr(self, "profile_store", None) or SecureProfileStore()
                     existing_profiles = store.list_profiles()
+                    if not keep_existing:
+                        for ep in list(existing_profiles):
+                            if not ep.enabled:
+                                store.delete_profile(ep.profile_id)
+                        existing_profiles = store.list_profiles()
                     is_recapture = bool(profile_id and any(p.profile_id == profile_id for p in existing_profiles))
                     if not is_recapture and len(existing_profiles) >= 5:
                         logger.warning("Rejecting START_ENROLLMENT: maximum identity limit (5) reached.")

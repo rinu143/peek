@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="clr-namespace:PeekSetup.ViewModels"
         mc:Ignorable="d"
-        Title="Face Recognition Setup"
+        Title="Peek"
         Icon="assets/frame_search_1_dark.png"
         Height="690" Width="720"
         MinHeight="560" MinWidth="520"
@@ -190,6 +190,32 @@
                                             Command="{Binding UpdatePasswordLinkCommand}"
                                             Content="Update" MinWidth="84" Padding="18,0"
                                             VerticalAlignment="Center" ToolTip="Update linked Windows password" />
+                                </Grid>
+                            </Border>
+
+                            <!-- 2b. Primary Unlock Method Card (AutoSelect) -->
+                            <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                                    BorderThickness="1" CornerRadius="18" Padding="20,14" Margin="0,0,0,18">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Path Data="{StaticResource GeoFaceID}" Stroke="{DynamicResource TextSecondaryBrush}"
+                                                  StrokeThickness="1.5" Width="14" Height="14" Margin="0,0,8,0" VerticalAlignment="Center" Stretch="Uniform" />
+                                            <TextBlock Text="Primary sign-in method" FontSize="13" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <TextBlock Text="Automatically select Peek on startup and unlock with your face."
+                                                   FontSize="11" Foreground="{DynamicResource TextMutedBrush}" Margin="22,3,0,0" />
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1"
+                                              Style="{StaticResource AppleToggleSwitchStyle}"
+                                              IsChecked="{Binding IsPrimaryUnlockSource, Mode=TwoWay}"
+                                              VerticalAlignment="Center"
+                                              ToolTip="Toggle Peek as the primary default sign-in tile" />
                                 </Grid>
                             </Border>
 
@@ -1389,6 +1415,54 @@
                     <!-- Dialog Footer -->
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,6,0,0">
                         <Button Style="{StaticResource DialogPrimaryButtonStyle}" Command="{Binding CloseUpdatesDialogCommand}" Content="Done" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- 7. MODAL: WINDOWS PASSWORD REQUIRED -->
+        <Grid Grid.Row="0" Grid.RowSpan="3" Margin="-36,-20,-36,-20"
+              Visibility="{Binding IsPasswordRequiredDialogOpen, Converter={StaticResource BoolToVis}}"
+              Background="#CC000000" Panel.ZIndex="110">
+            <Border Background="{DynamicResource SurfaceDarkBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1.5" CornerRadius="20" Padding="28,24" MaxWidth="440"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <Grid Margin="0,0,0,12">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Path Data="{StaticResource GeoLock}" Stroke="{DynamicResource DangerBrush}"
+                                  StrokeThickness="1.5" Stretch="Uniform" Width="14" Height="14" Margin="0,0,8,0" VerticalAlignment="Center" />
+                            <TextBlock Text="Windows Password Required" FontSize="16" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <Button Style="{StaticResource MinimalCloseButtonStyle}"
+                                Command="{Binding ClosePasswordRequiredDialogCommand}"
+                                HorizontalAlignment="Right" Width="24" Height="24" ToolTip="Close">
+                            <Path Data="M 6,6 L 14,14 M 14,6 L 6,14" Stroke="{DynamicResource TextSecondaryBrush}"
+                                  StrokeThickness="1.6" Stretch="Uniform" Width="10" Height="10" />
+                        </Button>
+                    </Grid>
+
+                    <TextBlock Text="{Binding PasswordRequiredMessage}"
+                               FontSize="13" Foreground="{DynamicResource TextPrimaryBrush}"
+                               TextWrapping="Wrap" LineHeight="18" Margin="0,0,0,12" />
+
+                    <Border Background="{DynamicResource CardBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1" CornerRadius="12" Padding="14,12" Margin="0,0,0,18">
+                        <TextBlock Text="To set a password, Windows Settings will open. After creating your password, return to Peek and click 'I've Set a Password'."
+                                   FontSize="11" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" LineHeight="16" />
+                    </Border>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Style="{StaticResource DialogSecondaryButtonStyle}"
+                                Command="{Binding ClosePasswordRequiredDialogCommand}"
+                                Content="Cancel" Margin="0,0,8,0" />
+                        <Button Style="{StaticResource DialogSecondaryButtonStyle}"
+                                Command="{Binding RecheckPasswordAndContinueCommand}"
+                                Content="I've Set a Password" Margin="0,0,8,0" />
+                        <Button Style="{StaticResource DialogPrimaryButtonStyle}"
+                                Command="{Binding OpenWindowsPasswordSettingsCommand}"
+                                Content="Open Settings" />
                     </StackPanel>
                 </StackPanel>
             </Border>

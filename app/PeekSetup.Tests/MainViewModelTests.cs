@@ -580,5 +580,61 @@ namespace PeekSetup.Tests
             Assert.True(mockProfiles.LastToggledState);
             Assert.True(mockProfiles.Profiles[0].Enabled);
         }
+
+        [Fact]
+        public async Task CheckExistingProfile_WhenUnlinkedDraftExists_DeletesDraftAndDefaultsToWelcome()
+        {
+            var mockPipe = new MockEnrollmentPipeClient
+            {
+                MockStatusResponse = new StatusResponseData(false, "", "")
+            };
+            var mockProfiles = new MockProfileManager
+            {
+                Profiles = new List<ProfileModel>
+                {
+                    new ProfileModel { ProfileId = "draft_unlinked_1", DisplayName = "Primary User", Enabled = false, Authorized = false }
+                }
+            };
+            var mockAuth = new MockAuthorizationStore();
+            var vm = new MainViewModel(mockPipe, new MockPasswordLinker(), null, mockProfiles, authStore: mockAuth);
+
+            await vm.CheckExistingProfileAsync();
+
+            Assert.Equal(SetupStep.Welcome, vm.CurrentStep);
+            Assert.True(mockProfiles.DeleteCalled);
+            Assert.Equal("draft_unlinked_1", mockProfiles.LastDeletedProfileId);
+            Assert.Empty(mockProfiles.Profiles);
+        }
+
+        [Fact]
+        public async Task CleanupUnlinkedDraft_DeletesAllUnlinkedDraftsAndClearsState()
+        {
+            var mockPipe = new MockEnrollmentPipeClient();
+            var mockProfiles = new MockProfileManager
+            {
+                Profiles = new List<ProfileModel>
+                {
+                    new ProfileModel { ProfileId = "draft_to_delete", DisplayName = "Primary User", Enabled = false, Authorized = false }
+                }
+            };
+            var mockAuth = new MockAuthorizationStore();
+            var vm = new MainViewModel(mockPipe, new MockPasswordLinker(), null, mockProfiles, authStore: mockAuth)
+            {
+                EnrolledProfileId = "draft_to_delete",
+                EnrolledDisplayName = "Primary User",
+                ExistingProfileId = "draft_to_delete",
+                ExistingProfileName = "Primary User"
+            };
+
+            await vm.CleanupUnlinkedDraftAsync();
+
+            Assert.True(mockProfiles.DeleteCalled);
+            Assert.Equal("draft_to_delete", mockProfiles.LastDeletedProfileId);
+            Assert.Empty(mockProfiles.Profiles);
+            Assert.Empty(vm.EnrolledProfileId);
+            Assert.Empty(vm.EnrolledDisplayName);
+            Assert.Empty(vm.ExistingProfileId);
+            Assert.Empty(vm.ExistingProfileName);
+        }
     }
 }

@@ -89,7 +89,12 @@ def get_machine_entropy() -> bytes:
     raise RuntimeError(err_msg)
 
 
-def dpapi_encrypt(data: bytes, description: str = "PeekBiometricData", entropy: Optional[bytes] = None) -> bytes:
+def dpapi_encrypt(
+    data: bytes,
+    description: str = "PeekBiometricData",
+    entropy: Optional[bytes] = None,
+    flags: int = 0x00000004
+) -> bytes:
     """Encrypts bytes using Windows DPAPI (CryptProtectData) with optional machine entropy."""
     crypt32, kernel32 = _get_dpapi_libs()
     in_blob = DATA_BLOB(len(data), ctypes.cast(ctypes.create_string_buffer(data), ctypes.POINTER(ctypes.c_byte)))
@@ -98,7 +103,7 @@ def dpapi_encrypt(data: bytes, description: str = "PeekBiometricData", entropy: 
     if entropy is not None:
         entropy_blob = DATA_BLOB(len(entropy), ctypes.cast(ctypes.create_string_buffer(entropy), ctypes.POINTER(ctypes.c_byte)))
         p_entropy = ctypes.byref(entropy_blob)
-    if not crypt32.CryptProtectData(ctypes.byref(in_blob), description, p_entropy, None, None, 0, ctypes.byref(out_blob)):
+    if not crypt32.CryptProtectData(ctypes.byref(in_blob), description, p_entropy, None, None, flags, ctypes.byref(out_blob)):
         raise ctypes.WinError()
     try:
         return ctypes.string_at(out_blob.pbData, out_blob.cbData)
@@ -180,18 +185,46 @@ class SecureProfileStore:
     """
 
     def __init__(self, storage_dir: Optional[str] = None):
+        is_default_location = (storage_dir is None and not os.environ.get("PEEK_PROFILES_DIR"))
         if storage_dir is None:
             env_dir = os.environ.get("PEEK_PROFILES_DIR")
             if env_dir:
                 self.storage_dir = env_dir
             else:
-                # Default to %LOCALAPPDATA%\Peek\Profiles
-                base = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
-                self.storage_dir = os.path.join(base, "Peek", "Profiles")
+                program_data = os.environ.get("ProgramData", r"C:\ProgramData")
+                self.storage_dir = os.path.join(program_data, "Peek", "Profiles")
         else:
             self.storage_dir = storage_dir
 
         os.makedirs(self.storage_dir, exist_ok=True)
+        if is_default_location:
+            self._migrate_legacy_localappdata_profiles()
+
+    def _migrate_legacy_localappdata_profiles(self) -> None:
+        """Seamlessly copies and re-encrypts legacy profiles from %LOCALAPPDATA%\\Peek\\Profiles if present."""
+        try:
+            local_appdata = os.environ.get("LOCALAPPDATA")
+            if not local_appdata:
+                return
+            legacy_dir = os.path.join(local_appdata, "Peek", "Profiles")
+            if not os.path.isdir(legacy_dir) or os.path.abspath(legacy_dir) == os.path.abspath(self.storage_dir):
+                return
+            for fname in os.listdir(legacy_dir):
+                if fname.endswith(".peek"):
+                    target_file = os.path.join(self.storage_dir, fname)
+                    if not os.path.exists(target_file):
+                        src_file = os.path.join(legacy_dir, fname)
+                        try:
+                            with open(src_file, "rb") as sf:
+                                enc = sf.read()
+                            raw = dpapi_decrypt(enc, entropy=get_machine_entropy())
+                            prof = PeekProfile.from_dict(json.loads(raw.decode("utf-8")))
+                            self.save_profile(prof)
+                            logger.info(f"Migrated legacy profile {fname} to machine storage {self.storage_dir}")
+                        except Exception as e:
+                            logger.debug(f"Could not migrate legacy profile {fname}: {e}")
+        except Exception as ex:
+            logger.debug(f"Legacy profile migration error: {ex}")
 
     def _get_profile_path(self, profile_id: str) -> str:
         return os.path.join(self.storage_dir, f"{profile_id}.peek")

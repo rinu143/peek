@@ -81,5 +81,76 @@ namespace PeekSetup.Services
                 }
             }
         }
+
+        public bool HasPasswordSet(string username, string? domain = null)
+        {
+            if (string.IsNullOrWhiteSpace(username))
+            {
+                return false;
+            }
+
+            string userOnly = username;
+            string? domainOnly = domain;
+
+            if (username.Contains('\\'))
+            {
+                var parts = username.Split('\\', 2);
+                domainOnly = parts[0];
+                userOnly = parts[1];
+            }
+
+            IntPtr pEmpty = IntPtr.Zero;
+            IntPtr hToken = IntPtr.Zero;
+
+            try
+            {
+                pEmpty = Marshal.StringToHGlobalUni(string.Empty);
+                bool success = LogonUserW(
+                    userOnly,
+                    string.IsNullOrEmpty(domainOnly) ? null : domainOnly,
+                    pEmpty,
+                    LOGON32_LOGON_INTERACTIVE,
+                    LOGON32_PROVIDER_DEFAULT,
+                    out hToken
+                );
+
+                if (success)
+                {
+                    // Empty password succeeded -> User does NOT have a password set!
+                    return false;
+                }
+
+                int err = Marshal.GetLastWin32Error();
+                // 1327 = ERROR_ACCOUNT_RESTRICTION (blank password not permitted) -> NO password set!
+                if (err == 1327)
+                {
+                    return false;
+                }
+
+                // 1326 = ERROR_LOGON_FAILURE (bad password, meaning account requires a non-empty password)
+                // 1330 = ERROR_PASSWORD_EXPIRED
+                // 1907 = ERROR_PASSWORD_MUST_CHANGE
+                return true;
+            }
+            catch
+            {
+                // Fail open so user isn't permanently locked out by unexpected OS exception
+                return true;
+            }
+            finally
+            {
+                if (hToken != IntPtr.Zero)
+                {
+                    CloseHandle(hToken);
+                    hToken = IntPtr.Zero;
+                }
+
+                if (pEmpty != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(pEmpty);
+                    pEmpty = IntPtr.Zero;
+                }
+            }
+        }
     }
 }

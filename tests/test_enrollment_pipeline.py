@@ -283,6 +283,52 @@ class TestEnrollmentPipeline(unittest.TestCase):
         with self.assertRaises(DuplicateIdentityError):
             session_dup.finalize_and_save_profile("Duplicate User", profile_id="profile_dup")
 
+        # 5. Unlinked draft check: an unlinked draft (enabled=False) does not trigger duplicate rejection
+        # and is pruned when keep_existing=False
+        draft_embedding = np.random.randn(512).astype(np.float32)
+        draft_embedding /= np.linalg.norm(draft_embedding)
+
+        session_draft = EnrollmentSession(
+            detector=None,
+            aligner=aligner,
+            embedder=embedder,
+            profile_store=self.profile_store,
+        )
+        session_draft.final_templates = [
+            PeekTemplate(
+                template_id=f"tmpl_draft_{p.value.lower()}",
+                embedding=draft_embedding.tolist(),
+                pose_label=p.value,
+                quality_score=0.90
+            )
+            for p in session_draft.poses
+        ]
+        draft_prof = session_draft.finalize_and_save_profile("Abandoned Draft", profile_id="profile_draft", activate=False)
+        self.assertFalse(draft_prof.enabled)
+        self.assertIsNotNone(self.profile_store.load_profile("profile_draft"))
+
+        # Now re-enroll matching the draft's face with keep_existing=False
+        session_reenroll = EnrollmentSession(
+            detector=None,
+            aligner=aligner,
+            embedder=embedder,
+            profile_store=self.profile_store,
+        )
+        session_reenroll.final_templates = [
+            PeekTemplate(
+                template_id=f"tmpl_new_{p.value.lower()}",
+                embedding=draft_embedding.tolist(),
+                pose_label=p.value,
+                quality_score=0.92
+            )
+            for p in session_reenroll.poses
+        ]
+        # Must succeed without DuplicateIdentityError and draft must be deleted
+        new_prof = session_reenroll.finalize_and_save_profile("Reenrolled User", profile_id="profile_new", keep_existing=False, activate=False)
+        self.assertIsNotNone(new_prof)
+        self.assertEqual(new_prof.display_name, "Reenrolled User")
+        self.assertIsNone(self.profile_store.load_profile("profile_draft"), "Unlinked draft must have been purged")
+
 
 if __name__ == "__main__":
     unittest.main()

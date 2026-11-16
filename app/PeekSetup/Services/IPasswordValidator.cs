@@ -9,5 +9,11 @@ namespace PeekSetup.Services
         /// Closes returned token handles immediately.
         /// </summary>
         bool Validate(string username, SecureString password, string? domain = null);
+
+        /// <summary>
+        /// Checks whether the user account has a password set.
+        /// Returns false if the account has a blank/no password.
+        /// </summary>
+        bool HasPasswordSet(string username, string? domain = null);
     }
 }

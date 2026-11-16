@@ -227,6 +227,11 @@ def probe_camera_index(
     logger.debug(f"Probing camera index {index} with backend {backend}...")
     try:
         cap = cv2.VideoCapture(index, backend)
+        if (not cap or not cap.isOpened()) and backend == cv2.CAP_MSMF:
+            logger.debug(f"MSMF unavailable for camera {index}; falling back to DirectShow (CAP_DSHOW)...")
+            if cap:
+                cap.release()
+            cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
     except Exception as ex:
         return {
             "index": index,
@@ -430,7 +435,12 @@ class CameraCapture:
             self.cap = cv2.VideoCapture(index, self.backend)
             if not self.cap or not self.cap.isOpened():
                 if self.backend == cv2.CAP_MSMF:
-                    logger.warning("MSMF backend failed to open camera; falling back to CAP_ANY...")
+                    logger.warning("MSMF backend failed to open camera; falling back to DirectShow (CAP_DSHOW)...")
+                    if self.cap:
+                        self.cap.release()
+                    self.cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+                if not self.cap or not self.cap.isOpened():
+                    logger.warning("DirectShow backend failed to open camera; falling back to CAP_ANY...")
                     if self.cap:
                         self.cap.release()
                     self.cap = cv2.VideoCapture(index, cv2.CAP_ANY)

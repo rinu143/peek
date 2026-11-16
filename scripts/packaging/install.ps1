@@ -222,7 +222,25 @@ $engineExePath = if (Test-Path (Join-Path $targetEngineDir "PeekEngine.exe")) {
 }
 Set-ItemProperty -Path $peekRegKey -Name "InstallPath" -Value $engineExePath -Type String -Force
 Set-ItemProperty -Path $peekRegKey -Name "LogLevel" -Value 1 -Type DWord -Force # 1 = ERROR, 0 = OFF, 2 = INFO, 3 = DEBUG
-Write-Host "      [OK] Configured HKLM:\SOFTWARE\Peek (InstallPath: $engineExePath, LogLevel: 1)." -ForegroundColor Green
+if (-not (Get-ItemProperty -Path $peekRegKey -Name "AutoSelect" -ErrorAction SilentlyContinue)) {
+    Set-ItemProperty -Path $peekRegKey -Name "AutoSelect" -Value 1 -Type DWord -Force
+}
+try {
+    $peekAcl = Get-Acl -Path $peekRegKey
+    $usersSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinUsersSid, $null)
+    $peekRegRule = New-Object System.Security.AccessControl.RegistryAccessRule(
+        $usersSid,
+        [System.Security.AccessControl.RegistryRights]::SetValue -bor [System.Security.AccessControl.RegistryRights]::CreateSubKey -bor [System.Security.AccessControl.RegistryRights]::ReadKey,
+        [System.Security.AccessControl.InheritanceFlags]::None,
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow
+    )
+    $peekAcl.AddAccessRule($peekRegRule)
+    Set-Acl -Path $peekRegKey -AclObject $peekAcl
+} catch {
+    Write-Warning "Could not grant standard user write rights on $peekRegKey: $_"
+}
+Write-Host "      [OK] Configured HKLM:\SOFTWARE\Peek (InstallPath: $engineExePath, LogLevel: 1, AutoSelect: 1)." -ForegroundColor Green
 
 $updatesRegKey = "HKLM:\SOFTWARE\Peek\Updates"
 if (-not (Test-Path $updatesRegKey)) {
@@ -313,12 +331,25 @@ try {
             Set-Acl -Path $p -AclObject $fAcl
         }
     }
+
+    # 5. Profiles directory ACL (SYSTEM/Admin FullControl, Users Modify so standard users can enroll/manage identities)
+    $ProfilesDir = Join-Path $PeekDataDir "Profiles"
+    if (-not (Test-Path $ProfilesDir)) {
+        New-Item -ItemType Directory -Path $ProfilesDir -Force | Out-Null
+    }
+    $profilesAcl = New-Object System.Security.AccessControl.DirectorySecurity
+    $profilesAcl.SetAccessRuleProtection($true, $false)
+    $profilesAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $profilesAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $profilesAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "Modify", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    Set-Acl -Path $ProfilesDir -AclObject $profilesAcl
+    Write-Host "      [OK] Secured Profiles directory at $ProfilesDir (SYSTEM/Admin Full, Users Modify)." -ForegroundColor Green
 } catch {
     Write-Warning "Could not configure Peek directory or log ACL: $_"
 }
 
-# 6. Configure logon auto-start for ANY user
-Write-Host "[4/5] Configuring logon startup task for BUILTIN\Users..." -ForegroundColor Cyan
+# 6. Configure system boot auto-start under SYSTEM
+Write-Host "[4/5] Configuring startup task for NT AUTHORITY\SYSTEM..." -ForegroundColor Cyan
 $taskName = "PeekEngine"
 $engineExe = $engineExePath
 $engineWorkingDir = Split-Path -Parent $engineExe
@@ -326,56 +357,66 @@ $engineWorkingDir = Split-Path -Parent $engineExe
 $taskCreated = $false
 try {
     $action = New-ScheduledTaskAction -Execute $engineExe -WorkingDirectory $engineWorkingDir
-    $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $principal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Users" -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -StartWhenAvailable
-    $null = Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop
-    Write-Host "      [OK] Scheduled Task '$taskName' created (starts at logon for BUILTIN\Users)." -ForegroundColor Green
+    $triggerStartup = New-ScheduledTaskTrigger -AtStartup
+    $triggerLogon = New-ScheduledTaskTrigger -AtLogOn
+    $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
+    $null = Register-ScheduledTask -TaskName $taskName -Action $action -Trigger @($triggerStartup, $triggerLogon) -Principal $principal -Settings $settings -Force -ErrorAction Stop
+    Write-Host "      [OK] Scheduled Task '$taskName' created (starts at boot and logon under NT AUTHORITY\SYSTEM)." -ForegroundColor Green
     $taskCreated = $true
 } catch {
     Write-Warning "PowerShell task creation failed ($($_)). Trying schtasks.exe..."
     $trEscaped = '"' + $engineExe + '"'
-    $cmdArg = "/c schtasks.exe /Create /TN `"$taskName`" /TR `"$trEscaped`" /SC ONLOGON /RL LIMITED /RU `"BUILTIN\Users`" /F"
+    $cmdArg = "/c schtasks.exe /Create /TN `"$taskName`" /TR `"$trEscaped`" /SC ONSTART /RU `"NT AUTHORITY\SYSTEM`" /RL HIGHEST /F"
     $schtasksProc = Start-Process -FilePath "cmd.exe" -ArgumentList $cmdArg -Wait -NoNewWindow -PassThru
     if ($schtasksProc.ExitCode -eq 0) {
-        Write-Host "      [OK] Scheduled Task '$taskName' created via schtasks (starts at logon for BUILTIN\Users)." -ForegroundColor Green
+        Write-Host "      [OK] Scheduled Task '$taskName' created via schtasks (starts at boot under NT AUTHORITY\SYSTEM)." -ForegroundColor Green
         $taskCreated = $true
     }
 }
 
-if (-not $taskCreated) {
-    Write-Warning "Scheduled task creation failed. Creating Startup folder shortcut as fallback..."
-    $startupFolder = [Environment]::GetFolderPath("CommonStartup")
-    $shortcutPath = Join-Path $startupFolder "PeekEngine.lnk"
-    $wsh = New-Object -ComObject WScript.Shell
-    $shortcut = $wsh.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = $engineExe
-    $shortcut.WorkingDirectory = $InstallDir
-    $shortcut.Description = "Peek Face Recognition Engine (Logon Startup)"
-    $shortcut.IconLocation = "$InstallDir\PeekSetup.exe,0"
-    $shortcut.Save()
-    [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shortcut) | Out-Null
-    [System.Runtime.InteropServices.Marshal]::ReleaseComObject($wsh) | Out-Null
-    Write-Host "      [OK] Created startup shortcut in $shortcutPath" -ForegroundColor Green
-}
+try {
+    Set-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "PeekEngine" -Value "`"$engineExe`"" -Type String -Force -ErrorAction SilentlyContinue
+} catch { }
 
-# Create Start Menu shortcut for PeekSetup
+try {
+    $startupFolder = [Environment]::GetFolderPath("CommonStartup")
+    if (Test-Path $startupFolder) {
+        $shortcutPath = Join-Path $startupFolder "PeekEngine.lnk"
+        $wsh = New-Object -ComObject WScript.Shell
+        $shortcut = $wsh.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = $engineExe
+        $shortcut.WorkingDirectory = $engineWorkingDir
+        $shortcut.Description = "Peek Face Recognition Engine (Logon Startup)"
+        $shortcut.IconLocation = "$InstallDir\PeekSetup.exe,0"
+        $shortcut.Save()
+        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shortcut) | Out-Null
+        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($wsh) | Out-Null
+        Write-Host "      [OK] Created startup shortcut in $shortcutPath" -ForegroundColor Green
+    }
+} catch { }
+
+# Create Start Menu shortcut for Peek
 $startMenuPeekDir = Join-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" "Peek"
 if (-not (Test-Path $startMenuPeekDir)) {
     New-Item -ItemType Directory -Path $startMenuPeekDir -Force | Out-Null
 }
+$legacyShortcut = Join-Path $startMenuPeekDir "Peek Setup.lnk"
+if (Test-Path $legacyShortcut) {
+    Remove-Item $legacyShortcut -Force -ErrorAction SilentlyContinue
+}
 $setupExe = Join-Path $InstallDir "PeekSetup.exe"
-$setupShortcutPath = Join-Path $startMenuPeekDir "Peek Setup.lnk"
+$setupShortcutPath = Join-Path $startMenuPeekDir "Peek.lnk"
 $wsh = New-Object -ComObject WScript.Shell
 $setupShortcut = $wsh.CreateShortcut($setupShortcutPath)
 $setupShortcut.TargetPath = $setupExe
 $setupShortcut.WorkingDirectory = $InstallDir
-$setupShortcut.Description = "Peek Biometric Enrollment & Setup"
+$setupShortcut.Description = "Peek"
 $setupShortcut.IconLocation = "$InstallDir\PeekSetup.exe,0"
 $setupShortcut.Save()
 [System.Runtime.InteropServices.Marshal]::ReleaseComObject($setupShortcut) | Out-Null
 [System.Runtime.InteropServices.Marshal]::ReleaseComObject($wsh) | Out-Null
-Write-Host "      [OK] Created Start Menu shortcut for Peek Setup." -ForegroundColor Green
+Write-Host "      [OK] Created Start Menu shortcut for Peek." -ForegroundColor Green
 
 # 6b. Register user-level PeekUpdate scheduled task
 $updateExe = Join-Path $InstallDir "PeekUpdate.exe"

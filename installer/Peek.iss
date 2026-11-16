@@ -43,7 +43,7 @@ CloseApplications=no
 RestartIfNeededByRun=no
 SetupIconFile=..\build\peek.ico
 UninstallDisplayIcon={app}\PeekSetup.exe
-UninstallDisplayName={#MyAppName} Face Authentication
+UninstallDisplayName={#MyAppName}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -69,13 +69,14 @@ Source: "postinstall.ps1"; DestDir: "{tmp}"; Flags: ignoreversion
 Source: "uninstall_cleanup.ps1"; DestDir: "{app}"; Flags: ignoreversion uninsneveruninstall
 
 [Icons]
-Name: "{autoprograms}\Peek\Peek Setup"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"
+Name: "{autoprograms}\Peek\Peek"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"
 
 [Registry]
 ; HKLM\SOFTWARE\Peek
 Root: HKLM; Subkey: "SOFTWARE\Peek"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"; Flags: uninsdeletekeyifempty
 Root: HKLM; Subkey: "SOFTWARE\Peek"; ValueType: dword; ValueName: "LogLevel"; ValueData: 1; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "SOFTWARE\Peek"; ValueType: string; ValueName: "DisplayVersion"; ValueData: "{#MyAppVersion}"; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "SOFTWARE\Peek"; ValueType: dword; ValueName: "AutoSelect"; ValueData: 1; Flags: createvalueifdoesntexist uninsdeletevalue
 ; Updates\AutoCheck (written on fresh install only; on upgrade, preserved unless /AUTOCHECK is passed)
 Root: HKLM; Subkey: "SOFTWARE\Peek\Updates"; ValueType: dword; ValueName: "AutoCheck"; ValueData: 1; Tasks: autocheck; Check: ShouldWriteRegistryAutoCheck(1); Flags: uninsdeletevalue
 Root: HKLM; Subkey: "SOFTWARE\Peek\Updates"; ValueType: dword; ValueName: "AutoCheck"; ValueData: 0; Tasks: not autocheck; Check: ShouldWriteRegistryAutoCheck(0); Flags: uninsdeletevalue
@@ -292,18 +293,21 @@ var
   PsCmd: String;
 begin
   AppDir := ExpandConstant('{app}');
+  if (AppDir = '') or (AppDir = '{app}') then
+    Exit;
+
   // Only terminate PeekEngine, PeekSetup, and PeekUpdate if their executable image is located under {app}.
   // This allows PeekUpdate running from %TEMP%\PeekUpdateRunner-* to survive upgrades.
   PsCmd :=
-    '$app = "' + AppDir + '"; ' +
+    '$app = ''' + AppDir + '''; ' +
     'Get-Process -Name PeekEngine, PeekSetup, PeekUpdate -ErrorAction SilentlyContinue | ForEach-Object { ' +
     '  try { ' +
     '    $p = $_.Path; ' +
-    '    if ($p -and $p.StartsWith($app, [System.StringComparison]::OrdinalIgnoreCase)) { ' +
+    '    if ($p -and ($p.StartsWith($app + ''\'', [System.StringComparison]::OrdinalIgnoreCase) -or ($p -eq $app))) { ' +
     '      Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue; ' +
     '    } ' +
     '  } catch {} ' +
-    '};';
+    '}; exit 0';
   Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -Command "' + PsCmd + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(400);
 end;
@@ -458,9 +462,6 @@ begin
     end;
     IsUpgradeInstall := True;
   end;
-
-  // Stop any running Peek processes before proceeding
-  StopPeekProcesses();
 end;
 
 procedure InitializeWizard();
@@ -638,9 +639,6 @@ begin
       ShouldRemoveUserData := True;
     end;
   end;
-
-  // Stop running Peek processes
-  StopPeekProcesses();
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

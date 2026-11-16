@@ -71,6 +71,10 @@ namespace PeekSetup.ViewModels
         private string _revokingProfileName = string.Empty;
         private bool _isOfferUnlinkDialogOpen;
 
+        private bool _isPasswordRequiredDialogOpen;
+        private string _passwordRequiredMessage = string.Empty;
+        private Func<Task>? _pendingPasswordRequiredAction;
+
         private SetupStep _currentStep = SetupStep.Welcome;
         private string _displayName = Environment.UserName;
 
@@ -1366,6 +1370,89 @@ namespace PeekSetup.ViewModels
             }
         }
 
+        public bool IsPasswordRequiredDialogOpen
+        {
+            get => _isPasswordRequiredDialogOpen;
+            set
+            {
+                if (_isPasswordRequiredDialogOpen != value)
+                {
+                    _isPasswordRequiredDialogOpen = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public string PasswordRequiredMessage
+        {
+            get => _passwordRequiredMessage;
+            set
+            {
+                if (_passwordRequiredMessage != value)
+                {
+                    _passwordRequiredMessage = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        private const string PeekRegSubKey = @"SOFTWARE\Peek";
+        private const string AutoSelectValName = "AutoSelect";
+
+        public bool IsPrimaryUnlockSource
+        {
+            get
+            {
+                try
+                {
+                    using var hklmKey = Microsoft.Win32.RegistryKey.OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry64)
+                        .OpenSubKey(PeekRegSubKey);
+                    if (hklmKey != null)
+                    {
+                        var val = hklmKey.GetValue(AutoSelectValName);
+                        if (val is int intVal) return intVal != 0;
+                    }
+
+                    using var hkcuKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(PeekRegSubKey);
+                    if (hkcuKey != null)
+                    {
+                        var val = hkcuKey.GetValue(AutoSelectValName);
+                        if (val is int intVal) return intVal != 0;
+                    }
+                }
+                catch { }
+                return true; // Default to enabled (Peek is primary unlock source)
+            }
+            set
+            {
+                int val = value ? 1 : 0;
+                bool written = false;
+                try
+                {
+                    using var hklmKey = Microsoft.Win32.RegistryKey.OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry64)
+                        .OpenSubKey(PeekRegSubKey, writable: true);
+                    if (hklmKey != null)
+                    {
+                        hklmKey.SetValue(AutoSelectValName, val, Microsoft.Win32.RegistryValueKind.DWord);
+                        written = true;
+                    }
+                }
+                catch { }
+
+                if (!written)
+                {
+                    try
+                    {
+                        using var hkcuKey = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(PeekRegSubKey, writable: true);
+                        hkcuKey?.SetValue(AutoSelectValName, val, Microsoft.Win32.RegistryValueKind.DWord);
+                    }
+                    catch { }
+                }
+
+                OnPropertyChanged();
+            }
+        }
+
         // Commands
         public ICommand BeginEnrollmentCommand { get; }
         public ICommand CancelEnrollmentCommand { get; }
@@ -1395,6 +1482,9 @@ namespace PeekSetup.ViewModels
         public ICommand CloseOfferUnlinkCommand { get; }
         public ICommand OpenAboutDialogCommand { get; }
         public ICommand CloseAboutDialogCommand { get; }
+        public ICommand OpenWindowsPasswordSettingsCommand { get; }
+        public ICommand RecheckPasswordAndContinueCommand { get; }
+        public ICommand ClosePasswordRequiredDialogCommand { get; }
 
         public string AppVersionDisplay => "v" + App.GetAppVersion();
         public string AppVersionFullText => "Peek v" + App.GetAppVersion();
@@ -1474,7 +1564,80 @@ namespace PeekSetup.ViewModels
             CloseOfferUnlinkCommand = new RelayCommand(CloseOfferUnlinkDialog);
             OpenAboutDialogCommand = new RelayCommand(() => IsAboutDialogOpen = true);
             CloseAboutDialogCommand = new RelayCommand(() => IsAboutDialogOpen = false);
+
+            OpenWindowsPasswordSettingsCommand = new RelayCommand(OpenWindowsPasswordSettings);
+            RecheckPasswordAndContinueCommand = new AsyncRelayCommand(RecheckPasswordAndContinueAsync);
+            ClosePasswordRequiredDialogCommand = new RelayCommand(ClosePasswordRequiredDialog);
+
             InitializeUpdates();
+        }
+
+        private void OpenWindowsPasswordSettings()
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:signinoptions")
+                {
+                    UseShellExecute = true
+                });
+            }
+            catch { }
+        }
+
+        private async Task RecheckPasswordAndContinueAsync()
+        {
+            bool hasPassword = _passwordValidator.HasPasswordSet(Environment.UserName);
+            if (hasPassword)
+            {
+                var action = _pendingPasswordRequiredAction;
+                _pendingPasswordRequiredAction = null;
+                RunOnUi(() =>
+                {
+                    IsPasswordRequiredDialogOpen = false;
+                    PasswordRequiredMessage = string.Empty;
+                });
+                if (action != null)
+                {
+                    await action().ConfigureAwait(false);
+                }
+            }
+            else
+            {
+                RunOnUi(() =>
+                {
+                    PasswordRequiredMessage = "Windows still reports no password set for this account. Please set a password in Windows Settings, then try again.";
+                });
+            }
+        }
+
+        private void ClosePasswordRequiredDialog()
+        {
+            _pendingPasswordRequiredAction = null;
+            IsPasswordRequiredDialogOpen = false;
+            PasswordRequiredMessage = string.Empty;
+        }
+
+        private bool EnsureWindowsPasswordSet(Func<Task> onPasswordConfirmed)
+        {
+            try
+            {
+                bool hasPassword = _passwordValidator.HasPasswordSet(Environment.UserName);
+                if (!hasPassword)
+                {
+                    RunOnUi(() =>
+                    {
+                        _pendingPasswordRequiredAction = onPasswordConfirmed;
+                        PasswordRequiredMessage = "Your Windows account does not have a password set. A Windows password is required so Peek can securely store logon credentials and unlock your PC.";
+                        IsPasswordRequiredDialogOpen = true;
+                    });
+                    return false;
+                }
+                return true;
+            }
+            catch
+            {
+                return true; // Fail open on exception
+            }
         }
 
         private void InitializePoses()
@@ -1542,6 +1705,11 @@ namespace PeekSetup.ViewModels
 
         public async Task StartEnrollmentInternalAsync(bool keepExisting = true, string? profileId = null)
         {
+            if (!EnsureWindowsPasswordSet(() => StartEnrollmentInternalAsync(keepExisting, profileId)))
+            {
+                return;
+            }
+
             bool isConfirmed = keepExisting || CurrentStep == SetupStep.AlreadyEnrolled || !string.IsNullOrEmpty(ExistingProfileName);
             RunOnUi(() =>
             {
@@ -1586,6 +1754,39 @@ namespace PeekSetup.ViewModels
             }
         }
 
+        public async Task CleanupUnlinkedDraftAsync()
+        {
+            if (_profileManager != null)
+            {
+                try
+                {
+                    string currentSid = WindowsIdentity.GetCurrent().User?.Value ?? string.Empty;
+                    var authIds = (!string.IsNullOrEmpty(currentSid) && _authStore != null)
+                        ? (_authStore.GetAuthorizedIdentities(currentSid) ?? Array.Empty<string>())
+                        : Array.Empty<string>();
+                    var authSet = new HashSet<string>(authIds, StringComparer.OrdinalIgnoreCase);
+
+                    var profiles = await _profileManager.GetProfilesAsync().ConfigureAwait(false);
+                    foreach (var p in profiles)
+                    {
+                        if (!authSet.Contains(p.ProfileId))
+                        {
+                            await _profileManager.DeleteProfileAsync(p.ProfileId).ConfigureAwait(false);
+                        }
+                    }
+                }
+                catch
+                {
+                    // Suppress cleanup error on exit
+                }
+            }
+
+            EnrolledProfileId = string.Empty;
+            EnrolledDisplayName = string.Empty;
+            ExistingProfileId = string.Empty;
+            ExistingProfileName = string.Empty;
+        }
+
         public async Task CancelEnrollmentFlowAsync()
         {
             try
@@ -1599,6 +1800,9 @@ namespace PeekSetup.ViewModels
             }
             finally
             {
+                // If user cancels during enrollment, clean up any unlinked draft
+                await CleanupUnlinkedDraftAsync().ConfigureAwait(false);
+
                 RunOnUi(() =>
                 {
                     if (Identities.Count > 0 || _isAddingSecondaryFace)
@@ -1623,7 +1827,14 @@ namespace PeekSetup.ViewModels
 
         public void GoBackToWelcome()
         {
-            CurrentStep = SetupStep.Welcome;
+            if (Identities.Count > 0)
+            {
+                CurrentStep = SetupStep.AlreadyEnrolled;
+            }
+            else
+            {
+                CurrentStep = SetupStep.Welcome;
+            }
             PreviewImage = null;
         }
 
@@ -1817,9 +2028,17 @@ namespace PeekSetup.ViewModels
                 }
                 else
                 {
+                    // Engine reports no active profile enrolled.
+                    // Clean up any unlinked draft profiles remaining on disk from abandoned setup
+                    await CleanupUnlinkedDraftAsync().ConfigureAwait(false);
+
                     RunOnUi(() =>
                     {
                         Identities.Clear();
+                        ExistingProfileId = string.Empty;
+                        ExistingProfileName = string.Empty;
+                        EnrolledProfileId = string.Empty;
+                        EnrolledDisplayName = string.Empty;
                         CurrentStep = SetupStep.Welcome;
                     });
                 }
@@ -1829,6 +2048,10 @@ namespace PeekSetup.ViewModels
                 RunOnUi(() =>
                 {
                     Identities.Clear();
+                    ExistingProfileId = string.Empty;
+                    ExistingProfileName = string.Empty;
+                    EnrolledProfileId = string.Empty;
+                    EnrolledDisplayName = string.Empty;
                     CurrentStep = SetupStep.Welcome;
                 });
             }

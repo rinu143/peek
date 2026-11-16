@@ -1,7 +1,115 @@
 // Peek Face Engine - Credential Provider Main Class Implementation
 #include "PeekProvider.h"
 #include "version.h"
+#include "SecretVault.h"
 #include <sddl.h>
+
+static bool IsAutoSelectEnabled()
+{
+#ifdef PEEK_TEST_BUILD
+    if (PeekProvider::HasTestAutoSelect())
+    {
+        return PeekProvider::GetTestAutoSelect();
+    }
+    wchar_t szEnv[16] = {};
+    if (GetEnvironmentVariableW(L"PEEK_TEST_AUTO_SELECT", szEnv, ARRAYSIZE(szEnv)) > 0)
+    {
+        return (wcscmp(szEnv, L"1") == 0 || _wcsicmp(szEnv, L"true") == 0);
+    }
+#endif
+    HKEY hKey = nullptr;
+    DWORD dwVal = 0;
+    DWORD dwSize = sizeof(dwVal);
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Peek", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        if (RegQueryValueExW(hKey, L"AutoSelect", nullptr, nullptr, reinterpret_cast<LPBYTE>(&dwVal), &dwSize) == ERROR_SUCCESS)
+        {
+            RegCloseKey(hKey);
+            return (dwVal != 0);
+        }
+        RegCloseKey(hKey);
+    }
+
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"SOFTWARE\\Peek", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        if (RegQueryValueExW(hKey, L"AutoSelect", nullptr, nullptr, reinterpret_cast<LPBYTE>(&dwVal), &dwSize) == ERROR_SUCCESS)
+        {
+            RegCloseKey(hKey);
+            return (dwVal != 0);
+        }
+        RegCloseKey(hKey);
+    }
+
+    return false; // Default to NO_DEFAULT if unconfigured
+}
+
+static bool GetLastLoggedOnUserSid(std::wstring& outSid)
+{
+    outSid.clear();
+#ifdef PEEK_TEST_BUILD
+    if (PeekProvider::HasTestLastLoggedOnUserSid())
+    {
+        outSid = PeekProvider::GetTestLastLoggedOnUserSid();
+        return !outSid.empty() && outSid != L"NONE" && outSid != L"FAIL";
+    }
+    wchar_t szEnv[256] = {};
+    if (GetEnvironmentVariableW(L"PEEK_TEST_LAST_LOGGED_ON_USER_SID", szEnv, ARRAYSIZE(szEnv)) > 0)
+    {
+        if (wcscmp(szEnv, L"NONE") == 0 || wcscmp(szEnv, L"FAIL") == 0)
+        {
+            return false;
+        }
+        outSid = szEnv;
+        return true;
+    }
+#endif
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication\\LogonUI", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        wchar_t szSid[256] = {};
+        DWORD dwSize = sizeof(szSid);
+        DWORD dwType = REG_SZ;
+        if (RegQueryValueExW(hKey, L"LastLoggedOnUserSID", nullptr, &dwType, reinterpret_cast<LPBYTE>(szSid), &dwSize) == ERROR_SUCCESS)
+        {
+            if (szSid[0] != L'\0')
+            {
+                outSid = szSid;
+            }
+        }
+        RegCloseKey(hKey);
+    }
+    return !outSid.empty();
+}
+
+static bool IsUserEnrolledInPeek(const std::wstring& userSid)
+{
+    if (userSid.empty()) return false;
+
+    // Check if the user has authorized identity profile IDs in HKLM\SOFTWARE\Peek\Identities\<SID>
+    auto idStore = PeekSecretVault::GetIdentityStore();
+    if (idStore)
+    {
+        std::vector<std::wstring> identities;
+        if (idStore->GetAuthorizedIdentities(userSid, identities) && !identities.empty())
+        {
+            return true;
+        }
+    }
+
+    // Check if the user has a stored LSA secret under L$PeekCred_<userSid>
+    auto lsaStore = PeekSecretVault::GetLsaSecretStore();
+    if (lsaStore)
+    {
+        std::wstring secretName = PeekSecretVault::GetSecretKeyName(userSid);
+        std::vector<BYTE> secretData;
+        if (lsaStore->RetrieveSecret(secretName, secretData) == 0 /* STATUS_SUCCESS */ && !secretData.empty())
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 static const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR s_rgcpfd[PFI_COUNT] =
 {
@@ -677,41 +785,49 @@ HRESULT PeekProvider::ResolveLockedUser(DWORD* pdwUserIndex, bool* pbLockedSessi
     else if (m_cpus == CPUS_LOGON)
     {
         std::wstring consoleSid;
-        if (!GetConsoleUserSid(consoleSid) || consoleSid.empty())
-        {
-            Logger::LogInfo(L"PeekProvider::ResolveLockedUser (LOGON): no console user session found -> S_FALSE (tile will not be offered)");
-            return S_FALSE;
-        }
+        bool hasConsoleUser = GetConsoleUserSid(consoleSid) && !consoleSid.empty();
 
-        DWORD matchedIndex = (DWORD)-1;
-        for (DWORD i = 0; i < dwUserCount; i++)
+        if (hasConsoleUser)
         {
-            ICredentialProviderUser* pUser = nullptr;
-            if (SUCCEEDED(m_pUserArray->GetAt(i, &pUser)) && pUser)
+            DWORD matchedIndex = (DWORD)-1;
+            for (DWORD i = 0; i < dwUserCount; i++)
             {
-                LPWSTR pszSid = nullptr;
-                if (SUCCEEDED(pUser->GetSid(&pszSid)) && pszSid)
+                ICredentialProviderUser* pUser = nullptr;
+                if (SUCCEEDED(m_pUserArray->GetAt(i, &pUser)) && pUser)
                 {
-                    bool match = (_wcsicmp(pszSid, consoleSid.c_str()) == 0);
-                    wchar_t szBuf[256] = {};
-                    swprintf_s(szBuf, ARRAYSIZE(szBuf),
-                        L"PeekProvider::ResolveLockedUser (LOGON): array user %u SID='%s' vs console SID='%s' -> match=%d",
-                        i, pszSid, consoleSid.c_str(), match);
-                    Logger::LogInfo(szBuf);
-                    CoTaskMemFree(pszSid);
-                    if (match)
+                    LPWSTR pszSid = nullptr;
+                    if (SUCCEEDED(pUser->GetSid(&pszSid)) && pszSid)
                     {
-                        matchedIndex = i;
-                        pUser->Release();
-                        break;
+                        bool match = (_wcsicmp(pszSid, consoleSid.c_str()) == 0);
+                        wchar_t szBuf[256] = {};
+                        swprintf_s(szBuf, ARRAYSIZE(szBuf),
+                            L"PeekProvider::ResolveLockedUser (LOGON): array user %u SID='%s' vs console SID='%s' -> match=%d",
+                            i, pszSid, consoleSid.c_str(), match);
+                        Logger::LogInfo(szBuf);
+                        CoTaskMemFree(pszSid);
+                        if (match)
+                        {
+                            matchedIndex = i;
+                            pUser->Release();
+                            break;
+                        }
                     }
+                    pUser->Release();
                 }
-                pUser->Release();
             }
-        }
 
-        if (matchedIndex == (DWORD)-1)
-        {
+            if (matchedIndex != (DWORD)-1)
+            {
+                *pdwUserIndex = matchedIndex;
+                *pbLockedSession = true;
+                wchar_t szBuf[256] = {};
+                swprintf_s(szBuf, ARRAYSIZE(szBuf),
+                    L"PeekProvider::ResolveLockedUser (LOGON): matched user index %u for console SID='%s', lockedSession=true -> S_OK",
+                    matchedIndex, consoleSid.c_str());
+                Logger::LogInfo(szBuf);
+                return S_OK;
+            }
+
             wchar_t szBuf[256] = {};
             swprintf_s(szBuf, ARRAYSIZE(szBuf),
                 L"PeekProvider::ResolveLockedUser (LOGON): no array user matches console SID='%s' -> S_FALSE (tile will not be offered)",
@@ -720,14 +836,83 @@ HRESULT PeekProvider::ResolveLockedUser(DWORD* pdwUserIndex, bool* pbLockedSessi
             return S_FALSE;
         }
 
-        *pdwUserIndex = matchedIndex;
-        *pbLockedSession = true;
-        wchar_t szBuf[256] = {};
-        swprintf_s(szBuf, ARRAYSIZE(szBuf),
-            L"PeekProvider::ResolveLockedUser (LOGON): matched user index %u for console SID='%s', lockedSession=true -> S_OK",
-            matchedIndex, consoleSid.c_str());
-        Logger::LogInfo(szBuf);
-        return S_OK;
+        // COLD BOOT: No active console user session.
+        // 1. Try LastLoggedOnUserSID from LogonUI registry
+        std::wstring lastLoggedSid;
+        if (GetLastLoggedOnUserSid(lastLoggedSid) && !lastLoggedSid.empty())
+        {
+            wchar_t szBuf[256] = {};
+            swprintf_s(szBuf, ARRAYSIZE(szBuf),
+                L"PeekProvider::ResolveLockedUser (COLD BOOT): inspecting LastLoggedOnUserSID='%s'",
+                lastLoggedSid.c_str());
+            Logger::LogInfo(szBuf);
+
+            for (DWORD i = 0; i < dwUserCount; i++)
+            {
+                ICredentialProviderUser* pUser = nullptr;
+                if (SUCCEEDED(m_pUserArray->GetAt(i, &pUser)) && pUser)
+                {
+                    LPWSTR pszSid = nullptr;
+                    if (SUCCEEDED(pUser->GetSid(&pszSid)) && pszSid)
+                    {
+                        bool match = (_wcsicmp(pszSid, lastLoggedSid.c_str()) == 0);
+                        CoTaskMemFree(pszSid);
+                        if (match)
+                        {
+                            pUser->Release();
+                            if (IsUserEnrolledInPeek(lastLoggedSid))
+                            {
+                                *pdwUserIndex = i;
+                                *pbLockedSession = true;
+                                wchar_t szBufMatch[256] = {};
+                                swprintf_s(szBufMatch, ARRAYSIZE(szBufMatch),
+                                    L"PeekProvider::ResolveLockedUser (COLD BOOT): matched LastLoggedOnUserSID='%s' at index %u (enrolled) -> S_OK",
+                                    lastLoggedSid.c_str(), i);
+                                Logger::LogInfo(szBufMatch);
+                                return S_OK;
+                            }
+                            else
+                            {
+                                Logger::LogInfo(L"PeekProvider::ResolveLockedUser (COLD BOOT): LastLoggedOnUserSID matched in user array but user is NOT enrolled in Peek");
+                            }
+                            break;
+                        }
+                    }
+                    pUser->Release();
+                }
+            }
+        }
+
+        // 2. Fallback: Search user array for any user enrolled in Peek
+        for (DWORD i = 0; i < dwUserCount; i++)
+        {
+            ICredentialProviderUser* pUser = nullptr;
+            if (SUCCEEDED(m_pUserArray->GetAt(i, &pUser)) && pUser)
+            {
+                LPWSTR pszSid = nullptr;
+                if (SUCCEEDED(pUser->GetSid(&pszSid)) && pszSid)
+                {
+                    std::wstring sidCandidate = pszSid;
+                    CoTaskMemFree(pszSid);
+                    if (IsUserEnrolledInPeek(sidCandidate))
+                    {
+                        pUser->Release();
+                        *pdwUserIndex = i;
+                        *pbLockedSession = true;
+                        wchar_t szBufCandidate[256] = {};
+                        swprintf_s(szBufCandidate, ARRAYSIZE(szBufCandidate),
+                            L"PeekProvider::ResolveLockedUser (COLD BOOT): matched enrolled candidate SID='%s' at index %u -> S_OK",
+                            sidCandidate.c_str(), i);
+                        Logger::LogInfo(szBufCandidate);
+                        return S_OK;
+                    }
+                }
+                pUser->Release();
+            }
+        }
+
+        Logger::LogInfo(L"PeekProvider::ResolveLockedUser (COLD BOOT): no user in array is enrolled in Peek -> S_FALSE (tile will not be offered)");
+        return S_FALSE;
     }
 
     return E_NOTIMPL;
@@ -927,8 +1112,13 @@ HRESULT PeekProvider::GetCredentialCount(
         );
     }
 
-    // Constraint: Do not make Peek the default tile in this change (separate item).
-    *pdwDefault = CREDENTIAL_PROVIDER_NO_DEFAULT;
+    // AutoSelect configuration: when enabled, Peek tile is the default logon tile.
+    DWORD defaultTile = CREDENTIAL_PROVIDER_NO_DEFAULT;
+    if (IsAutoSelectEnabled())
+    {
+        defaultTile = 0;
+    }
+    *pdwDefault = defaultTile;
     *pbAutoLogonWithDefault = FALSE;
 
     if (m_pCredential->IsAuthenticated())

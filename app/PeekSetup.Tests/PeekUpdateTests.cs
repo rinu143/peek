@@ -357,7 +357,7 @@ namespace PeekSetup.Tests
                 // Verify: EffectiveFeedUrl strictly returns HKLM or default, NEVER the malicious URL!
                 string effectiveFeed = policy.GetEffectiveFeedUrl();
                 Assert.NotEqual("https://malicious-update-server.com/evil", effectiveFeed);
-                Assert.Contains("rinu143.github.io", effectiveFeed); // Centralized repository default
+                Assert.True(effectiveFeed.Contains("rinu143.github.io") || effectiveFeed == policy.GetHklmFeedUrl());
             }
             finally
             {

@@ -17,6 +17,7 @@ namespace PeekSetup.Tests
     public class MockPasswordValidator : IPasswordValidator
     {
         public bool ShouldAccept { get; set; }
+        public bool HasPasswordSetResult { get; set; } = true;
         public string? LastValidatedUsername { get; private set; }
         public int ValidateCallCount { get; private set; }
 
@@ -30,6 +31,11 @@ namespace PeekSetup.Tests
             ValidateCallCount++;
             LastValidatedUsername = username;
             return ShouldAccept;
+        }
+
+        public bool HasPasswordSet(string username, string? domain = null)
+        {
+            return HasPasswordSetResult;
         }
     }
 
