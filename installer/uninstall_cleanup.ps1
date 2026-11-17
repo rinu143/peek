@@ -116,6 +116,20 @@ try {
 } catch {}
 
 try {
+    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "PeekEngine" -ErrorAction SilentlyContinue
+} catch {}
+
+try {
+    $userStartupFolder = [Environment]::GetFolderPath("Startup")
+    if (Test-Path $userStartupFolder) {
+        $userShortcut = Join-Path $userStartupFolder "PeekEngine.lnk"
+        if (Test-Path $userShortcut) {
+            Remove-Item $userShortcut -Force -ErrorAction SilentlyContinue
+        }
+    }
+} catch {}
+
+try {
     if (Test-Path "HKLM:\SOFTWARE\Peek") {
         Remove-Item -Path "HKLM:\SOFTWARE\Peek" -Recurse -Force -ErrorAction SilentlyContinue
     }

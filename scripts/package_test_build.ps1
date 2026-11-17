@@ -56,6 +56,7 @@ if (-not $SkipBuild) {
     $pyinstallerArgs = @(
         "-m", "PyInstaller",
         "--onefile",
+        "--noconsole",
         "--name", "PeekEngine",
         "--paths", ".",
         "--add-data", "engine\models\*.onnx;engine\models",

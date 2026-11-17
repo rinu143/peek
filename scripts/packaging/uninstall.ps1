@@ -139,6 +139,9 @@ if ($svc) {
 try {
     Remove-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "PeekEngine" -ErrorAction SilentlyContinue
 } catch { }
+try {
+    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "PeekEngine" -ErrorAction SilentlyContinue
+} catch { }
 
 foreach ($taskName in @("PeekEngine", "PeekUpdate")) {
     $taskCheck = Start-Process -FilePath "schtasks.exe" -ArgumentList "/Query /TN `"$taskName`"" -Wait -NoNewWindow -PassThru -ErrorAction SilentlyContinue
@@ -155,6 +158,13 @@ $startupShortcut = Join-Path $startupFolder "PeekEngine.lnk"
 if (Test-Path $startupShortcut) {
     Remove-Item -Path $startupShortcut -Force
     Write-Host "      [OK] Removed startup shortcut: $startupShortcut" -ForegroundColor Green
+}
+
+$userStartupFolder = [Environment]::GetFolderPath("Startup")
+$userStartupShortcut = Join-Path $userStartupFolder "PeekEngine.lnk"
+if (Test-Path $userStartupShortcut) {
+    Remove-Item -Path $userStartupShortcut -Force
+    Write-Host "      [OK] Removed user startup shortcut: $userStartupShortcut" -ForegroundColor Green
 }
 
 # 5. User profile data cleanup prompt

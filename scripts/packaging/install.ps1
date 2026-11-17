@@ -407,13 +407,17 @@ Write-Host "[4/5] Configuring PeekEngine Windows service under NT SERVICE\PeekEn
 $engineExe = $engineExePath
 $engineWorkingDir = Split-Path -Parent $engineExe
 
-# Clean up legacy Scheduled Task, HKLM Run, and CommonStartup launchers
+# Clean up legacy Scheduled Task, Run keys, and Startup launchers
 try {
     Unregister-ScheduledTask -TaskName "PeekEngine" -Confirm:$false -ErrorAction SilentlyContinue
 } catch { }
 
 try {
     Remove-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "PeekEngine" -ErrorAction SilentlyContinue
+} catch { }
+
+try {
+    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "PeekEngine" -ErrorAction SilentlyContinue
 } catch { }
 
 try {
@@ -426,16 +430,29 @@ try {
     }
 } catch { }
 
+try {
+    $userStartupFolder = [Environment]::GetFolderPath("Startup")
+    if (Test-Path $userStartupFolder) {
+        $userShortcut = Join-Path $userStartupFolder "PeekEngine.lnk"
+        if (Test-Path $userShortcut) {
+            Remove-Item $userShortcut -Force -ErrorAction SilentlyContinue
+        }
+    }
+} catch { }
+
 # Register Windows Service PeekEngine
 $serviceName = "PeekEngine"
 $existingSvc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if (-not $existingSvc) {
-    & sc.exe create $serviceName binPath= "`"$engineExe`"" start= auto obj= "NT SERVICE\PeekEngine" displayname= "Peek Face Recognition Engine" | Out-Null
+    & sc.exe create $serviceName binPath= "`"$engineExe`" --service" start= auto obj= "NT SERVICE\PeekEngine" displayname= "Peek Face Recognition Engine" | Out-Null
 } else {
-    & sc.exe config $serviceName binPath= "`"$engineExe`"" start= auto obj= "NT SERVICE\PeekEngine" | Out-Null
+    & sc.exe config $serviceName binPath= "`"$engineExe`" --service" start= auto obj= "NT SERVICE\PeekEngine" | Out-Null
 }
 & sc.exe failure $serviceName reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
 Write-Host "      [OK] Windows Service '$serviceName' registered (starts at boot under NT SERVICE\PeekEngine)." -ForegroundColor Green
+try {
+    Start-Service -Name $serviceName -ErrorAction SilentlyContinue
+} catch { }
 
 # Create Start Menu shortcut for Peek
 $startMenuPeekDir = Join-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" "Peek"

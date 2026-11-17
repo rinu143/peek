@@ -7,6 +7,7 @@
 #include <sddl.h>
 #include <wincrypt.h>
 #include <tlhelp32.h>
+#include <psapi.h>
 
 static bool EnsureEngineRunning()
 {
@@ -212,11 +213,49 @@ bool PeekPipeClient::VerifyServerProcess(HANDLE hPipe, const std::wstring& expec
     // 1. Verify image path equals installed PeekEngine.exe path read from admin-only registry HKLM\SOFTWARE\Peek\InstallPath
     wchar_t szImagePath[MAX_PATH * 2] = {};
     DWORD dwSize = ARRAYSIZE(szImagePath);
-    if (!QueryFullProcessImageNameW(hProc, 0, szImagePath, &dwSize))
+    bool bGotPath = (QueryFullProcessImageNameW(hProc, 0, szImagePath, &dwSize) != FALSE);
+    if (!bGotPath)
     {
+        DWORD dwErr = GetLastError();
+        Logger::LogInfo(("VerifyServerProcess: QueryFullProcessImageNameW(flags=0) failed with error " + std::to_string(dwErr) + "; trying PROCESS_NAME_NATIVE").c_str());
+        dwSize = ARRAYSIZE(szImagePath);
+        bGotPath = (QueryFullProcessImageNameW(hProc, PROCESS_NAME_NATIVE, szImagePath, &dwSize) != FALSE);
+        if (!bGotPath)
+        {
+            DWORD dwNativeLen = GetProcessImageFileNameW(hProc, szImagePath, ARRAYSIZE(szImagePath));
+            bGotPath = (dwNativeLen > 0);
+        }
+    }
+
+    if (!bGotPath)
+    {
+        DWORD dwErr = GetLastError();
         CloseHandle(hProc);
-        Logger::LogError("VerifyServerProcess: QueryFullProcessImageNameW failed");
+        Logger::LogError(("VerifyServerProcess: Failed to retrieve process image name for server PID " + std::to_string(serverPid) + ", err=" + std::to_string(dwErr)).c_str());
         return false;
+    }
+
+    // If szImagePath is in native NT device path format (\Device\HarddiskVolumeX\...), convert it to DOS drive path
+    if (wcsncmp(szImagePath, L"\\Device\\", 8) == 0)
+    {
+        wchar_t szDrive[3] = L" :";
+        for (wchar_t c = L'A'; c <= L'Z'; ++c)
+        {
+            szDrive[0] = c;
+            wchar_t szDev[MAX_PATH] = {};
+            if (QueryDosDeviceW(szDrive, szDev, ARRAYSIZE(szDev)) > 0)
+            {
+                size_t devLen = wcslen(szDev);
+                if (_wcsnicmp(szImagePath, szDev, devLen) == 0 && (szImagePath[devLen] == L'\\' || szImagePath[devLen] == L'\0'))
+                {
+                    wchar_t szConverted[MAX_PATH * 2] = {};
+                    wcscpy_s(szConverted, szDrive);
+                    wcscat_s(szConverted, szImagePath + devLen);
+                    wcscpy_s(szImagePath, szConverted);
+                    break;
+                }
+            }
+        }
     }
 
     wchar_t szExpectedImage[MAX_PATH * 2] = {};
@@ -263,6 +302,19 @@ bool PeekPipeClient::VerifyServerProcess(HANDLE hPipe, const std::wstring& expec
         }
     }
 
+    // Resolve szFinalExpected to native device path as well in case DOS path mapping is unavailable
+    wchar_t szExpectedNative[MAX_PATH * 2] = {};
+    if (szFinalExpected[1] == L':')
+    {
+        wchar_t szDrive[3] = { szFinalExpected[0], L':', L'\0' };
+        wchar_t szDev[MAX_PATH] = {};
+        if (QueryDosDeviceW(szDrive, szDev, ARRAYSIZE(szDev)) > 0)
+        {
+            wcscpy_s(szExpectedNative, szDev);
+            wcscat_s(szExpectedNative, szFinalExpected + 2);
+        }
+    }
+
     // Normalize both paths using GetLongPathNameW to avoid short-path / 8.3 mismatch (e.g. PROGRA~1)
     wchar_t szActualLong[MAX_PATH * 2] = {};
     if (GetLongPathNameW(szImagePath, szActualLong, ARRAYSIZE(szActualLong)) == 0)
@@ -277,6 +329,10 @@ bool PeekPipeClient::VerifyServerProcess(HANDLE hPipe, const std::wstring& expec
     }
 
     bool bImageMatch = (_wcsicmp(szActualLong, szExpectedLong) == 0);
+    if (!bImageMatch && szExpectedNative[0] != L'\0')
+    {
+        bImageMatch = (_wcsicmp(szActualLong, szExpectedNative) == 0 || _wcsicmp(szImagePath, szExpectedNative) == 0);
+    }
 
 #ifdef PEEK_TEST_BUILD
     wchar_t szOverride[MAX_PATH * 2] = {};

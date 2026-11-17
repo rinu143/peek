@@ -53,9 +53,9 @@ try {
     $serviceName = "PeekEngine"
     $existingSvc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     if (-not $existingSvc) {
-        & sc.exe create $serviceName binPath= "`"$engineExe`"" start= auto obj= "NT SERVICE\PeekEngine" displayname= "Peek Face Recognition Engine" | Out-Null
+        & sc.exe create $serviceName binPath= "`"$engineExe`" --service" start= auto obj= "NT SERVICE\PeekEngine" displayname= "Peek Face Recognition Engine" | Out-Null
     } else {
-        & sc.exe config $serviceName binPath= "`"$engineExe`"" start= auto obj= "NT SERVICE\PeekEngine" | Out-Null
+        & sc.exe config $serviceName binPath= "`"$engineExe`" --service" start= auto obj= "NT SERVICE\PeekEngine" | Out-Null
     }
     & sc.exe failure $serviceName reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
 
@@ -161,7 +161,7 @@ try {
         Set-ItemProperty -Path $prefsRegKey -Name "ColdBootUnlock" -Value 1 -Type DWord -Force
     }
 
-    # 7. Remove legacy Scheduled Task, HKLM Run, and CommonStartup launchers
+    # 7. Remove legacy Scheduled Task, Run keys, and Startup launchers
     Write-Host "[*] Removing legacy Scheduled Task and user-session auto-start launchers..."
     try {
         Unregister-ScheduledTask -TaskName "PeekEngine" -Confirm:$false -ErrorAction SilentlyContinue
@@ -172,11 +172,25 @@ try {
     } catch { }
 
     try {
+        Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "PeekEngine" -ErrorAction SilentlyContinue
+    } catch { }
+
+    try {
         $startupFolder = [Environment]::GetFolderPath("CommonStartup")
         if (Test-Path $startupFolder) {
             $shortcutPath = Join-Path $startupFolder "PeekEngine.lnk"
             if (Test-Path $shortcutPath) {
                 Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+    } catch { }
+
+    try {
+        $userStartupFolder = [Environment]::GetFolderPath("Startup")
+        if (Test-Path $userStartupFolder) {
+            $userShortcut = Join-Path $userStartupFolder "PeekEngine.lnk"
+            if (Test-Path $userShortcut) {
+                Remove-Item $userShortcut -Force -ErrorAction SilentlyContinue
             }
         }
     } catch { }
