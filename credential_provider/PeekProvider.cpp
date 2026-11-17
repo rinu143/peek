@@ -20,6 +20,19 @@ static bool IsAutoSelectEnabled()
     HKEY hKey = nullptr;
     DWORD dwVal = 0;
     DWORD dwSize = sizeof(dwVal);
+
+    // 1. Try HKLM\SOFTWARE\Peek\Prefs\AutoSelect
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Peek\\Prefs", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        if (RegQueryValueExW(hKey, L"AutoSelect", nullptr, nullptr, reinterpret_cast<LPBYTE>(&dwVal), &dwSize) == ERROR_SUCCESS)
+        {
+            RegCloseKey(hKey);
+            return (dwVal != 0);
+        }
+        RegCloseKey(hKey);
+    }
+
+    // 2. Fallback to legacy HKLM\SOFTWARE\Peek\AutoSelect
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Peek", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
     {
         if (RegQueryValueExW(hKey, L"AutoSelect", nullptr, nullptr, reinterpret_cast<LPBYTE>(&dwVal), &dwSize) == ERROR_SUCCESS)
@@ -30,6 +43,18 @@ static bool IsAutoSelectEnabled()
         RegCloseKey(hKey);
     }
 
+    // 3. Try HKCU\SOFTWARE\Peek\Prefs\AutoSelect
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"SOFTWARE\\Peek\\Prefs", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        if (RegQueryValueExW(hKey, L"AutoSelect", nullptr, nullptr, reinterpret_cast<LPBYTE>(&dwVal), &dwSize) == ERROR_SUCCESS)
+        {
+            RegCloseKey(hKey);
+            return (dwVal != 0);
+        }
+        RegCloseKey(hKey);
+    }
+
+    // 4. Try HKCU\SOFTWARE\Peek\AutoSelect
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"SOFTWARE\\Peek", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
     {
         if (RegQueryValueExW(hKey, L"AutoSelect", nullptr, nullptr, reinterpret_cast<LPBYTE>(&dwVal), &dwSize) == ERROR_SUCCESS)
@@ -41,6 +66,48 @@ static bool IsAutoSelectEnabled()
     }
 
     return false; // Default to NO_DEFAULT if unconfigured
+}
+
+static bool IsColdBootUnlockEnabled()
+{
+#ifdef PEEK_TEST_BUILD
+    if (PeekProvider::HasTestColdBootUnlock())
+    {
+        return PeekProvider::GetTestColdBootUnlock();
+    }
+    wchar_t szEnv[16] = {};
+    if (GetEnvironmentVariableW(L"PEEK_TEST_COLD_BOOT_UNLOCK", szEnv, ARRAYSIZE(szEnv)) > 0)
+    {
+        return (wcscmp(szEnv, L"1") == 0 || _wcsicmp(szEnv, L"true") == 0);
+    }
+#endif
+    HKEY hKey = nullptr;
+    DWORD dwVal = 0;
+    DWORD dwSize = sizeof(dwVal);
+
+    // 1. Try HKLM\SOFTWARE\Peek\Prefs\ColdBootUnlock
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Peek\\Prefs", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        if (RegQueryValueExW(hKey, L"ColdBootUnlock", nullptr, nullptr, reinterpret_cast<LPBYTE>(&dwVal), &dwSize) == ERROR_SUCCESS)
+        {
+            RegCloseKey(hKey);
+            return (dwVal != 0);
+        }
+        RegCloseKey(hKey);
+    }
+
+    // 2. Try HKLM\SOFTWARE\Peek\ColdBootUnlock
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Peek", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        if (RegQueryValueExW(hKey, L"ColdBootUnlock", nullptr, nullptr, reinterpret_cast<LPBYTE>(&dwVal), &dwSize) == ERROR_SUCCESS)
+        {
+            RegCloseKey(hKey);
+            return (dwVal != 0);
+        }
+        RegCloseKey(hKey);
+    }
+
+    return true; // Default to true (power-on unlock enabled)
 }
 
 static bool GetLastLoggedOnUserSid(std::wstring& outSid)
@@ -837,6 +904,12 @@ HRESULT PeekProvider::ResolveLockedUser(DWORD* pdwUserIndex, bool* pbLockedSessi
         }
 
         // COLD BOOT: No active console user session.
+        if (!IsColdBootUnlockEnabled())
+        {
+            Logger::LogInfo(L"PeekProvider::ResolveLockedUser (COLD BOOT): ColdBootUnlock is disabled -> S_FALSE (tile will not be offered)");
+            return S_FALSE;
+        }
+
         // 1. Try LastLoggedOnUserSID from LogonUI registry
         std::wstring lastLoggedSid;
         if (GetLastLoggedOnUserSid(lastLoggedSid) && !lastLoggedSid.empty())

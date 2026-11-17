@@ -96,6 +96,7 @@ from engine.ipc.protocol import (
 from engine.camera.camera_capture import CameraCapture
 from engine.camera.power_watcher import get_power_watcher, PowerStateWatcher
 from engine.pipeline.face_engine import FaceEngine, EngineFrameResult
+from storage.template_store import secure_admin_only_path
 
 logger = logging.getLogger("Peek.PipeServer")
 
@@ -232,13 +233,16 @@ class PipeClientSession:
 
 
 class UserLockoutTracker:
-    """
+    r"""
     Tracks failed authentication attempts per user and enforces lockout throttling.
 
     SECURITY REQUIREMENT:
       - Counts consecutive failed/timed-out sessions per user.
       - After 5 failures within 10 minutes (600s), locks out for 5 minutes (300s).
       - During lockout, replies LOCKED_OUT to START_AUTH.
+      - Persisted to %ProgramData%\Peek\state\lockout.json (SYSTEM/Administrators only),
+        so a reboot does not clear failure counts or lockout-until.
+      - Uses wall-clock time (time.time()) and fails closed on a corrupt state file.
       - Resets on successful authentication.
       - Logs each lockout locally without exposing secrets or user SIDs at INFO level.
     """
@@ -248,23 +252,116 @@ class UserLockoutTracker:
         max_failures: int = 5,
         window_seconds: float = 600.0,
         lockout_duration_seconds: float = 300.0,
+        state_file_path: Optional[str] = None,
+        max_attempts: Optional[int] = None,
     ):
+        if max_attempts is not None:
+            max_failures = max_attempts
         self.max_failures = max_failures
         self.window_seconds = window_seconds
         self.lockout_duration_seconds = lockout_duration_seconds
         self._lock = threading.Lock()
         self._failures: Dict[str, list] = {}
         self._lockouts: Dict[str, float] = {}
+        self._is_corrupt = False
+
+        if state_file_path is not None:
+            self.state_file_path = state_file_path
+        else:
+            env_path = os.environ.get("PEEK_LOCKOUT_STATE_PATH")
+            if env_path:
+                self.state_file_path = env_path
+            else:
+                program_data = os.environ.get("ProgramData", r"C:\ProgramData")
+                self.state_file_path = os.path.join(program_data, "Peek", "state", "lockout.json")
+
+        self._load_state()
+
+    def _load_state(self) -> None:
+        """Loads failure history and lockouts from persisted storage. Fails closed on corruption."""
+        if not self.state_file_path or not os.path.exists(self.state_file_path):
+            return
+
+        try:
+            with open(self.state_file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            if not content.strip():
+                logger.error(f"Lockout state file '{self.state_file_path}' is empty; failing closed.")
+                self._is_corrupt = True
+                return
+
+            data = json.loads(content)
+            if not isinstance(data, dict):
+                logger.error(f"Lockout state file '{self.state_file_path}' is not a JSON object; failing closed.")
+                self._is_corrupt = True
+                return
+
+            lockouts = data.get("lockouts", {})
+            failures = data.get("failures", {})
+
+            if not isinstance(lockouts, dict) or not isinstance(failures, dict):
+                logger.error(f"Lockout state file '{self.state_file_path}' has invalid schema; failing closed.")
+                self._is_corrupt = True
+                return
+
+            self._lockouts = {str(k): float(v) for k, v in lockouts.items() if isinstance(v, (int, float))}
+            self._failures = {
+                str(k): [float(t) for t in v if isinstance(t, (int, float))]
+                for k, v in failures.items() if isinstance(v, list)
+            }
+            self._is_corrupt = False
+        except Exception as ex:
+            logger.error(f"Failed to load lockout state file '{self.state_file_path}': {ex}; failing closed.")
+            self._is_corrupt = True
+
+    def _save_state(self) -> None:
+        """Atomically writes lockout state to disk and enforces admin-only permissions."""
+        if not self.state_file_path:
+            return
+
+        try:
+            state_dir = os.path.dirname(self.state_file_path)
+            if state_dir:
+                os.makedirs(state_dir, exist_ok=True)
+                secure_admin_only_path(state_dir, is_directory=True)
+
+            data = {
+                "version": 1,
+                "lockouts": self._lockouts,
+                "failures": self._failures,
+                "updated_at": time.time(),
+            }
+            raw = json.dumps(data, indent=2)
+
+            tmp_path = f"{self.state_file_path}.tmp.{os.getpid()}_{time.time()}"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(raw)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+
+            os.replace(tmp_path, self.state_file_path)
+            secure_admin_only_path(self.state_file_path, is_directory=False)
+        except Exception as ex:
+            logger.warning(f"Could not persist lockout state file '{self.state_file_path}': {ex}")
 
     def is_locked_out(self, user_id: str) -> Tuple[bool, float]:
-        """Returns (is_locked, remaining_seconds)."""
+        """Returns (is_locked, remaining_seconds). Fails closed if state file is corrupt."""
         with self._lock:
+            if self._is_corrupt:
+                # Fail closed on corrupt state file
+                return True, self.lockout_duration_seconds
+
             now = time.time()
             locked_until = self._lockouts.get(user_id, 0.0)
             if now < locked_until:
                 return True, max(0.0, locked_until - now)
             if user_id in self._lockouts:
                 del self._lockouts[user_id]
+                self._save_state()
             return False, 0.0
 
     def record_failure(self, user_id: str) -> bool:
@@ -274,6 +371,9 @@ class UserLockoutTracker:
         Returns True if a new lockout was triggered.
         """
         with self._lock:
+            if self._is_corrupt:
+                return True
+
             now = time.time()
             if now < self._lockouts.get(user_id, 0.0):
                 return False
@@ -288,32 +388,48 @@ class UserLockoutTracker:
                 locked_until = now + self.lockout_duration_seconds
                 self._lockouts[user_id] = locked_until
                 self._failures[user_id] = []
+                self._save_state()
                 logger.warning(
                     f"Authentication lockout triggered: {self.max_failures} consecutive failures within "
                     f"{int(self.window_seconds / 60)} minutes. Locked out for {int(self.lockout_duration_seconds / 60)} minutes."
                 )
                 logger.debug(f"Lockout applied for user_id={user_id}, locked_until={locked_until}")
                 return True
+
+            self._save_state()
             return False
 
     def record_success(self, user_id: str):
         """Resets consecutive failures and any lockout for user_id on successful authentication."""
         with self._lock:
+            self._is_corrupt = False
+            modified = False
             if user_id in self._failures:
                 del self._failures[user_id]
+                modified = True
             if user_id in self._lockouts:
                 del self._lockouts[user_id]
+                modified = True
+            if modified:
+                self._save_state()
             logger.debug(f"Reset lockout tracking on successful authentication for user_id={user_id}")
 
     def reset(self, user_id: Optional[str] = None):
         """Resets tracking state (useful for tests)."""
         with self._lock:
+            self._is_corrupt = False
             if user_id is not None:
                 self._failures.pop(user_id, None)
                 self._lockouts.pop(user_id, None)
             else:
                 self._failures.clear()
                 self._lockouts.clear()
+
+            if self.state_file_path and os.path.exists(self.state_file_path):
+                try:
+                    os.remove(self.state_file_path)
+                except Exception:
+                    self._save_state()
 
 
 class PipeServer:

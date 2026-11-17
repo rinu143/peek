@@ -124,8 +124,22 @@ if (-not $cpKeyStillExists -and -not $clsidKeyStillExists) {
     Write-Warning "Residual registry entries could not be completely deleted. Check permissions."
 }
 
-# 4. Remove scheduled task and startup shortcuts
-Write-Host "[3/5] Removing scheduled tasks and startup shortcuts..." -ForegroundColor Cyan
+# 4. Remove Windows service, scheduled tasks and startup shortcuts
+Write-Host "[3/5] Removing Windows service, scheduled tasks and startup shortcuts..." -ForegroundColor Cyan
+
+$svc = Get-Service -Name "PeekEngine" -ErrorAction SilentlyContinue
+if ($svc) {
+    Write-Host "      Stopping and deleting PeekEngine Windows Service..."
+    & sc.exe stop PeekEngine | Out-Null
+    Start-Sleep -Milliseconds 500
+    & sc.exe delete PeekEngine | Out-Null
+    Write-Host "      [OK] Windows Service 'PeekEngine' deleted." -ForegroundColor Green
+}
+
+try {
+    Remove-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "PeekEngine" -ErrorAction SilentlyContinue
+} catch { }
+
 foreach ($taskName in @("PeekEngine", "PeekUpdate")) {
     $taskCheck = Start-Process -FilePath "schtasks.exe" -ArgumentList "/Query /TN `"$taskName`"" -Wait -NoNewWindow -PassThru -ErrorAction SilentlyContinue
     if ($taskCheck.ExitCode -eq 0) {

@@ -82,6 +82,56 @@ namespace PeekSetup.Tests
             return Task.CompletedTask;
         }
 
+        public List<ProfileModel> MockProfiles { get; set; } = new();
+        public bool ListCalled { get; set; }
+        public bool SetEnabledCalled { get; set; }
+        public string? LastEnabledProfileId { get; set; }
+        public bool LastEnabledState { get; set; }
+        public bool DeleteCalled { get; set; }
+        public string? LastDeletedProfileId { get; set; }
+        public bool RenameCalled { get; set; }
+        public string? LastRenamedProfileId { get; set; }
+        public string? LastRenamedNewName { get; set; }
+
+        public Task<List<ProfileModel>> ListProfilesAsync(int timeoutMs = 3000, CancellationToken ct = default)
+        {
+            ListCalled = true;
+            return Task.FromResult(new List<ProfileModel>(MockProfiles));
+        }
+
+        public Task<bool> SetProfileEnabledAsync(string profileId, bool enabled, int timeoutMs = 3000, CancellationToken ct = default)
+        {
+            SetEnabledCalled = true;
+            LastEnabledProfileId = profileId;
+            LastEnabledState = enabled;
+            var p = MockProfiles.Find(x => x.ProfileId == profileId);
+            if (p != null) p.Enabled = enabled;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> DeleteProfileAsync(string profileId, int timeoutMs = 3000, CancellationToken ct = default)
+        {
+            DeleteCalled = true;
+            LastDeletedProfileId = profileId;
+            MockProfiles.RemoveAll(x => x.ProfileId == profileId);
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> RenameProfileAsync(string profileId, string newName, int timeoutMs = 3000, CancellationToken ct = default)
+        {
+            RenameCalled = true;
+            LastRenamedProfileId = profileId;
+            LastRenamedNewName = newName;
+            var p = MockProfiles.Find(x => x.ProfileId == profileId);
+            if (p != null) p.DisplayName = newName;
+            return Task.FromResult(true);
+        }
+
+        public Task<QualityResponseData?> GetProfileQualityAsync(string profileId, int timeoutMs = 3000, CancellationToken ct = default)
+        {
+            return Task.FromResult<QualityResponseData?>(new QualityResponseData(profileId, 0.95, true, true, ""));
+        }
+
         public ValueTask DisposeAsync()
         {
             return ValueTask.CompletedTask;

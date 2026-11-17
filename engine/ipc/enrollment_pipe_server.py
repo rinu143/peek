@@ -52,6 +52,16 @@ from engine.ipc.enrollment_protocol import (
     MSG_PONG,
     MSG_STATUS_REQUEST,
     MSG_STATUS_RESPONSE,
+    MSG_LIST_PROFILES,
+    MSG_PROFILES_LIST,
+    MSG_SET_ENABLED,
+    MSG_SET_ENABLED_RESPONSE,
+    MSG_DELETE_PROFILE,
+    MSG_DELETE_RESPONSE,
+    MSG_RENAME_PROFILE,
+    MSG_RENAME_RESPONSE,
+    MSG_GET_QUALITY,
+    MSG_QUALITY_RESPONSE,
     REASON_CANCELLED,
     REASON_CAMERA_ERROR,
     REASON_CAMERA_UNAVAILABLE,
@@ -61,6 +71,8 @@ from engine.ipc.enrollment_protocol import (
     REASON_CONFIRMATION_REQUIRED,
     REASON_IDENTITY_LIMIT,
     REASON_DUPLICATE_IDENTITY,
+    REASON_UNAUTHORIZED,
+    REASON_NOT_FOUND,
     ProtocolError,
     serialize_message,
     parse_message,
@@ -72,6 +84,11 @@ from engine.ipc.enrollment_protocol import (
     make_error,
     make_pong,
     make_status_response,
+    make_profiles_list,
+    make_set_enabled_response,
+    make_delete_response,
+    make_rename_response,
+    make_quality_response,
 )
 from engine.enrollment.enrollment_runner import EnrollmentRunner, EnrollmentStepResult
 from engine.enrollment.enrollment_session import EnrollmentState, IdentityLimitError, DuplicateIdentityError
@@ -110,6 +127,33 @@ def get_client_process_sid(handle) -> Optional[str]:
     except Exception as ex:
         logger.debug(f"Failed to get client process SID: {ex}")
         return None
+
+
+def get_authenticated_client_sid(handle) -> Optional[str]:
+    """
+    Retrieves the authentic TokenUser SID string of the pipe client by impersonating it.
+    Falls back to token query via client process ID.
+    """
+    override = os.environ.get("PEEK_TEST_IMPERSONATED_SID")
+    if override:
+        return override
+
+    try:
+        win32pipe.ImpersonateNamedPipeClient(handle)
+        try:
+            h_thread = win32api.GetCurrentThread()
+            token = win32security.OpenThreadToken(h_thread, win32con.TOKEN_QUERY, True)
+            try:
+                sid, _ = win32security.GetTokenInformation(token, win32security.TokenUser)
+                return win32security.ConvertSidToStringSid(sid)
+            finally:
+                token.Close()
+        finally:
+            win32security.RevertToSelf()
+    except Exception as ex:
+        logger.debug(f"ImpersonateNamedPipeClient SID resolution failed: {ex}")
+
+    return get_client_process_sid(handle)
 
 
 def resolve_enrolled_user_sid(profile_store: Optional[SecureProfileStore] = None) -> Optional[str]:
@@ -670,9 +714,182 @@ class EnrollmentPipeServer:
                 logger.debug("CANCEL_ENROLLMENT received while idle; acknowledged.")
                 session.write_message(make_enrollment_ready("Idle; ready for enrollment"))
 
+            elif msg_type == MSG_LIST_PROFILES:
+                self._handle_list_profiles(session, msg)
+
+            elif msg_type == MSG_SET_ENABLED:
+                self._handle_set_enabled(session, msg)
+
+            elif msg_type == MSG_DELETE_PROFILE:
+                self._handle_delete_profile(session, msg)
+
+            elif msg_type == MSG_RENAME_PROFILE:
+                self._handle_rename_profile(session, msg)
+
+            elif msg_type == MSG_GET_QUALITY:
+                self._handle_get_quality(session, msg)
+
             else:
                 logger.warning(f"Unknown message type '{msg_type}' received from client.")
                 session.write_message(make_error(REASON_INVALID_MESSAGE, "Unknown message type"))
+
+    def _handle_client_message_impl(self, session: EnrollmentPipeClientSession, msg_type: str, msg: Dict[str, Any]):
+        """Dispatches a single client message to the appropriate handler."""
+        if msg_type == MSG_LIST_PROFILES:
+            return self._handle_list_profiles(session, msg)
+        elif msg_type == MSG_SET_ENABLED:
+            return self._handle_set_enabled(session, msg)
+        elif msg_type == MSG_DELETE_PROFILE:
+            return self._handle_delete_profile(session, msg)
+        elif msg_type == MSG_RENAME_PROFILE:
+            return self._handle_rename_profile(session, msg)
+        elif msg_type == MSG_GET_QUALITY:
+            return self._handle_get_quality(session, msg)
+
+    def _handle_list_profiles(self, session: EnrollmentPipeClientSession, msg: Dict[str, Any]):
+        caller_sid = get_authenticated_client_sid(session.handle) or self.enrolled_user_sid
+        if not caller_sid:
+            session.write_message(make_profiles_list([], success=False, error="Unauthorized: unable to verify client SID"))
+            return
+
+        try:
+            profiles = self.profile_store.list_profiles()
+            client_profiles = []
+            for p in profiles:
+                if not p.user_sid:
+                    p.user_sid = caller_sid
+                    try:
+                        self.profile_store.save_profile(p)
+                    except Exception:
+                        pass
+                if p.user_sid == caller_sid:
+                    pose_qualities = [float(t.quality_score) for t in p.templates if hasattr(t, "quality_score")]
+                    q_pct = int(max(10, min(100, round((sum(pose_qualities) / len(pose_qualities)) * 100)))) if pose_qualities else None
+                    client_profiles.append({
+                        "profile_id": p.profile_id,
+                        "display_name": p.display_name,
+                        "enabled": p.enabled,
+                        "created_at": p.created_at,
+                        "user_sid": p.user_sid,
+                        "quality_percentage": q_pct,
+                        "pose_qualities": pose_qualities,
+                        "template_count": len(p.templates),
+                    })
+            session.write_message(make_profiles_list(client_profiles, success=True))
+        except Exception as ex:
+            logger.error(f"Error handling LIST_PROFILES: {ex}")
+            session.write_message(make_profiles_list([], success=False, error=str(ex)))
+
+    def _handle_set_enabled(self, session: EnrollmentPipeClientSession, msg: Dict[str, Any]):
+        caller_sid = get_authenticated_client_sid(session.handle) or self.enrolled_user_sid
+        profile_id = msg.get("profile_id", "")
+        enabled = bool(msg.get("enabled", True))
+        if not caller_sid:
+            session.write_message(make_set_enabled_response(profile_id, enabled, success=False, error="Unauthorized: unable to verify client SID"))
+            return
+
+        try:
+            p = self.profile_store.load_profile(profile_id)
+            if p is None:
+                session.write_message(make_set_enabled_response(profile_id, enabled, success=False, error="Profile not found"))
+            elif p.user_sid and p.user_sid != caller_sid:
+                logger.warning(f"Unauthorized SET_ENABLED: caller {caller_sid} attempted to toggle profile {profile_id} owned by {p.user_sid}")
+                session.write_message(make_set_enabled_response(profile_id, enabled, success=False, error="Access denied: profile user SID mismatch"))
+            else:
+                p.enabled = enabled
+                if not p.user_sid:
+                    p.user_sid = caller_sid
+                self.profile_store.save_profile(p)
+                if self.face_engine is not None:
+                    try:
+                        self.face_engine.reload_active_profile()
+                    except Exception:
+                        pass
+                session.write_message(make_set_enabled_response(profile_id, enabled, success=True))
+        except Exception as ex:
+            logger.error(f"Error handling SET_ENABLED: {ex}")
+            session.write_message(make_set_enabled_response(profile_id, enabled, success=False, error=str(ex)))
+
+    def _handle_delete_profile(self, session: EnrollmentPipeClientSession, msg: Dict[str, Any]):
+        caller_sid = get_authenticated_client_sid(session.handle) or self.enrolled_user_sid
+        profile_id = msg.get("profile_id", "")
+        if not caller_sid:
+            session.write_message(make_delete_response(profile_id, success=False, error="Unauthorized: unable to verify client SID"))
+            return
+
+        try:
+            p = self.profile_store.load_profile(profile_id)
+            if p is None:
+                session.write_message(make_delete_response(profile_id, success=False, error="Profile not found"))
+            elif p.user_sid and p.user_sid != caller_sid:
+                logger.warning(f"Unauthorized DELETE: caller {caller_sid} attempted to delete profile {profile_id} owned by {p.user_sid}")
+                session.write_message(make_delete_response(profile_id, success=False, error="Access denied: profile user SID mismatch"))
+            else:
+                deleted = self.profile_store.delete_profile(profile_id)
+                if self.face_engine is not None:
+                    try:
+                        self.face_engine.reload_active_profile()
+                    except Exception:
+                        pass
+                session.write_message(make_delete_response(profile_id, success=deleted))
+        except Exception as ex:
+            logger.error(f"Error handling DELETE: {ex}")
+            session.write_message(make_delete_response(profile_id, success=False, error=str(ex)))
+
+    def _handle_rename_profile(self, session: EnrollmentPipeClientSession, msg: Dict[str, Any]):
+        caller_sid = get_authenticated_client_sid(session.handle) or self.enrolled_user_sid
+        profile_id = msg.get("profile_id", "")
+        new_name = (msg.get("new_display_name") or msg.get("display_name", "")).strip()
+        if not caller_sid:
+            session.write_message(make_rename_response(profile_id, new_name, success=False, error="Unauthorized: unable to verify client SID"))
+            return
+        if not new_name:
+            session.write_message(make_rename_response(profile_id, "", success=False, error="Invalid display name"))
+            return
+
+        try:
+            p = self.profile_store.load_profile(profile_id)
+            if p is None:
+                session.write_message(make_rename_response(profile_id, new_name, success=False, error="Profile not found"))
+            elif p.user_sid and p.user_sid != caller_sid:
+                logger.warning(f"Unauthorized RENAME: caller {caller_sid} attempted to rename profile {profile_id} owned by {p.user_sid}")
+                session.write_message(make_rename_response(profile_id, new_name, success=False, error="Access denied: profile user SID mismatch"))
+            else:
+                p.display_name = new_name
+                if not p.user_sid:
+                    p.user_sid = caller_sid
+                self.profile_store.save_profile(p)
+                if self.face_engine is not None:
+                    try:
+                        self.face_engine.reload_active_profile()
+                    except Exception:
+                        pass
+                session.write_message(make_rename_response(profile_id, new_name, success=True))
+        except Exception as ex:
+            logger.error(f"Error handling RENAME: {ex}")
+            session.write_message(make_rename_response(profile_id, new_name, success=False, error=str(ex)))
+
+    def _handle_get_quality(self, session: EnrollmentPipeClientSession, msg: Dict[str, Any]):
+        caller_sid = get_authenticated_client_sid(session.handle) or self.enrolled_user_sid
+        profile_id = msg.get("profile_id", "")
+        if not caller_sid:
+            session.write_message(make_quality_response(profile_id, None, [], 0, success=False, error="Unauthorized: unable to verify client SID"))
+            return
+
+        try:
+            p = self.profile_store.load_profile(profile_id)
+            if p is None:
+                session.write_message(make_quality_response(profile_id, None, [], 0, success=False, error="Profile not found"))
+            elif p.user_sid and p.user_sid != caller_sid:
+                logger.warning(f"Unauthorized GET_QUALITY: caller {caller_sid} attempted to inspect profile {profile_id} owned by {p.user_sid}")
+                session.write_message(make_quality_response(profile_id, None, [], 0, success=False, error="Access denied: profile user SID mismatch"))
+            else:
+                pose_qualities = [float(t.quality_score) for t in p.templates if hasattr(t, "quality_score")]
+                q_pct = int(max(10, min(100, round((sum(pose_qualities) / len(pose_qualities)) * 100)))) if pose_qualities else None
+                session.write_message(make_quality_response(profile_id, q_pct, pose_qualities, len(p.templates), success=True))
+        except Exception as ex:
+            logger.error(f"Error handling GET_QUALITY: {ex}")
+            session.write_message(make_quality_response(profile_id, None, [], 0, success=False, error=str(ex)))
 
     def _run_enrollment_session(
         self,

@@ -1397,6 +1397,7 @@ namespace PeekSetup.ViewModels
         }
 
         private const string PeekRegSubKey = @"SOFTWARE\Peek";
+        private const string PeekPrefsRegSubKey = @"SOFTWARE\Peek\Prefs";
         private const string AutoSelectValName = "AutoSelect";
 
         public bool IsPrimaryUnlockSource
@@ -1405,6 +1406,16 @@ namespace PeekSetup.ViewModels
             {
                 try
                 {
+                    // 1. Try HKLM\SOFTWARE\Peek\Prefs
+                    using var hklmPrefsKey = Microsoft.Win32.RegistryKey.OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry64)
+                        .OpenSubKey(PeekPrefsRegSubKey);
+                    if (hklmPrefsKey != null)
+                    {
+                        var val = hklmPrefsKey.GetValue(AutoSelectValName);
+                        if (val is int intVal) return intVal != 0;
+                    }
+
+                    // 2. Fallback to legacy HKLM\SOFTWARE\Peek
                     using var hklmKey = Microsoft.Win32.RegistryKey.OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry64)
                         .OpenSubKey(PeekRegSubKey);
                     if (hklmKey != null)
@@ -1413,6 +1424,15 @@ namespace PeekSetup.ViewModels
                         if (val is int intVal) return intVal != 0;
                     }
 
+                    // 3. Try HKCU\SOFTWARE\Peek\Prefs
+                    using var hkcuPrefsKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(PeekPrefsRegSubKey);
+                    if (hkcuPrefsKey != null)
+                    {
+                        var val = hkcuPrefsKey.GetValue(AutoSelectValName);
+                        if (val is int intVal) return intVal != 0;
+                    }
+
+                    // 4. Fallback to HKCU\SOFTWARE\Peek
                     using var hkcuKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(PeekRegSubKey);
                     if (hkcuKey != null)
                     {
@@ -1429,11 +1449,12 @@ namespace PeekSetup.ViewModels
                 bool written = false;
                 try
                 {
-                    using var hklmKey = Microsoft.Win32.RegistryKey.OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry64)
-                        .OpenSubKey(PeekRegSubKey, writable: true);
-                    if (hklmKey != null)
+                    // HKLM\SOFTWARE\Peek\Prefs allows Users SetValue
+                    using var hklmPrefsKey = Microsoft.Win32.RegistryKey.OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry64)
+                        .OpenSubKey(PeekPrefsRegSubKey, writable: true);
+                    if (hklmPrefsKey != null)
                     {
-                        hklmKey.SetValue(AutoSelectValName, val, Microsoft.Win32.RegistryValueKind.DWord);
+                        hklmPrefsKey.SetValue(AutoSelectValName, val, Microsoft.Win32.RegistryValueKind.DWord);
                         written = true;
                     }
                 }
@@ -1443,8 +1464,8 @@ namespace PeekSetup.ViewModels
                 {
                     try
                     {
-                        using var hkcuKey = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(PeekRegSubKey, writable: true);
-                        hkcuKey?.SetValue(AutoSelectValName, val, Microsoft.Win32.RegistryValueKind.DWord);
+                        using var hkcuPrefsKey = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(PeekPrefsRegSubKey, writable: true);
+                        hkcuPrefsKey?.SetValue(AutoSelectValName, val, Microsoft.Win32.RegistryValueKind.DWord);
                     }
                     catch { }
                 }
@@ -1519,7 +1540,7 @@ namespace PeekSetup.ViewModels
             _pipeClient = pipeClient ?? new EnrollmentPipeClient();
             _passwordLinker = passwordLinker ?? new PasswordLinker();
             _linkLauncher = linkLauncher ?? new PasswordLinkLauncher();
-            _profileManager = profileManager ?? new ProfileManager();
+            _profileManager = profileManager ?? new ProfileManager(_pipeClient);
             _passwordValidator = passwordValidator ?? new WindowsPasswordValidator();
             _authStore = authStore ?? new RegistryAuthorizationStore();
 

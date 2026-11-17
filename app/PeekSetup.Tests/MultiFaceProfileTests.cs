@@ -588,78 +588,50 @@ namespace PeekSetup.Tests
         }
 
         [Fact]
-        public async Task ProfileManager_RenameProfileAsync_AtomicWriteEncryptsAndUpdatesFile()
+        public async Task ProfileManager_DelegatesManagementCallsOverPipe()
         {
-            string tempDir = Path.Combine(Path.GetTempPath(), "PeekTestProfiles_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(tempDir);
-            try
+            var mockPipe = new MockEnrollmentPipeClient();
+            mockPipe.MockProfiles.Add(new ProfileModel
             {
-                byte[] testEntropy = Encoding.UTF8.GetBytes("test-entropy-value-12345");
-                string profileId = "test_profile_id";
-                string filePath = Path.Combine(tempDir, $"{profileId}.peek");
-                string originalJson = "{\"profile_id\":\"test_profile_id\",\"display_name\":\"OriginalName\",\"enabled\":true,\"created_at\":1000.0}";
-                byte[] encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(originalJson), testEntropy, DataProtectionScope.CurrentUser);
-                await File.WriteAllBytesAsync(filePath, encrypted);
+                ProfileId = "prof_1",
+                DisplayName = "OriginalName",
+                Enabled = true,
+                CreatedAt = 1000.0,
+                UserSid = "S-1-5-21-test"
+            });
 
-                var pm = new ProfileManager(tempDir, entropyProvider: () => testEntropy);
-                var profiles = await pm.GetProfilesAsync();
-                Assert.Single(profiles);
-                Assert.Equal("OriginalName", profiles[0].DisplayName);
+            var pm = new ProfileManager(mockPipe);
+            var profiles = await pm.GetProfilesAsync();
+            Assert.True(mockPipe.ListCalled);
+            Assert.Single(profiles);
+            Assert.Equal("OriginalName", profiles[0].DisplayName);
 
-                bool renameSuccess = await pm.RenameProfileAsync(profileId, "RenamedName");
-                Assert.True(renameSuccess);
+            // Rename
+            bool renamed = await pm.RenameProfileAsync("prof_1", "RenamedName");
+            Assert.True(renamed);
+            Assert.True(mockPipe.RenameCalled);
+            Assert.Equal("RenamedName", mockPipe.LastRenamedNewName);
 
-                var updatedProfiles = await pm.GetProfilesAsync();
-                Assert.Single(updatedProfiles);
-                Assert.Equal("RenamedName", updatedProfiles[0].DisplayName);
+            // Toggle
+            bool toggled = await pm.ToggleProfileAsync("prof_1", false);
+            Assert.True(toggled);
+            Assert.True(mockPipe.SetEnabledCalled);
+            Assert.False(mockPipe.LastEnabledState);
 
-                bool invalidRename = await pm.RenameProfileAsync(profileId, "   ");
-                Assert.False(invalidRename);
-
-                bool missingProfile = await pm.RenameProfileAsync("missing_id", "Name");
-                Assert.False(missingProfile);
-            }
-            finally
-            {
-                if (Directory.Exists(tempDir))
-                {
-                    Directory.Delete(tempDir, true);
-                }
-            }
+            // Delete
+            bool deleted = await pm.DeleteProfileAsync("prof_1");
+            Assert.True(deleted);
+            Assert.True(mockPipe.DeleteCalled);
+            Assert.Equal("prof_1", mockPipe.LastDeletedProfileId);
         }
 
         [Fact]
-        public async Task ProfileManager_SaveProfileAsync_AtomicWriteAndReadsBack()
+        public async Task ProfileManager_SaveProfileAsync_ReturnsTrueWithoutLocalFileIo()
         {
-            string tempDir = Path.Combine(Path.GetTempPath(), "PeekTestSave_" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(tempDir);
-            try
-            {
-                byte[] testEntropy = Encoding.UTF8.GetBytes("test-entropy-save-12345");
-                var pm = new ProfileManager(tempDir, entropyProvider: () => testEntropy);
-                string profileId = "new_save_id";
-                string json = "{\"profile_id\":\"new_save_id\",\"display_name\":\"Saved User\",\"enabled\":false,\"created_at\":2000.0}";
-                byte[] encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(json), testEntropy, DataProtectionScope.CurrentUser);
-
-                bool saved = await pm.SaveProfileAsync(profileId, encrypted);
-                Assert.True(saved);
-
-                var profiles = await pm.GetProfilesAsync();
-                Assert.Single(profiles);
-                Assert.Equal("Saved User", profiles[0].DisplayName);
-                Assert.False(profiles[0].Enabled);
-
-                // Ensure temp file was cleaned up by atomic replace
-                string tempFile = Path.Combine(tempDir, $"{profileId}.peek.tmp");
-                Assert.False(File.Exists(tempFile));
-            }
-            finally
-            {
-                if (Directory.Exists(tempDir))
-                {
-                    Directory.Delete(tempDir, true);
-                }
-            }
+            var mockPipe = new MockEnrollmentPipeClient();
+            var pm = new ProfileManager(mockPipe);
+            bool saved = await pm.SaveProfileAsync("prof_save", new byte[] { 1, 2, 3 });
+            Assert.True(saved);
         }
     }
 }

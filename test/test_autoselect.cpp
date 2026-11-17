@@ -263,6 +263,7 @@ int main()
     int failed = 0;
     std::wstring tempDir = CreateTempTestDirectory();
     SetEnvironmentVariableW(L"PEEK_PROFILES_DIR", tempDir.c_str());
+    SetEnvironmentVariableW(L"PEEK_TEST_AUTO_SELECT", L"0");
 
     std::wstring testPipeName = L"\\\\.\\pipe\\PeekTestPipe_" + std::to_wstring(GetCurrentProcessId());
     SetEnvironmentVariableW(L"PEEK_PIPE_NAME_OVERRIDE", testPipeName.c_str());
@@ -2432,11 +2433,64 @@ int main()
         }
     }
 
+    // -------------------------------------------------------------
+    // Test 25: Cold-boot unlock check with ColdBootUnlock 0 and 1
+    // -------------------------------------------------------------
+    std::wcout << L"[Test 25] Testing Cold-boot check with ColdBootUnlock 0 (declines tile) and 1 (offers tile)...\n";
+    {
+        const std::wstring coldBootSid = L"S-1-5-21-COLDBOOT-1001";
+        const std::wstring coldProfileId = L"cold_boot_profile";
+        auto fakeIdStore = std::make_shared<PeekSecretVault::InMemoryIdentityStore>();
+        fakeIdStore->SetAuthorizedIdentities(coldBootSid, { coldProfileId });
+        PeekSecretVault::SetIdentityStore(fakeIdStore);
+
+        PeekProvider provider;
+        provider.SetUsageScenario(CPUS_LOGON, 0);
+        PeekProvider::SetTestSessionId(0xFFFFFFFF); // No active session (cold boot)
+        PeekProvider::SetTestConsoleUserSid(L"");
+        PeekProvider::SetTestLastLoggedOnUserSid(coldBootSid);
+
+        MockCredentialProviderUserArray* pArray = new MockCredentialProviderUserArray();
+        MockCredentialProviderUser* pUser = new MockCredentialProviderUser(coldBootSid, L"ColdUser", L"ColdDomain");
+        pArray->AddUser(pUser);
+        pUser->Release();
+        provider.SetUserArray(pArray);
+
+        // Case 1: ColdBootUnlock = 0 -> tile declined (count = 0)
+        PeekProvider::SetTestColdBootUnlock(false);
+        DWORD count0 = 0, defaultIndex0 = 999;
+        BOOL autoLogon0 = TRUE;
+        HRESULT hr0 = provider.GetCredentialCount(&count0, &defaultIndex0, &autoLogon0);
+        bool coldBootDisabledOk = (hr0 == S_OK && count0 == 0);
+
+        // Case 2: ColdBootUnlock = 1 -> tile offered (count = 1)
+        PeekProvider::SetTestColdBootUnlock(true);
+        DWORD count1 = 0, defaultIndex1 = 999;
+        BOOL autoLogon1 = TRUE;
+        HRESULT hr1 = provider.GetCredentialCount(&count1, &defaultIndex1, &autoLogon1);
+        bool coldBootEnabledOk = (hr1 == S_OK && count1 == 1);
+
+        PeekProvider::ClearTestOverrides();
+        pArray->Release();
+
+        if (coldBootDisabledOk && coldBootEnabledOk)
+        {
+            std::wcout << L"  PASS: Cold-boot correctly declined when ColdBootUnlock=0 and offered when ColdBootUnlock=1\n";
+        }
+        else
+        {
+            std::wcout << L"  FAIL: Cold-boot check failed: disabledOk=" << coldBootDisabledOk << L", enabledOk=" << coldBootEnabledOk << L"\n";
+            failed++;
+        }
+    }
+
     // Cleanup
     DeleteTempTestDirectory(tempDir);
     SetEnvironmentVariableW(L"PEEK_PROFILES_DIR", NULL);
     SetEnvironmentVariableW(L"PEEK_PIPE_NAME_OVERRIDE", NULL);
     SetEnvironmentVariableW(L"PEEK_LOG_FILE_PATH", NULL);
+    SetEnvironmentVariableW(L"PEEK_TEST_AUTO_SELECT", NULL);
+    SetEnvironmentVariableW(L"PEEK_TEST_COLD_BOOT_UNLOCK", NULL);
 
     std::wcout << L"==========================================================\n";
     if (failed == 0)

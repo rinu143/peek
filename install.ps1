@@ -222,25 +222,57 @@ $engineExePath = if (Test-Path (Join-Path $targetEngineDir "PeekEngine.exe")) {
 }
 Set-ItemProperty -Path $peekRegKey -Name "InstallPath" -Value $engineExePath -Type String -Force
 Set-ItemProperty -Path $peekRegKey -Name "LogLevel" -Value 1 -Type DWord -Force # 1 = ERROR, 0 = OFF, 2 = INFO, 3 = DEBUG
-if (-not (Get-ItemProperty -Path $peekRegKey -Name "AutoSelect" -ErrorAction SilentlyContinue)) {
-    Set-ItemProperty -Path $peekRegKey -Name "AutoSelect" -Value 1 -Type DWord -Force
+Remove-ItemProperty -Path $peekRegKey -Name "AutoSelect" -ErrorAction SilentlyContinue
+
+$systemSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
+$adminSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+$usersSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinUsersSid, $null)
+
+try {
+    # HKLM:\SOFTWARE\Peek must be Administrators/SYSTEM write only. Users ReadKey only.
+    $regKeyObj = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey("SOFTWARE\Peek", [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [System.Security.AccessControl.RegistryRights]::ChangePermissions -bor [System.Security.AccessControl.RegistryRights]::ReadKey)
+    if ($regKeyObj) {
+        $regAcl = New-Object System.Security.AccessControl.RegistrySecurity
+        $regAcl.SetAccessRuleProtection($true, $false)
+        $regAcl.AddAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule($systemSid, "FullControl", "ContainerInherit", "None", "Allow")))
+        $regAcl.AddAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule($adminSid, "FullControl", "ContainerInherit", "None", "Allow")))
+        $regAcl.AddAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule($usersSid, [System.Security.AccessControl.RegistryRights]::ReadKey, "ContainerInherit", "None", "Allow")))
+        $regKeyObj.SetAccessControl($regAcl)
+        $regKeyObj.Close()
+    }
+} catch {
+    Write-Warning "Could not secure $peekRegKey ACL: $_"
+}
+Write-Host "      [OK] Configured HKLM:\SOFTWARE\Peek (Admin/SYSTEM write-only, InstallPath: $engineExePath, LogLevel: 1)." -ForegroundColor Green
+
+# HKLM:\SOFTWARE\Peek\Prefs: Users may write (SetValue and ReadKey only)
+$prefsRegKey = "HKLM:\SOFTWARE\Peek\Prefs"
+if (-not (Test-Path $prefsRegKey)) {
+    New-Item -Path $prefsRegKey -Force | Out-Null
 }
 try {
-    $peekAcl = Get-Acl -Path $peekRegKey
-    $usersSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinUsersSid, $null)
-    $peekRegRule = New-Object System.Security.AccessControl.RegistryAccessRule(
-        $usersSid,
-        [System.Security.AccessControl.RegistryRights]::SetValue -bor [System.Security.AccessControl.RegistryRights]::CreateSubKey -bor [System.Security.AccessControl.RegistryRights]::ReadKey,
-        [System.Security.AccessControl.InheritanceFlags]::None,
-        [System.Security.AccessControl.PropagationFlags]::None,
-        [System.Security.AccessControl.AccessControlType]::Allow
-    )
-    $peekAcl.AddAccessRule($peekRegRule)
-    Set-Acl -Path $peekRegKey -AclObject $peekAcl
+    $prefsKeyObj = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey("SOFTWARE\Peek\Prefs", [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [System.Security.AccessControl.RegistryRights]::ChangePermissions -bor [System.Security.AccessControl.RegistryRights]::ReadKey)
+    if ($prefsKeyObj) {
+        $prefsAcl = New-Object System.Security.AccessControl.RegistrySecurity
+        $prefsAcl.SetAccessRuleProtection($true, $false)
+        $prefsAcl.AddAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule($systemSid, "FullControl", "ContainerInherit", "None", "Allow")))
+        $prefsAcl.AddAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule($adminSid, "FullControl", "ContainerInherit", "None", "Allow")))
+        $prefsAcl.AddAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule(
+            $usersSid,
+            [System.Security.AccessControl.RegistryRights]::SetValue -bor [System.Security.AccessControl.RegistryRights]::ReadKey,
+            "ContainerInherit",
+            "None",
+            "Allow"
+        )))
+        $prefsKeyObj.SetAccessControl($prefsAcl)
+        $prefsKeyObj.Close()
+    }
 } catch {
-    Write-Warning "Could not grant standard user write rights on $peekRegKey: $_"
+    Write-Warning "Could not configure $prefsRegKey ACL: $_"
 }
-Write-Host "      [OK] Configured HKLM:\SOFTWARE\Peek (InstallPath: $engineExePath, LogLevel: 1, AutoSelect: 1)." -ForegroundColor Green
+Set-ItemProperty -Path $prefsRegKey -Name "AutoSelect" -Value 1 -Type DWord -Force
+Set-ItemProperty -Path $prefsRegKey -Name "ColdBootUnlock" -Value 1 -Type DWord -Force
+Write-Host "      [OK] Configured HKLM:\SOFTWARE\Peek\Prefs (Users SetValue, AutoSelect: 1, ColdBootUnlock: 1)." -ForegroundColor Green
 
 $updatesRegKey = "HKLM:\SOFTWARE\Peek\Updates"
 if (-not (Test-Path $updatesRegKey)) {
@@ -280,7 +312,13 @@ try {
     Set-Acl -Path $PeekDataDir -AclObject $peekDirAcl
     Write-Host "      [OK] Secured Peek ProgramData directory ACL at $PeekDataDir (SYSTEM/Admin Full, Users Read)." -ForegroundColor Green
 
-    # 1b. Create machine_entropy.bin if it does not exist, and apply the same protected ACL (SYSTEM/Admin FullControl, Users ReadAndExecute)
+    # Resolve virtual service account NT SERVICE\PeekEngine
+    $svcAccount = $null
+    try {
+        $svcAccount = New-Object System.Security.Principal.NTAccount("NT SERVICE\PeekEngine")
+    } catch { }
+
+    # 1b. Create machine_entropy.bin if it does not exist, and apply protected ACL (SYSTEM/Admin/PeekEngine FullControl only, NO Users ACE)
     $entropyFilePath = Join-Path $PeekDataDir "machine_entropy.bin"
     if (-not (Test-Path $entropyFilePath)) {
         $entropyGuid = [Guid]::NewGuid().ToString()
@@ -294,9 +332,13 @@ try {
     $entropyAcl.SetAccessRuleProtection($true, $false)
     $entropyAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "Allow")))
     $entropyAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "Allow")))
-    $entropyAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "Allow")))
+    if ($svcAccount) {
+        try {
+            $entropyAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($svcAccount, "FullControl", "Allow")))
+        } catch { }
+    }
     Set-Acl -Path $entropyFilePath -AclObject $entropyAcl
-    Write-Host "      [OK] Secured machine_entropy.bin ACL at $entropyFilePath (SYSTEM/Admin Full, Users Read)." -ForegroundColor Green
+    Write-Host "      [OK] Secured machine_entropy.bin ACL at $entropyFilePath (SYSTEM/Admin Full, NO Users ACE)." -ForegroundColor Green
 
     # 2. If engine.json exists, apply the same explicit protected ACL
     $engineJsonPath = Join-Path $PeekDataDir "engine.json"
@@ -305,6 +347,9 @@ try {
         $jsonAcl.SetAccessRuleProtection($true, $false)
         $jsonAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "Allow")))
         $jsonAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "Allow")))
+        if ($svcAccount) {
+            try { $jsonAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($svcAccount, "FullControl", "Allow"))) } catch { }
+        }
         $jsonAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "Allow")))
         Set-Acl -Path $engineJsonPath -AclObject $jsonAcl
         Write-Host "      [OK] Secured engine.json ACL at $engineJsonPath (SYSTEM/Admin Full, Users Read)." -ForegroundColor Green
@@ -315,24 +360,29 @@ try {
     $dirAcl.SetAccessRuleProtection($true, $false)
     $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
     $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    if ($svcAccount) {
+        try { $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($svcAccount, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"))) } catch { }
+    }
     $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")))
     Set-Acl -Path $LogDir -AclObject $dirAcl
     Write-Host "      [OK] Secured log directory ACL at $LogDir (SYSTEM/Admin Full, Users Read)." -ForegroundColor Green
 
-    # 4. File ACL for any existing log files
-    foreach ($ext in @("", ".old", ".1", ".2")) {
-        $p = Join-Path $LogDir ("credential_provider.log" + $ext)
-        if (Test-Path $p) {
-            $fAcl = New-Object System.Security.AccessControl.FileSecurity
-            $fAcl.SetAccessRuleProtection($true, $false)
-            $fAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "Allow")))
-            $fAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "Allow")))
-            $fAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "ReadAndExecute", "Allow")))
-            Set-Acl -Path $p -AclObject $fAcl
-        }
+    # 4. State directory ACL (SYSTEM/Admin/PeekEngine FullControl, NO Users ACE)
+    $StateDir = Join-Path $PeekDataDir "state"
+    if (-not (Test-Path $StateDir)) {
+        New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
     }
+    $stateAcl = New-Object System.Security.AccessControl.DirectorySecurity
+    $stateAcl.SetAccessRuleProtection($true, $false)
+    $stateAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    $stateAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    if ($svcAccount) {
+        try { $stateAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($svcAccount, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"))) } catch { }
+    }
+    Set-Acl -Path $StateDir -AclObject $stateAcl
+    Write-Host "      [OK] Secured state directory ACL at $StateDir (SYSTEM/Admin Full, NO Users ACE)." -ForegroundColor Green
 
-    # 5. Profiles directory ACL (SYSTEM/Admin FullControl, Users Modify so standard users can enroll/manage identities)
+    # 5. Profiles directory ACL (SYSTEM/Admin/PeekEngine FullControl, NO Users ACE)
     $ProfilesDir = Join-Path $PeekDataDir "Profiles"
     if (-not (Test-Path $ProfilesDir)) {
         New-Item -ItemType Directory -Path $ProfilesDir -Force | Out-Null
@@ -341,60 +391,51 @@ try {
     $profilesAcl.SetAccessRuleProtection($true, $false)
     $profilesAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($systemSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
     $profilesAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($adminSid, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
-    $profilesAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, "Modify", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    if ($svcAccount) {
+        try {
+            $profilesAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($svcAccount, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+        } catch { }
+    }
     Set-Acl -Path $ProfilesDir -AclObject $profilesAcl
-    Write-Host "      [OK] Secured Profiles directory at $ProfilesDir (SYSTEM/Admin Full, Users Modify)." -ForegroundColor Green
+    Write-Host "      [OK] Secured Profiles directory at $ProfilesDir (SYSTEM/Admin Full, NO Users ACE)." -ForegroundColor Green
 } catch {
     Write-Warning "Could not configure Peek directory or log ACL: $_"
 }
 
-# 6. Configure system boot auto-start under SYSTEM
-Write-Host "[4/5] Configuring startup task for NT AUTHORITY\SYSTEM..." -ForegroundColor Cyan
-$taskName = "PeekEngine"
+# 6. Configure Windows service under low-privilege virtual service account NT SERVICE\PeekEngine
+Write-Host "[4/5] Configuring PeekEngine Windows service under NT SERVICE\PeekEngine..." -ForegroundColor Cyan
 $engineExe = $engineExePath
 $engineWorkingDir = Split-Path -Parent $engineExe
 
-$taskCreated = $false
+# Clean up legacy Scheduled Task, HKLM Run, and CommonStartup launchers
 try {
-    $action = New-ScheduledTaskAction -Execute $engineExe -WorkingDirectory $engineWorkingDir
-    $triggerStartup = New-ScheduledTaskTrigger -AtStartup
-    $triggerLogon = New-ScheduledTaskTrigger -AtLogOn
-    $principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
-    $null = Register-ScheduledTask -TaskName $taskName -Action $action -Trigger @($triggerStartup, $triggerLogon) -Principal $principal -Settings $settings -Force -ErrorAction Stop
-    Write-Host "      [OK] Scheduled Task '$taskName' created (starts at boot and logon under NT AUTHORITY\SYSTEM)." -ForegroundColor Green
-    $taskCreated = $true
-} catch {
-    Write-Warning "PowerShell task creation failed ($($_)). Trying schtasks.exe..."
-    $trEscaped = '"' + $engineExe + '"'
-    $cmdArg = "/c schtasks.exe /Create /TN `"$taskName`" /TR `"$trEscaped`" /SC ONSTART /RU `"NT AUTHORITY\SYSTEM`" /RL HIGHEST /F"
-    $schtasksProc = Start-Process -FilePath "cmd.exe" -ArgumentList $cmdArg -Wait -NoNewWindow -PassThru
-    if ($schtasksProc.ExitCode -eq 0) {
-        Write-Host "      [OK] Scheduled Task '$taskName' created via schtasks (starts at boot under NT AUTHORITY\SYSTEM)." -ForegroundColor Green
-        $taskCreated = $true
-    }
-}
+    Unregister-ScheduledTask -TaskName "PeekEngine" -Confirm:$false -ErrorAction SilentlyContinue
+} catch { }
 
 try {
-    Set-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "PeekEngine" -Value "`"$engineExe`"" -Type String -Force -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "PeekEngine" -ErrorAction SilentlyContinue
 } catch { }
 
 try {
     $startupFolder = [Environment]::GetFolderPath("CommonStartup")
     if (Test-Path $startupFolder) {
         $shortcutPath = Join-Path $startupFolder "PeekEngine.lnk"
-        $wsh = New-Object -ComObject WScript.Shell
-        $shortcut = $wsh.CreateShortcut($shortcutPath)
-        $shortcut.TargetPath = $engineExe
-        $shortcut.WorkingDirectory = $engineWorkingDir
-        $shortcut.Description = "Peek Face Recognition Engine (Logon Startup)"
-        $shortcut.IconLocation = "$InstallDir\PeekSetup.exe,0"
-        $shortcut.Save()
-        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shortcut) | Out-Null
-        [System.Runtime.InteropServices.Marshal]::ReleaseComObject($wsh) | Out-Null
-        Write-Host "      [OK] Created startup shortcut in $shortcutPath" -ForegroundColor Green
+        if (Test-Path $shortcutPath) {
+            Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
+        }
     }
 } catch { }
+
+# Register Windows Service PeekEngine
+$serviceName = "PeekEngine"
+$existingSvc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+if (-not $existingSvc) {
+    & sc.exe create $serviceName binPath= "`"$engineExe`"" start= auto obj= "NT SERVICE\PeekEngine" displayname= "Peek Face Recognition Engine" | Out-Null
+} else {
+    & sc.exe config $serviceName binPath= "`"$engineExe`"" start= auto obj= "NT SERVICE\PeekEngine" | Out-Null
+}
+& sc.exe failure $serviceName reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
+Write-Host "      [OK] Windows Service '$serviceName' registered (starts at boot under NT SERVICE\PeekEngine)." -ForegroundColor Green
 
 # Create Start Menu shortcut for Peek
 $startMenuPeekDir = Join-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" "Peek"
@@ -432,14 +473,15 @@ if (Test-Path $updateExe) {
 
 # 7. Start engine service now
 if (-not $NoStartService) {
-    Write-Host "[5/5] Starting PeekEngine service in background..." -ForegroundColor Cyan
-    Start-Process -FilePath $engineExe -WorkingDirectory $InstallDir -WindowStyle Hidden
-    Start-Sleep -Seconds 1
-    $runningEngine = Get-Process -Name "PeekEngine" -ErrorAction SilentlyContinue
-    if ($runningEngine) {
-        Write-Host "      [OK] PeekEngine is active and listening (PID: $($runningEngine.Id))." -ForegroundColor Green
-    } else {
-        Write-Host "      [!] Notice: PeekEngine did not stay in foreground. Check Event Viewer or run directly." -ForegroundColor Yellow
+    Write-Host "[5/5] Starting PeekEngine service..." -ForegroundColor Cyan
+    try {
+        Start-Service -Name "PeekEngine" -ErrorAction Stop
+        Start-Sleep -Seconds 1
+        $svcStatus = Get-Service -Name "PeekEngine"
+        Write-Host "      [OK] PeekEngine service status: $($svcStatus.Status)." -ForegroundColor Green
+    } catch {
+        Write-Host "      Notice: PeekEngine service could not be started directly ($($_)). Trying fallback start..." -ForegroundColor Yellow
+        Start-Process -FilePath $engineExe -WorkingDirectory $InstallDir -WindowStyle Hidden
     }
 } else {
     Write-Host "[5/5] Skipped starting service (-NoStartService specified)." -ForegroundColor Cyan

@@ -45,16 +45,20 @@ public:
     static void SetTestSessionUserName(const std::wstring& userName) { s_testSessionUserName = userName; s_hasTestSessionUserName = true; }
     static void SetTestLastLoggedOnUserSid(const std::wstring& sid) { s_testLastLoggedOnUserSid = sid; s_hasTestLastLoggedOnUserSid = true; }
     static void SetTestAutoSelect(bool enabled) { s_testAutoSelect = enabled; s_hasTestAutoSelect = true; }
+    static void SetTestColdBootUnlock(bool enabled) { s_testColdBootUnlock = enabled; s_hasTestColdBootUnlock = true; }
     static bool HasTestLastLoggedOnUserSid() { return s_hasTestLastLoggedOnUserSid; }
     static std::wstring GetTestLastLoggedOnUserSid() { return s_testLastLoggedOnUserSid; }
     static bool HasTestAutoSelect() { return s_hasTestAutoSelect; }
     static bool GetTestAutoSelect() { return s_testAutoSelect; }
+    static bool HasTestColdBootUnlock() { return s_hasTestColdBootUnlock; }
+    static bool GetTestColdBootUnlock() { return s_testColdBootUnlock; }
     static void ClearTestOverrides() {
         s_testConsoleUserSid.clear(); s_hasTestConsoleUserSid = false;
         s_testSessionId = 0xFFFFFFFF; s_hasTestSessionId = false;
         s_testSessionUserName.clear(); s_hasTestSessionUserName = false;
         s_testLastLoggedOnUserSid.clear(); s_hasTestLastLoggedOnUserSid = false;
         s_testAutoSelect = false; s_hasTestAutoSelect = false;
+        s_testColdBootUnlock = true; s_hasTestColdBootUnlock = false;
     }
 #endif
 
@@ -87,5 +91,7 @@ private:
     static inline bool s_hasTestLastLoggedOnUserSid = false;
     static inline bool s_testAutoSelect = false;
     static inline bool s_hasTestAutoSelect = false;
+    static inline bool s_testColdBootUnlock = true;
+    static inline bool s_hasTestColdBootUnlock = false;
 #endif
 };

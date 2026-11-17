@@ -13,6 +13,11 @@ namespace PeekSetup.Models
         public const string MsgCancelEnrollment = "CANCEL_ENROLLMENT";
         public const string MsgPing = "PING";
         public const string MsgStatusRequest = "STATUS_REQUEST";
+        public const string MsgListProfiles = "LIST_PROFILES";
+        public const string MsgSetEnabled = "SET_ENABLED";
+        public const string MsgDeleteProfile = "DELETE_PROFILE";
+        public const string MsgRenameProfile = "RENAME_PROFILE";
+        public const string MsgGetQuality = "GET_QUALITY";
 
         // Server -> Client
         public const string MsgEnrollmentReady = "ENROLLMENT_READY";
@@ -23,6 +28,11 @@ namespace PeekSetup.Models
         public const string MsgError = "ERROR";
         public const string MsgPong = "PONG";
         public const string MsgStatusResponse = "STATUS_RESPONSE";
+        public const string MsgProfilesList = "PROFILES_LIST";
+        public const string MsgSetEnabledResponse = "SET_ENABLED_RESPONSE";
+        public const string MsgDeleteResponse = "DELETE_RESPONSE";
+        public const string MsgRenameResponse = "RENAME_RESPONSE";
+        public const string MsgQualityResponse = "QUALITY_RESPONSE";
 
         // Reason Codes
         public const string ReasonCancelled = "CANCELLED";
@@ -36,6 +46,8 @@ namespace PeekSetup.Models
         public const string ReasonConfirmationRequired = "CONFIRMATION_REQUIRED";
         public const string ReasonIdentityLimit = "IDENTITY_LIMIT";
         public const string ReasonDuplicateIdentity = "DUPLICATE_IDENTITY";
+        public const string ReasonUnauthorized = "UNAUTHORIZED";
+        public const string ReasonNotFound = "NOT_FOUND";
 
         // Poses
         public const string PoseCenter = "CENTER";
@@ -237,6 +249,68 @@ namespace PeekSetup.Models
             };
             return JsonSerializer.Serialize(msg, JsonOptions);
         }
+
+        public static string CreateListProfiles(string? userSid = null)
+        {
+            var msg = new
+            {
+                protocol_version = ProtocolVersion,
+                type = MsgListProfiles,
+                user_sid = userSid,
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+            };
+            return JsonSerializer.Serialize(msg, JsonOptions);
+        }
+
+        public static string CreateSetEnabled(string profileId, bool enabled)
+        {
+            var msg = new
+            {
+                protocol_version = ProtocolVersion,
+                type = MsgSetEnabled,
+                profile_id = profileId,
+                enabled = enabled,
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+            };
+            return JsonSerializer.Serialize(msg, JsonOptions);
+        }
+
+        public static string CreateDeleteProfile(string profileId)
+        {
+            var msg = new
+            {
+                protocol_version = ProtocolVersion,
+                type = MsgDeleteProfile,
+                profile_id = profileId,
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+            };
+            return JsonSerializer.Serialize(msg, JsonOptions);
+        }
+
+        public static string CreateRenameProfile(string profileId, string newName)
+        {
+            var msg = new
+            {
+                protocol_version = ProtocolVersion,
+                type = MsgRenameProfile,
+                profile_id = profileId,
+                new_name = newName,
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+            };
+            return JsonSerializer.Serialize(msg, JsonOptions);
+        }
+
+        public static string CreateGetQuality(string profileId)
+        {
+            var msg = new
+            {
+                protocol_version = ProtocolVersion,
+                type = MsgGetQuality,
+                profile_id = profileId,
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+            };
+            return JsonSerializer.Serialize(msg, JsonOptions);
+        }
     }
 
     public record FaceOverlayData(
@@ -306,5 +380,54 @@ namespace PeekSetup.Models
         bool HasEnrolledProfile,
         string DisplayName,
         string ProfileId
+    );
+
+    public record ProfileDto(
+        string ProfileId,
+        string DisplayName,
+        bool Enabled,
+        double CreatedAt,
+        string? UserSid,
+        int? QualityPercentage,
+        System.Collections.Generic.List<double>? PoseQualities,
+        int TemplateCount
+    );
+
+    public record ProfilesListResponseData(
+        bool Success,
+        System.Collections.Generic.List<ProfileDto> Profiles,
+        string Error
+    );
+
+    public record SetEnabledResponseData(
+        string ProfileId,
+        bool Enabled,
+        bool Success,
+        string Error,
+        string Reason = ""
+    );
+
+    public record DeleteResponseData(
+        string ProfileId,
+        bool Success,
+        string Error,
+        string Reason = ""
+    );
+
+    public record RenameResponseData(
+        string ProfileId,
+        string NewName,
+        bool Success,
+        string Error,
+        string Reason = ""
+    );
+
+    public record QualityResponseData(
+        string ProfileId,
+        double QualityScore,
+        bool IsValid,
+        bool Success,
+        string Error,
+        string Reason = ""
     );
 }

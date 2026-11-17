@@ -654,7 +654,10 @@ begin
     // 2. Unregister Credential Provider DLL
     Exec('regsvr32.exe', '/u /s "' + ExpandConstant('{app}\PeekCredentialProvider.dll') + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
-    // 3. Remove scheduled tasks
+    // 3. Remove Windows Service and scheduled tasks
+    Exec('sc.exe', 'stop PeekEngine', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec('sc.exe', 'delete PeekEngine', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'PeekEngine');
     Exec('schtasks.exe', '/Delete /TN "PeekEngine" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec('schtasks.exe', '/Delete /TN "PeekUpdate" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 

@@ -25,6 +25,11 @@ MSG_START_ENROLLMENT = "START_ENROLLMENT"
 MSG_CANCEL_ENROLLMENT = "CANCEL_ENROLLMENT"
 MSG_PING = "PING"
 MSG_STATUS_REQUEST = "STATUS_REQUEST"
+MSG_LIST_PROFILES = "LIST_PROFILES"
+MSG_SET_ENABLED = "SET_ENABLED"
+MSG_DELETE_PROFILE = "DELETE"
+MSG_RENAME_PROFILE = "RENAME"
+MSG_GET_QUALITY = "GET_QUALITY"
 
 # Server -> Client Message Types
 MSG_ENROLLMENT_READY = "ENROLLMENT_READY"
@@ -35,6 +40,11 @@ MSG_ENROLLMENT_FAILED = "ENROLLMENT_FAILED"
 MSG_ERROR = "ERROR"
 MSG_PONG = "PONG"
 MSG_STATUS_RESPONSE = "STATUS_RESPONSE"
+MSG_PROFILES_LIST = "PROFILES_LIST"
+MSG_SET_ENABLED_RESPONSE = "SET_ENABLED_RESPONSE"
+MSG_DELETE_RESPONSE = "DELETE_RESPONSE"
+MSG_RENAME_RESPONSE = "RENAME_RESPONSE"
+MSG_QUALITY_RESPONSE = "QUALITY_RESPONSE"
 
 # Valid Message Sets
 VALID_CLIENT_MESSAGES = {
@@ -42,6 +52,11 @@ VALID_CLIENT_MESSAGES = {
     MSG_CANCEL_ENROLLMENT,
     MSG_PING,
     MSG_STATUS_REQUEST,
+    MSG_LIST_PROFILES,
+    MSG_SET_ENABLED,
+    MSG_DELETE_PROFILE,
+    MSG_RENAME_PROFILE,
+    MSG_GET_QUALITY,
 }
 
 VALID_SERVER_MESSAGES = {
@@ -53,6 +68,11 @@ VALID_SERVER_MESSAGES = {
     MSG_ERROR,
     MSG_PONG,
     MSG_STATUS_RESPONSE,
+    MSG_PROFILES_LIST,
+    MSG_SET_ENABLED_RESPONSE,
+    MSG_DELETE_RESPONSE,
+    MSG_RENAME_RESPONSE,
+    MSG_QUALITY_RESPONSE,
 }
 
 # Machine-Readable Reason Codes
@@ -67,6 +87,8 @@ REASON_TIMEOUT = "TIMEOUT"
 REASON_CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
 REASON_IDENTITY_LIMIT = "IDENTITY_LIMIT"
 REASON_DUPLICATE_IDENTITY = "DUPLICATE_IDENTITY"
+REASON_UNAUTHORIZED = "UNAUTHORIZED"
+REASON_NOT_FOUND = "NOT_FOUND"
 
 
 class ProtocolError(Exception):
@@ -316,3 +338,81 @@ def make_status_response(
         "display_name": str(display_name) if has_enrolled_profile and display_name else "",
         "timestamp": time.time(),
     }
+
+
+def make_profiles_list(profiles: list, success: bool = True, error: str = "") -> Dict[str, Any]:
+    msg = {
+        "protocol_version": PROTOCOL_VERSION,
+        "type": MSG_PROFILES_LIST,
+        "success": bool(success),
+        "profiles": list(profiles),
+        "timestamp": time.time(),
+    }
+    if error:
+        msg["error"] = str(error)
+    return msg
+
+
+def make_set_enabled_response(profile_id: str, enabled: bool, success: bool = True, error: str = "") -> Dict[str, Any]:
+    msg = {
+        "protocol_version": PROTOCOL_VERSION,
+        "type": MSG_SET_ENABLED_RESPONSE,
+        "profile_id": str(profile_id),
+        "enabled": bool(enabled),
+        "success": bool(success),
+        "timestamp": time.time(),
+    }
+    if error:
+        msg["error"] = str(error)
+    return msg
+
+
+def make_delete_response(profile_id: str, success: bool = True, error: str = "") -> Dict[str, Any]:
+    msg = {
+        "protocol_version": PROTOCOL_VERSION,
+        "type": MSG_DELETE_RESPONSE,
+        "profile_id": str(profile_id),
+        "success": bool(success),
+        "timestamp": time.time(),
+    }
+    if error:
+        msg["error"] = str(error)
+    return msg
+
+
+def make_rename_response(profile_id: str, display_name: str, success: bool = True, error: str = "") -> Dict[str, Any]:
+    msg = {
+        "protocol_version": PROTOCOL_VERSION,
+        "type": MSG_RENAME_RESPONSE,
+        "profile_id": str(profile_id),
+        "display_name": str(display_name),
+        "success": bool(success),
+        "timestamp": time.time(),
+    }
+    if error:
+        msg["error"] = str(error)
+    return msg
+
+
+def make_quality_response(
+    profile_id: str,
+    quality_percentage: Optional[int],
+    pose_qualities: list,
+    template_count: int,
+    success: bool = True,
+    error: str = "",
+) -> Dict[str, Any]:
+    msg = {
+        "protocol_version": PROTOCOL_VERSION,
+        "type": MSG_QUALITY_RESPONSE,
+        "profile_id": str(profile_id),
+        "quality_percentage": quality_percentage,
+        "pose_qualities": list(pose_qualities),
+        "template_count": int(template_count),
+        "success": bool(success),
+        "timestamp": time.time(),
+    }
+    if error:
+        msg["error"] = str(error)
+    return msg
+

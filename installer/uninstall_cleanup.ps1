@@ -105,7 +105,16 @@ try {
     }
 } catch {}
 
-# 2. ALWAYS remove HKLM Identities and HKLM\SOFTWARE\Peek
+# 2. ALWAYS remove PeekEngine service, HKLM Identities and HKLM\SOFTWARE\Peek
+try {
+    & sc.exe stop PeekEngine | Out-Null
+    & sc.exe delete PeekEngine | Out-Null
+} catch {}
+
+try {
+    Remove-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "PeekEngine" -ErrorAction SilentlyContinue
+} catch {}
+
 try {
     if (Test-Path "HKLM:\SOFTWARE\Peek") {
         Remove-Item -Path "HKLM:\SOFTWARE\Peek" -Recurse -Force -ErrorAction SilentlyContinue

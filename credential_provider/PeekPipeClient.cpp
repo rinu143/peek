@@ -336,19 +336,55 @@ bool PeekPipeClient::VerifyServerProcess(HANDLE hPipe, const std::wstring& expec
     CloseHandle(hToken);
     CloseHandle(hProc);
 
-    bool bSidMatch = false;
-    if (!expectedSid.empty())
+    // Verify token user SID matches expected SID, genuine SYSTEM (S-1-5-18), or virtual service account NT SERVICE\PeekEngine
+    bool isPeekEngineServiceSid = false;
+    BYTE peSidBuf[SECURITY_MAX_SID_SIZE] = {};
+    DWORD cbPeSid = sizeof(peSidBuf);
+    wchar_t refDom[256] = {};
+    DWORD cchRefDom = ARRAYSIZE(refDom);
+    SID_NAME_USE peUse;
+    if (LookupAccountNameW(nullptr, L"NT SERVICE\\PeekEngine", reinterpret_cast<PSID>(peSidBuf), &cbPeSid, refDom, &cchRefDom, &peUse))
     {
-        if (_wcsicmp(serverSid.c_str(), expectedSid.c_str()) == 0 ||
-            _wcsicmp(serverSid.c_str(), L"S-1-5-18") == 0)
+        LPWSTR pszPeSid = nullptr;
+        if (ConvertSidToStringSidW(reinterpret_cast<PSID>(peSidBuf), &pszPeSid))
         {
-            bSidMatch = true;
+            if (_wcsicmp(serverSid.c_str(), pszPeSid) == 0)
+            {
+                isPeekEngineServiceSid = true;
+            }
+            LocalFree(pszPeSid);
         }
     }
-    else
+
+    if (!isPeekEngineServiceSid)
     {
-        // Cold boot logon without specific user SID: must be SYSTEM
-        bSidMatch = (_wcsicmp(serverSid.c_str(), L"S-1-5-18") == 0);
+        PSID pParsedSid = nullptr;
+        if (ConvertStringSidToSidW(serverSid.c_str(), &pParsedSid))
+        {
+            wchar_t acctName[256] = {};
+            DWORD cchAcct = ARRAYSIZE(acctName);
+            wchar_t domainName[256] = {};
+            DWORD cchDom = ARRAYSIZE(domainName);
+            SID_NAME_USE sidUse;
+            if (LookupAccountSidW(nullptr, pParsedSid, acctName, &cchAcct, domainName, &cchDom, &sidUse))
+            {
+                if (_wcsicmp(domainName, L"NT SERVICE") == 0 && _wcsicmp(acctName, L"PeekEngine") == 0)
+                {
+                    isPeekEngineServiceSid = true;
+                }
+            }
+            LocalFree(pParsedSid);
+        }
+    }
+
+    bool bSidMatch = false;
+    if (isPeekEngineServiceSid || _wcsicmp(serverSid.c_str(), L"S-1-5-18") == 0)
+    {
+        bSidMatch = true;
+    }
+    else if (!expectedSid.empty() && _wcsicmp(serverSid.c_str(), expectedSid.c_str()) == 0)
+    {
+        bSidMatch = true;
     }
 
 #ifdef PEEK_TEST_BUILD

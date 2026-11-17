@@ -61,6 +61,7 @@ def get_machine_entropy() -> bytes:
     read_err = None
     try:
         if os.path.isfile(entropy_file):
+            secure_admin_only_path(entropy_file)
             with open(entropy_file, "rb") as f:
                 content = f.read().strip()
                 if content:
@@ -76,6 +77,7 @@ def get_machine_entropy() -> bytes:
         new_guid = str(uuid.uuid4()).encode("utf-8")
         with open(entropy_file, "wb") as f:
             f.write(new_guid)
+        secure_admin_only_path(entropy_file)
         return new_guid
     except Exception as ex:
         create_err = str(ex)
@@ -126,6 +128,55 @@ def dpapi_decrypt(ciphertext: bytes, entropy: Optional[bytes] = None) -> bytes:
         return ctypes.string_at(out_blob.pbData, out_blob.cbData)
     finally:
         kernel32.LocalFree(out_blob.pbData)
+
+
+def secure_admin_only_path(path: str, is_directory: bool = False) -> None:
+    """Enforces inheritance-protected ACL (SYSTEM, Administrators, engine account only, no Users ACE)."""
+    if not _IS_WINDOWS:
+        return
+    try:
+        import win32security
+        import ntsecuritycon
+        import win32process
+        import win32con
+
+        sd = win32security.SECURITY_DESCRIPTOR()
+        dacl = win32security.ACL()
+
+        sys_sid = win32security.ConvertStringSidToSid("S-1-5-18")
+        admin_sid = win32security.ConvertStringSidToSid("S-1-5-32-544")
+
+        ace_flags = (ntsecuritycon.CONTAINER_INHERIT_ACE | ntsecuritycon.OBJECT_INHERIT_ACE) if is_directory else 0
+        dacl.AddAccessAllowedAceEx(win32security.ACL_REVISION, ace_flags, ntsecuritycon.GENERIC_ALL, sys_sid)
+        dacl.AddAccessAllowedAceEx(win32security.ACL_REVISION, ace_flags, ntsecuritycon.GENERIC_ALL, admin_sid)
+
+        # Also add current process user if not sys/admin (e.g. NT SERVICE\PeekEngine)
+        try:
+            h_proc = win32process.GetCurrentProcess()
+            token = win32security.OpenProcessToken(h_proc, win32con.TOKEN_QUERY)
+            try:
+                tok_sid, _ = win32security.GetTokenInformation(token, win32security.TokenUser)
+                tok_str = win32security.ConvertSidToStringSid(tok_sid)
+                if tok_str not in ("S-1-5-18", "S-1-5-32-544"):
+                    dacl.AddAccessAllowedAceEx(win32security.ACL_REVISION, ace_flags, ntsecuritycon.GENERIC_ALL, tok_sid)
+            finally:
+                token.Close()
+        except Exception:
+            pass
+
+        sd.SetSecurityDescriptorDacl(1, dacl, 0)
+        win32security.SetNamedSecurityInfo(
+            path,
+            win32security.SE_FILE_OBJECT,
+            win32security.DACL_SECURITY_INFORMATION | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            dacl,
+            None
+        )
+    except Exception as ex:
+        logger.debug(f"Could not secure ACL for {path}: {ex}")
+
 
 
 @dataclass
@@ -197,6 +248,7 @@ class SecureProfileStore:
             self.storage_dir = storage_dir
 
         os.makedirs(self.storage_dir, exist_ok=True)
+        secure_admin_only_path(self.storage_dir, is_directory=True)
         if is_default_location:
             self._migrate_legacy_localappdata_profiles()
 
@@ -221,6 +273,11 @@ class SecureProfileStore:
                             prof = PeekProfile.from_dict(json.loads(raw.decode("utf-8")))
                             self.save_profile(prof)
                             logger.info(f"Migrated legacy profile {fname} to machine storage {self.storage_dir}")
+                            try:
+                                os.remove(src_file)
+                                logger.info(f"Removed migrated legacy profile {src_file}")
+                            except Exception as rem_ex:
+                                logger.debug(f"Could not remove source legacy profile {src_file}: {rem_ex}")
                         except Exception as e:
                             logger.debug(f"Could not migrate legacy profile {fname}: {e}")
         except Exception as ex:
@@ -252,6 +309,7 @@ class SecureProfileStore:
                 except OSError:
                     pass
             os.replace(temp_path, file_path)
+            secure_admin_only_path(file_path, is_directory=False)
         except Exception:
             if os.path.exists(temp_path):
                 try:

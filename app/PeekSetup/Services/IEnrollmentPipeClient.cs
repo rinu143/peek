@@ -128,6 +128,11 @@ namespace PeekSetup.Services
             bool activate = false,
             CancellationToken ct = default);
         Task CancelEnrollmentAsync(string reason = "USER_CANCELLED", CancellationToken ct = default);
+        Task<System.Collections.Generic.List<ProfileModel>> ListProfilesAsync(int timeoutMs = 3000, CancellationToken ct = default);
+        Task<bool> SetProfileEnabledAsync(string profileId, bool enabled, int timeoutMs = 3000, CancellationToken ct = default);
+        Task<bool> DeleteProfileAsync(string profileId, int timeoutMs = 3000, CancellationToken ct = default);
+        Task<bool> RenameProfileAsync(string profileId, string newName, int timeoutMs = 3000, CancellationToken ct = default);
+        Task<QualityResponseData?> GetProfileQualityAsync(string profileId, int timeoutMs = 3000, CancellationToken ct = default);
         Task DisconnectAsync();
     }
 }

@@ -23,9 +23,6 @@
     <Resource Include="..\..\credential_provider\res\frame_search_1_dark.png" Link="assets\frame_search_1_dark.png" />
   </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
-  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\PeekUpdate\PeekUpdate.csproj" />

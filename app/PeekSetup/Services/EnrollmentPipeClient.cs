@@ -20,6 +20,11 @@ namespace PeekSetup.Services
         private Task? _readTask;
         private readonly SemaphoreSlim _writeLock = new(1, 1);
         private TaskCompletionSource<StatusResponseData?>? _statusTcs;
+        private TaskCompletionSource<ProfilesListResponseData?>? _listProfilesTcs;
+        private TaskCompletionSource<SetEnabledResponseData?>? _setEnabledTcs;
+        private TaskCompletionSource<DeleteResponseData?>? _deleteProfileTcs;
+        private TaskCompletionSource<RenameResponseData?>? _renameProfileTcs;
+        private TaskCompletionSource<QualityResponseData?>? _qualityTcs;
         private int _isDisposed;
 
         public bool IsConnected => _pipeStream?.IsConnected == true;
@@ -169,6 +174,171 @@ namespace PeekSetup.Services
             }
         }
 
+        private async Task EnsureConnectedAsync(int timeoutMs, CancellationToken ct)
+        {
+            if (!IsConnected)
+            {
+                await ConnectAsync("PeekEnrollment", timeoutMs, ct).ConfigureAwait(false);
+            }
+        }
+
+        public async Task<System.Collections.Generic.List<ProfileModel>> ListProfilesAsync(int timeoutMs = 3000, CancellationToken ct = default)
+        {
+            await EnsureConnectedAsync(timeoutMs, ct).ConfigureAwait(false);
+            if (!IsConnected || _writer == null)
+            {
+                throw new InvalidOperationException("Not connected to Peek Enrollment Named Pipe.");
+            }
+
+            var tcs = new TaskCompletionSource<ProfilesListResponseData?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _listProfilesTcs = tcs;
+
+            using var timeoutCts = new CancellationTokenSource(timeoutMs);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            using var reg = linkedCts.Token.Register(() => tcs.TrySetResult(null));
+
+            try
+            {
+                string message = EnrollmentProtocol.CreateListProfiles();
+                await SendLineAsync(message, linkedCts.Token).ConfigureAwait(false);
+                var resp = await tcs.Task.ConfigureAwait(false);
+                var result = new System.Collections.Generic.List<ProfileModel>();
+                if (resp != null && resp.Success && resp.Profiles != null)
+                {
+                    foreach (var p in resp.Profiles)
+                    {
+                        result.Add(new ProfileModel
+                        {
+                            ProfileId = p.ProfileId,
+                            DisplayName = p.DisplayName,
+                            Enabled = p.Enabled,
+                            CreatedAt = p.CreatedAt,
+                            UserSid = p.UserSid,
+                            QualityPercentage = p.QualityPercentage,
+                            PoseQualities = p.PoseQualities ?? new System.Collections.Generic.List<double>(),
+                            TemplateCount = p.TemplateCount
+                        });
+                    }
+                }
+                return result;
+            }
+            finally
+            {
+                _listProfilesTcs = null;
+            }
+        }
+
+        public async Task<bool> SetProfileEnabledAsync(string profileId, bool enabled, int timeoutMs = 3000, CancellationToken ct = default)
+        {
+            await EnsureConnectedAsync(timeoutMs, ct).ConfigureAwait(false);
+            if (!IsConnected || _writer == null)
+            {
+                throw new InvalidOperationException("Not connected to Peek Enrollment Named Pipe.");
+            }
+
+            var tcs = new TaskCompletionSource<SetEnabledResponseData?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _setEnabledTcs = tcs;
+
+            using var timeoutCts = new CancellationTokenSource(timeoutMs);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            using var reg = linkedCts.Token.Register(() => tcs.TrySetResult(null));
+
+            try
+            {
+                string message = EnrollmentProtocol.CreateSetEnabled(profileId, enabled);
+                await SendLineAsync(message, linkedCts.Token).ConfigureAwait(false);
+                var resp = await tcs.Task.ConfigureAwait(false);
+                return resp?.Success == true;
+            }
+            finally
+            {
+                _setEnabledTcs = null;
+            }
+        }
+
+        public async Task<bool> DeleteProfileAsync(string profileId, int timeoutMs = 3000, CancellationToken ct = default)
+        {
+            await EnsureConnectedAsync(timeoutMs, ct).ConfigureAwait(false);
+            if (!IsConnected || _writer == null)
+            {
+                throw new InvalidOperationException("Not connected to Peek Enrollment Named Pipe.");
+            }
+
+            var tcs = new TaskCompletionSource<DeleteResponseData?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _deleteProfileTcs = tcs;
+
+            using var timeoutCts = new CancellationTokenSource(timeoutMs);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            using var reg = linkedCts.Token.Register(() => tcs.TrySetResult(null));
+
+            try
+            {
+                string message = EnrollmentProtocol.CreateDeleteProfile(profileId);
+                await SendLineAsync(message, linkedCts.Token).ConfigureAwait(false);
+                var resp = await tcs.Task.ConfigureAwait(false);
+                return resp?.Success == true;
+            }
+            finally
+            {
+                _deleteProfileTcs = null;
+            }
+        }
+
+        public async Task<bool> RenameProfileAsync(string profileId, string newName, int timeoutMs = 3000, CancellationToken ct = default)
+        {
+            await EnsureConnectedAsync(timeoutMs, ct).ConfigureAwait(false);
+            if (!IsConnected || _writer == null)
+            {
+                throw new InvalidOperationException("Not connected to Peek Enrollment Named Pipe.");
+            }
+
+            var tcs = new TaskCompletionSource<RenameResponseData?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _renameProfileTcs = tcs;
+
+            using var timeoutCts = new CancellationTokenSource(timeoutMs);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            using var reg = linkedCts.Token.Register(() => tcs.TrySetResult(null));
+
+            try
+            {
+                string message = EnrollmentProtocol.CreateRenameProfile(profileId, newName);
+                await SendLineAsync(message, linkedCts.Token).ConfigureAwait(false);
+                var resp = await tcs.Task.ConfigureAwait(false);
+                return resp?.Success == true;
+            }
+            finally
+            {
+                _renameProfileTcs = null;
+            }
+        }
+
+        public async Task<QualityResponseData?> GetProfileQualityAsync(string profileId, int timeoutMs = 3000, CancellationToken ct = default)
+        {
+            await EnsureConnectedAsync(timeoutMs, ct).ConfigureAwait(false);
+            if (!IsConnected || _writer == null)
+            {
+                throw new InvalidOperationException("Not connected to Peek Enrollment Named Pipe.");
+            }
+
+            var tcs = new TaskCompletionSource<QualityResponseData?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _qualityTcs = tcs;
+
+            using var timeoutCts = new CancellationTokenSource(timeoutMs);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            using var reg = linkedCts.Token.Register(() => tcs.TrySetResult(null));
+
+            try
+            {
+                string message = EnrollmentProtocol.CreateGetQuality(profileId);
+                await SendLineAsync(message, linkedCts.Token).ConfigureAwait(false);
+                return await tcs.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                _qualityTcs = null;
+            }
+        }
+
         private async Task SendLineAsync(string json, CancellationToken ct)
         {
             await _writeLock.WaitAsync(ct).ConfigureAwait(false);
@@ -262,6 +432,26 @@ namespace PeekSetup.Services
 
                     case EnrollmentProtocol.MsgStatusResponse:
                         HandleStatusResponse(root);
+                        break;
+
+                    case EnrollmentProtocol.MsgProfilesList:
+                        HandleProfilesList(root);
+                        break;
+
+                    case EnrollmentProtocol.MsgSetEnabledResponse:
+                        HandleSetEnabledResponse(root);
+                        break;
+
+                    case EnrollmentProtocol.MsgDeleteResponse:
+                        HandleDeleteResponse(root);
+                        break;
+
+                    case EnrollmentProtocol.MsgRenameResponse:
+                        HandleRenameResponse(root);
+                        break;
+
+                    case EnrollmentProtocol.MsgQualityResponse:
+                        HandleQualityResponse(root);
                         break;
                 }
             }
@@ -381,9 +571,103 @@ namespace PeekSetup.Services
             _statusTcs?.TrySetResult(data);
         }
 
+        private void HandleProfilesList(JsonElement root)
+        {
+            bool success = root.TryGetProperty("success", out var sProp) && sProp.GetBoolean();
+            string error = root.TryGetProperty("error", out var eProp) ? eProp.GetString() ?? "" : "";
+            var list = new System.Collections.Generic.List<ProfileDto>();
+
+            if (root.TryGetProperty("profiles", out var profProp) && profProp.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in profProp.EnumerateArray())
+                {
+                    string id = item.TryGetProperty("profile_id", out var idProp) ? idProp.GetString() ?? "" :
+                                item.TryGetProperty("id", out var idProp2) ? idProp2.GetString() ?? "" : "";
+                    string name = item.TryGetProperty("display_name", out var nProp) ? nProp.GetString() ?? "User" :
+                                  item.TryGetProperty("name", out var nProp2) ? nProp2.GetString() ?? "User" : "User";
+                    bool enabled = !item.TryGetProperty("enabled", out var enProp) || enProp.GetBoolean();
+                    double createdAt = item.TryGetProperty("created_at", out var catProp) ? catProp.GetDouble() : 0.0;
+                    string? userSid = item.TryGetProperty("user_sid", out var sidProp) ? sidProp.GetString() : null;
+                    int? qualityPct = item.TryGetProperty("quality_percentage", out var qpProp) && qpProp.ValueKind == JsonValueKind.Number ? qpProp.GetInt32() : null;
+                    int templateCount = item.TryGetProperty("template_count", out var tcProp) ? tcProp.GetInt32() :
+                                        item.TryGetProperty("vector_count", out var vcProp) ? vcProp.GetInt32() : 0;
+
+                    var qualities = new System.Collections.Generic.List<double>();
+                    if (item.TryGetProperty("pose_qualities", out var pqProp) && pqProp.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var q in pqProp.EnumerateArray())
+                        {
+                            if (q.ValueKind == JsonValueKind.Number)
+                            {
+                                qualities.Add(q.GetDouble());
+                            }
+                        }
+                    }
+
+                    list.Add(new ProfileDto(id, name, enabled, createdAt, userSid, qualityPct, qualities, templateCount));
+                }
+            }
+
+            var data = new ProfilesListResponseData(success, list, error);
+            _listProfilesTcs?.TrySetResult(data);
+        }
+
+        private void HandleSetEnabledResponse(JsonElement root)
+        {
+            string id = root.TryGetProperty("profile_id", out var p) ? p.GetString() ?? "" : "";
+            bool enabled = root.TryGetProperty("enabled", out var ep) && ep.GetBoolean();
+            bool success = root.TryGetProperty("success", out var sp) && sp.GetBoolean();
+            string err = root.TryGetProperty("error", out var erp) ? erp.GetString() ?? "" : "";
+            string reason = root.TryGetProperty("reason", out var rp) ? rp.GetString() ?? "" : "";
+
+            var data = new SetEnabledResponseData(id, enabled, success, err, reason);
+            _setEnabledTcs?.TrySetResult(data);
+        }
+
+        private void HandleDeleteResponse(JsonElement root)
+        {
+            string id = root.TryGetProperty("profile_id", out var p) ? p.GetString() ?? "" : "";
+            bool success = root.TryGetProperty("success", out var sp) && sp.GetBoolean();
+            string err = root.TryGetProperty("error", out var erp) ? erp.GetString() ?? "" : "";
+            string reason = root.TryGetProperty("reason", out var rp) ? rp.GetString() ?? "" : "";
+
+            var data = new DeleteResponseData(id, success, err, reason);
+            _deleteProfileTcs?.TrySetResult(data);
+        }
+
+        private void HandleRenameResponse(JsonElement root)
+        {
+            string id = root.TryGetProperty("profile_id", out var p) ? p.GetString() ?? "" : "";
+            string newName = root.TryGetProperty("new_name", out var np) ? np.GetString() ?? "" : "";
+            bool success = root.TryGetProperty("success", out var sp) && sp.GetBoolean();
+            string err = root.TryGetProperty("error", out var erp) ? erp.GetString() ?? "" : "";
+            string reason = root.TryGetProperty("reason", out var rp) ? rp.GetString() ?? "" : "";
+
+            var data = new RenameResponseData(id, newName, success, err, reason);
+            _renameProfileTcs?.TrySetResult(data);
+        }
+
+        private void HandleQualityResponse(JsonElement root)
+        {
+            string id = root.TryGetProperty("profile_id", out var p) ? p.GetString() ?? "" : "";
+            double qs = root.TryGetProperty("quality_score", out var qp) ? qp.GetDouble() : 0.0;
+            bool isValid = root.TryGetProperty("is_valid", out var ivp) && ivp.GetBoolean();
+            bool success = root.TryGetProperty("success", out var sp) && sp.GetBoolean();
+            string err = root.TryGetProperty("error", out var erp) ? erp.GetString() ?? "" : "";
+            string reason = root.TryGetProperty("reason", out var rp) ? rp.GetString() ?? "" : "";
+
+            var data = new QualityResponseData(id, qs, isValid, success, err, reason);
+            _qualityTcs?.TrySetResult(data);
+        }
+
         public async Task DisconnectAsync()
         {
             _statusTcs?.TrySetResult(null);
+            _listProfilesTcs?.TrySetResult(null);
+            _setEnabledTcs?.TrySetResult(null);
+            _deleteProfileTcs?.TrySetResult(null);
+            _renameProfileTcs?.TrySetResult(null);
+            _qualityTcs?.TrySetResult(null);
             if (_cts != null)
             {
                 _cts.Cancel();
