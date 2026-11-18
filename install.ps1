@@ -407,7 +407,7 @@ Write-Host "[4/5] Configuring PeekEngine Windows service under NT SERVICE\PeekEn
 $engineExe = $engineExePath
 $engineWorkingDir = Split-Path -Parent $engineExe
 
-# Clean up legacy Scheduled Task, Run keys, and Startup launchers
+# Clean up legacy Scheduled Task and stale launcher entries
 try {
     Unregister-ScheduledTask -TaskName "PeekEngine" -Confirm:$false -ErrorAction SilentlyContinue
 } catch { }
@@ -453,6 +453,18 @@ Write-Host "      [OK] Windows Service '$serviceName' registered (starts at boot
 try {
     Start-Service -Name $serviceName -ErrorAction SilentlyContinue
 } catch { }
+
+# Register Peek in Windows Startup apps so it starts automatically on shutdown/reboot logon
+Write-Host "      Registering Peek in Windows Startup apps..." -ForegroundColor Cyan
+try {
+    Set-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "Peek" -Value "`"$engineExe`"" -Type String -Force -ErrorAction SilentlyContinue
+    Write-Host "      [OK] Registered Peek in Windows Startup apps (HKLM Run)." -ForegroundColor Green
+} catch {
+    try {
+        Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "Peek" -Value "`"$engineExe`"" -Type String -Force -ErrorAction SilentlyContinue
+        Write-Host "      [OK] Registered Peek in user Startup apps (HKCU Run)." -ForegroundColor Green
+    } catch { }
+}
 
 # Create Start Menu shortcut for Peek
 $startMenuPeekDir = Join-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" "Peek"

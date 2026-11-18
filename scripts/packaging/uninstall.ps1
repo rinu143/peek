@@ -137,9 +137,11 @@ if ($svc) {
 }
 
 try {
+    Remove-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "Peek" -ErrorAction SilentlyContinue
     Remove-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "PeekEngine" -ErrorAction SilentlyContinue
 } catch { }
 try {
+    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "Peek" -ErrorAction SilentlyContinue
     Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "PeekEngine" -ErrorAction SilentlyContinue
 } catch { }
 

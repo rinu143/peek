@@ -82,6 +82,8 @@ Root: HKLM; Subkey: "SOFTWARE\Peek\Updates"; ValueType: dword; ValueName: "AutoC
 Root: HKLM; Subkey: "SOFTWARE\Peek\Updates"; ValueType: dword; ValueName: "AutoCheck"; ValueData: 0; Tasks: not autocheck; Check: ShouldWriteRegistryAutoCheck(0); Flags: uninsdeletevalue
 Root: HKLM; Subkey: "SOFTWARE\Peek\Updates"; ValueType: string; ValueName: "Channel"; ValueData: "stable"; Flags: createvalueifdoesntexist uninsdeletevalue
 Root: HKLM; Subkey: "SOFTWARE\Peek\Updates"; ValueType: string; ValueName: "FeedUrl"; ValueData: "https://rinu143.github.io/peek"; Flags: createvalueifdoesntexist uninsdeletevalue
+; Windows Startup apps integration
+Root: HKLM; Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Peek"; ValueData: """{app}\engine\PeekEngine.exe"""; Flags: uninsdeletevalue
 
 [Code]
 var
@@ -657,7 +659,10 @@ begin
     // 3. Remove Windows Service and scheduled tasks
     Exec('sc.exe', 'stop PeekEngine', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec('sc.exe', 'delete PeekEngine', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Peek');
     RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'PeekEngine');
+    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Peek');
+    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'PeekEngine');
     Exec('schtasks.exe', '/Delete /TN "PeekEngine" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec('schtasks.exe', '/Delete /TN "PeekUpdate" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 

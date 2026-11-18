@@ -161,8 +161,8 @@ try {
         Set-ItemProperty -Path $prefsRegKey -Name "ColdBootUnlock" -Value 1 -Type DWord -Force
     }
 
-    # 7. Remove legacy Scheduled Task, Run keys, and Startup launchers
-    Write-Host "[*] Removing legacy Scheduled Task and user-session auto-start launchers..."
+    # 7. Clean up legacy Scheduled Task, stale launchers, and register Peek in Windows Startup apps
+    Write-Host "[*] Configuring Peek in Windows Startup apps..."
     try {
         Unregister-ScheduledTask -TaskName "PeekEngine" -Confirm:$false -ErrorAction SilentlyContinue
     } catch { }
@@ -194,6 +194,16 @@ try {
             }
         }
     } catch { }
+
+    try {
+        Set-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "Peek" -Value "`"$engineExe`"" -Type String -Force -ErrorAction SilentlyContinue
+        Write-Host "    [OK] Registered Peek in Windows Startup apps (HKLM Run)."
+    } catch {
+        try {
+            Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "Peek" -Value "`"$engineExe`"" -Type String -Force -ErrorAction SilentlyContinue
+            Write-Host "    [OK] Registered Peek in user Startup apps (HKCU Run)."
+        } catch { }
+    }
 
     # 8. Start the PeekEngine service
     try {
